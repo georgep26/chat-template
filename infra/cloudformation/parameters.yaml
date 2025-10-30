@@ -1,0 +1,20 @@
+# CloudFormation Parameters
+# This file contains parameter values for different environments
+
+# Development Environment
+Development:
+  ProjectName: 'python-template'
+  Environment: 'dev'
+  AWSRegion: 'us-east-1'
+
+# Staging Environment
+Staging:
+  ProjectName: 'python-template'
+  Environment: 'staging'
+  AWSRegion: 'us-east-1'
+
+# Production Environment
+Production:
+  ProjectName: 'python-template'
+  Environment: 'prod'
+  AWSRegion: 'us-east-1'
