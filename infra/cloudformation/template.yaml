@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Python Template Project - CloudFormation Template'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'python-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, 'prod']
+  IsStaging: !Equals [!Ref Environment, 'staging']
+
+Resources:
+  # S3 Bucket for application data
+  AppDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${Environment}-data'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-data'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # DynamoDB Table
+  AppDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-table'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProduction, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-table'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # IAM Role for application
+  AppExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${AppDataBucket}/*'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt AppDataTable.Arn
+
+  # CloudWatch Log Group
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}'
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+Outputs:
+  S3BucketName:
+    Description: 'Name of the S3 bucket'
+    Value: !Ref AppDataBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketName'
+  
+  S3BucketArn:
+    Description: 'ARN of the S3 bucket'
+    Value: !GetAtt AppDataBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketArn'
+  
+  DynamoDBTableName:
+    Description: 'Name of the DynamoDB table'
+    Value: !Ref AppDataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBTableName'
+  
+  DynamoDBTableArn:
+    Description: 'ARN of the DynamoDB table'
+    Value: !GetAtt AppDataTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBTableArn'
+  
+  ExecutionRoleArn:
+    Description: 'ARN of the execution role'
+    Value: !GetAtt AppExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ExecutionRoleArn'

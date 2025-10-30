@@ -1,0 +1,35 @@
+# Application Configuration
+# This file contains configuration settings for the application
+
+app:
+  name: "python-template-project"
+  version: "1.0.0"
+  debug: false
+  log_level: "INFO"
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "template_db"
+  user: "template_user"
+  password: "${DB_PASSWORD}"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  timeout: 30
+
+aws:
+  region: "us-east-1"
+  s3_bucket: "template-bucket"
+  dynamodb_table: "template-table"
+
+# Environment-specific overrides
+environments:
+  development:
+    debug: true
+    log_level: "DEBUG"
+  
+  production:
+    debug: false
+    log_level: "WARNING"
