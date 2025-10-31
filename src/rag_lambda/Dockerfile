@@ -4,7 +4,7 @@ FROM public.ecr.aws/lambda/python:3.11
 RUN yum -y install postgresql15-libs && yum clean all
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
+COPY src/rag_lambda/requirements.txt .
 RUN pip install -r requirements.txt --no-cache-dir
 
 # Copy application source code

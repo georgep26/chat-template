@@ -1,6 +1,6 @@
 """
-Retrieval module with RBAC filtering and metadata injection.
-Handles Bedrock Knowledge Base retrieval with role-based and UI filters.
+Retrieval module with filtering and metadata injection.
+Handles Bedrock Knowledge Base retrieval with retrieval filters.
 """
 from typing import Dict, List
 from langchain_core.documents import Document
@@ -8,57 +8,58 @@ from langchain_aws.retrievers.bedrock import AmazonKnowledgeBasesRetriever
 from .prompt_config import KB_ID, AWS_REGION, DEFAULT_TOP_K
 
 
-def build_filters(user_roles: List[str], ui_filters: Dict) -> Dict:
+def build_filters(retrieval_filters: Dict) -> Dict:
     """
-    Build the Bedrock KB metadata filter structure for RBAC + user-specified filters.
+    Build the Bedrock KB metadata filter structure from retrieval filters.
     
-    Example:
-    - Only docs where allowed_groups contains one of user's roles
-    - Filter on document_type and version
+    Accepts format: {"key1": ['val1', 'val2'], "key2": ['val1']}
+    Converts to Bedrock filters with OR logic for multiple values per key,
+    and AND logic between different keys.
     
     Args:
-        user_roles: List of user role strings (e.g., ["Finance", "HR"])
-        ui_filters: Dictionary of UI-specified filters (e.g., {"document_type": "Policy", "version": "2023.4"})
+        retrieval_filters: Dictionary where keys are filter field names and 
+                          values are lists of filter values (e.g., {"key1": ["val1", "val2"]})
     
     Returns:
         Filter dictionary compatible with Bedrock KB retrieval config
     """
-    f = {"andAll": []}
+    if not retrieval_filters:
+        return {}
+    
+    and_all = []
+    
+    for key, values in retrieval_filters.items():
+        if not values:
+            continue
+        
+        # Ensure values is a list
+        if not isinstance(values, list):
+            values = [values]
+        
+        # If single value, add directly as equals filter
+        if len(values) == 1:
+            and_all.append({
+                "equals": {"key": key, "value": values[0]}
+            })
+        else:
+            # Multiple values: create OR group
+            or_all = [{"equals": {"key": key, "value": val}} for val in values]
+            and_all.append({"orAll": or_all})
+    
+    return {"andAll": and_all} if and_all else {}
 
-    # RBAC filtering: user must have at least one role that matches allowed_groups
-    if user_roles:
-        f["andAll"].append({
-            "orAll": [{"contains": {"key": "allowed_groups", "value": role}}
-                      for role in user_roles]
-        })
 
-    # UI-specified filters
-    if (doc_type := ui_filters.get("document_type")):
-        f["andAll"].append({
-            "equals": {"key": "document_type", "value": doc_type}
-        })
-
-    if (version := ui_filters.get("version")):
-        f["andAll"].append({
-            "equals": {"key": "document_version_number", "value": version}
-        })
-
-    # Return empty dict if no filters (no filtering applied)
-    return f if f["andAll"] else {}
-
-
-def make_retriever(user_roles: List[str], ui_filters: Dict) -> AmazonKnowledgeBasesRetriever:
+def make_retriever(retrieval_filters: Dict) -> AmazonKnowledgeBasesRetriever:
     """
-    Create a Bedrock Knowledge Base retriever with RBAC and UI filters.
+    Create a Bedrock Knowledge Base retriever with retrieval filters.
     
     Args:
-        user_roles: List of user role strings
-        ui_filters: Dictionary of UI-specified filters
+        retrieval_filters: Dictionary of retrieval filters
     
     Returns:
         Configured AmazonKnowledgeBasesRetriever instance
     """
-    filters = build_filters(user_roles, ui_filters)
+    filters = build_filters(retrieval_filters)
 
     retrieval_config = {
         "vectorSearchConfiguration": {"numberOfResults": DEFAULT_TOP_K}
@@ -76,51 +77,53 @@ def make_retriever(user_roles: List[str], ui_filters: Dict) -> AmazonKnowledgeBa
 def docs_to_context(docs: List[Document]) -> str:
     """
     Convert retrieved docs into metadata-rich blocks that go into the model prompt.
-    This is how the LLM 'sees' document_title / version / etc.
+    Includes all available metadata fields dynamically.
     
     Args:
         docs: List of retrieved Document objects with metadata
     
     Returns:
-        Formatted context string with document metadata
+        Formatted context string with XML tags and all metadata fields
     """
     blocks = []
-    for i, d in enumerate(docs, 1):
+    for d in docs:
         m = d.metadata or {}
-        header = (
-            f"[CONTEXT #{i}]\n"
-            f"Title: {m.get('document_title','?')} | "
-            f"Type: {m.get('document_type','?')} | "
-            f"Version: {m.get('document_version_number','?')}\n"
-            f"Location: {m.get('s3_uri', m.get('source',''))}"
-            f"{' #page='+str(m['page']) if 'page' in m else ''}\n"
-            "----\n"
-        )
-        # Truncate long chunks to control token budget
-        blocks.append(header + (d.page_content or "")[:2000])
+        
+        # Build metadata section with all available fields
+        metadata_lines = []
+        for key, value in m.items():
+            if value is not None:
+                metadata_lines.append(f"{key}: {value}")
+        
+        # Build the context block
+        block = "<Text Context:>\n"
+        if metadata_lines:
+            block += "\n".join(metadata_lines) + "\n"
+        block += (d.page_content or "")[:2000]
+        
+        blocks.append(block)
+    
     return "\n\n".join(blocks)
 
 
 def docs_to_citations(docs: List[Document]) -> List[Dict]:
     """
     Build the citations payload we return to the frontend.
+    Returns all metadata available in each document.
     
     Args:
         docs: List of retrieved Document objects with metadata
     
     Returns:
-        List of citation dictionaries with title, type, version, s3_uri, page, snippet
+        List of citation dictionaries containing all metadata fields from each document
     """
     cites = []
     for d in docs:
         m = d.metadata or {}
-        cites.append({
-            "title":   m.get("document_title"),
-            "type":    m.get("document_type"),
-            "version": m.get("document_version_number"),
-            "s3_uri":  m.get("s3_uri", m.get("source")),
-            "page":    m.get("page"),
-            "snippet": (d.page_content or "")[:300],
-        })
+        # Include all metadata fields
+        citation = dict(m)
+        # Add snippet/context from page_content
+        citation["snippet"] = (d.page_content or "")[:300]
+        cites.append(citation)
     return cites
 
