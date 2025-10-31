@@ -1,10 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Python Template Project - CloudFormation Template'
+Description: 'Master CloudFormation Template for RAG Application - Orchestrates VPC, RDS, and Lambda Stacks'
+
+# NOTE: This template provides a deployment guide and nested stack structure.
+# For modular deployment, deploy stacks in this order:
+# 1. vpc-infrastructure.yaml
+# 2. rds-postgres.yaml (requires VPC outputs)
+# 3. lambda-function.yaml (requires VPC and RDS outputs)
 
 Parameters:
   ProjectName:
     Type: String
-    Default: 'python-template'
+    Default: 'rag-app'
     Description: 'Name of the project'
   
   Environment:
@@ -17,131 +23,80 @@ Parameters:
     Type: String
     Default: 'us-east-1'
     Description: 'AWS region'
-
-Conditions:
-  IsProduction: !Equals [!Ref Environment, 'prod']
-  IsStaging: !Equals [!Ref Environment, 'staging']
+  
+  KBId:
+    Type: String
+    Description: 'Bedrock Knowledge Base ID (create manually or via separate stack)'
+  
+  ModelId:
+    Type: String
+    Default: 'anthropic.claude-3-5-sonnet-20240620-v1:0'
+    Description: 'Bedrock Model ID'
+  
+  ECRImageUri:
+    Type: String
+    Description: 'ECR image URI for the Lambda container'
 
 Resources:
-  # S3 Bucket for application data
-  AppDataBucket:
-    Type: AWS::S3::Bucket
+  # Nested Stack: VPC Infrastructure
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
     Properties:
-      BucketName: !Sub '${ProjectName}-${Environment}-data'
-      VersioningConfiguration:
-        Status: Enabled
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-data'
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
+      TemplateURL: vpc-infrastructure.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        AWSRegion: !Ref AWSRegion
 
-  # DynamoDB Table
-  AppDataTable:
-    Type: AWS::DynamoDB::Table
+  # Nested Stack: RDS PostgreSQL (depends on VPC)
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
     Properties:
-      TableName: !Sub '${ProjectName}-${Environment}-table'
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: id
-          KeyType: HASH
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: !If [IsProduction, true, false]
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-table'
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
+      TemplateURL: rds-postgres.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PrivateSubnet1Id: !GetAtt VPCStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt VPCStack.Outputs.PrivateSubnet2Id
 
-  # IAM Role for application
-  AppExecutionRole:
-    Type: AWS::IAM::Role
+  # Nested Stack: Lambda Function (depends on VPC and RDS)
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - RDSStack
     Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-execution-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: S3Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                Resource: !Sub '${AppDataBucket}/*'
-        - PolicyName: DynamoDBAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                Resource: !GetAtt AppDataTable.Arn
-
-  # CloudWatch Log Group
-  AppLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}'
-      RetentionInDays: !If [IsProduction, 30, 7]
+      TemplateURL: lambda-function.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        AWSRegion: !Ref AWSRegion
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PrivateSubnet1Id: !GetAtt VPCStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt VPCStack.Outputs.PrivateSubnet2Id
+        RDSSecurityGroupId: !GetAtt RDSStack.Outputs.RDSSecurityGroupId
+        DBClusterEndpoint: !GetAtt RDSStack.Outputs.DBClusterEndpoint
+        DBName: !GetAtt RDSStack.Outputs.DBName
+        DBSecretArn: !GetAtt RDSStack.Outputs.DBSecretArn
+        KBId: !Ref KBId
+        ModelId: !Ref ModelId
+        ECRImageUri: !Ref ECRImageUri
 
 Outputs:
-  S3BucketName:
-    Description: 'Name of the S3 bucket'
-    Value: !Ref AppDataBucket
-    Export:
-      Name: !Sub '${AWS::StackName}-S3BucketName'
+  VPCId:
+    Description: 'VPC ID'
+    Value: !GetAtt VPCStack.Outputs.VpcId
   
-  S3BucketArn:
-    Description: 'ARN of the S3 bucket'
-    Value: !GetAtt AppDataBucket.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-S3BucketArn'
+  DBClusterEndpoint:
+    Description: 'Aurora Cluster Endpoint'
+    Value: !GetAtt RDSStack.Outputs.DBClusterEndpoint
   
-  DynamoDBTableName:
-    Description: 'Name of the DynamoDB table'
-    Value: !Ref AppDataTable
-    Export:
-      Name: !Sub '${AWS::StackName}-DynamoDBTableName'
+  LambdaFunctionArn:
+    Description: 'Lambda Function ARN'
+    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
   
-  DynamoDBTableArn:
-    Description: 'ARN of the DynamoDB table'
-    Value: !GetAtt AppDataTable.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-DynamoDBTableArn'
-  
-  ExecutionRoleArn:
-    Description: 'ARN of the execution role'
-    Value: !GetAtt AppExecutionRole.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-ExecutionRoleArn'
+  LambdaFunctionName:
+    Description: 'Lambda Function Name'
+    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionName
