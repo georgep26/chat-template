@@ -81,7 +81,7 @@ PROMPT = PromptTemplate.from_template(
 </CONTEXT>
 
 <QUESTION>
-{question}
+{input_prompt}
 </QUESTION>"""
 )
 

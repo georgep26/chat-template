@@ -12,26 +12,25 @@ from langchain_core.documents import Document
 
 from .prompt_config import SYSTEM, PROMPT, llm
 from .retrieval import make_retriever, docs_to_context, docs_to_citations
-from .history_store import get_history
+from .history_store import get_history, get_conversation_id, conversation_id_exists
 
 
-def build_chain(user_roles: List[str], ui_filters: Dict):
+def build_chain(retrieval_filters: Dict):
     """
     Build the end-to-end chain:
-      question -> retrieve -> inject context -> prompt -> llm
+      input_prompt -> retrieve -> inject context -> prompt -> llm
     
     Args:
-        user_roles: List of user role strings for RBAC filtering
-        ui_filters: Dictionary of UI-specified filters
+        retrieval_filters: Dictionary of retrieval filters
     
     Returns:
         RunnableWithMessageHistory chain configured for the user's permissions
     """
-    retriever = make_retriever(user_roles, ui_filters)
+    retriever = make_retriever(retrieval_filters)
 
     base_chain = (
         # Attach docs to the state
-        RunnablePassthrough.assign(docs=itemgetter("question") | retriever)
+        RunnablePassthrough.assign(docs=itemgetter("input_prompt") | retriever)
         # Build "context" string from docs
         | RunnablePassthrough.assign(context=lambda x: docs_to_context(x["docs"]))
         # Add system prompt
@@ -48,7 +47,7 @@ def build_chain(user_roles: List[str], ui_filters: Dict):
     chain_with_history = RunnableWithMessageHistory(
         base_chain,
         get_history,
-        input_messages_key="question",
+        input_messages_key="input_prompt",
         history_messages_key="chat_history"
     )
 
@@ -57,9 +56,8 @@ def build_chain(user_roles: List[str], ui_filters: Dict):
 
 def handle_turn(
     conversation_id: str,
-    question: str,
-    user_roles: List[str],
-    ui_filters: Dict,
+    input_prompt: str,
+    retrieval_filters: Dict,
     chat_history_hint: str = ""
 ) -> Dict:
     """
@@ -69,27 +67,26 @@ def handle_turn(
     
     Args:
         conversation_id: Unique identifier for the conversation session
-        question: User's question
-        user_roles: List of user role strings for RBAC filtering
-        ui_filters: Dictionary of UI-specified filters
+        input_prompt: User's input prompt
+        retrieval_filters: Dictionary of retrieval filters
         chat_history_hint: Optional pre-existing chat history string
     
     Returns:
         Dictionary with 'answer' and 'citations' keys
     """
-    chain = build_chain(user_roles, ui_filters)
+    chain = build_chain(retrieval_filters)
 
     # Step 1: run retrieval again here so we can return docs for citations.
     # NOTE: If you don't want double retrieval, you can refactor build_chain
     # to return both the llm output and docs. For clarity, we keep it simple first.
-    docs = make_retriever(user_roles, ui_filters).invoke(question)
+    docs = make_retriever(retrieval_filters).invoke(input_prompt)
     citations = docs_to_citations(docs)
     context_str = docs_to_context(docs)
 
     # Step 2: invoke chain (this writes / reads message history in Postgres automatically)
     out_msg = chain.invoke(
         {
-            "question": question,
+            "input_prompt": input_prompt,
             "chat_history": chat_history_hint,
             "context": context_str,
             "system": SYSTEM,
@@ -112,10 +109,9 @@ def handle_turn(
 
 
 def main(
-    conversation_id: str,
-    question: str,
-    user_roles: Optional[List[str]] = None,
-    ui_filters: Optional[Dict] = None,
+    conversation_id: Optional[str],
+    input_prompt: str,
+    retrieval_filters: Optional[Dict] = None,
     user_id: Optional[str] = None,
     chat_history_hint: Optional[str] = None
 ) -> Dict:
@@ -124,31 +120,41 @@ def main(
     Can be called from Lambda handler or CLI.
     
     Args:
-        conversation_id: Unique identifier for the conversation session
-        question: User's question
-        user_roles: List of user role strings (default: [])
-        ui_filters: Dictionary of UI-specified filters (default: {})
+        conversation_id: Unique identifier for the conversation session (optional, will be generated if None)
+        input_prompt: User's input prompt
+        retrieval_filters: Dictionary of retrieval filters (default: {})
         user_id: Optional user identifier for logging
         chat_history_hint: Optional pre-existing chat history string
     
     Returns:
-        Dictionary with 'answer' and 'citations' keys
+        Dictionary with 'answer', 'citations', and optionally 'conversation_id' keys
     """
-    user_roles = user_roles or []
-    ui_filters = ui_filters or {}
+    retrieval_filters = retrieval_filters or {}
     chat_history_hint = chat_history_hint or ""
     
-    result = handle_turn(
-        conversation_id=conversation_id,
-        question=question,
-        user_roles=user_roles,
-        ui_filters=ui_filters,
-        chat_history_hint=chat_history_hint
-    )
+    # Generate conversation_id if not provided
+    if conversation_id is None:
+        conversation_id = get_conversation_id()
+        result = handle_turn(
+            conversation_id=conversation_id,
+            input_prompt=input_prompt,
+            retrieval_filters=retrieval_filters,
+            chat_history_hint=chat_history_hint
+        )
+        # Include generated conversation_id in response
+        result["conversation_id"] = conversation_id
+        return result
+    else:
+        return handle_turn(
+            conversation_id=conversation_id,
+            input_prompt=input_prompt,
+            retrieval_filters=retrieval_filters,
+            chat_history_hint=chat_history_hint
+        )
     
     # Optional: explicit logging to an audit table separate from LangChain's internal table
     # from .db import log_message
-    # log_message(conversation_id, "user", question, filters={**ui_filters, "roles": user_roles, "user": user_id})
+    # log_message(conversation_id, "user", input_prompt, filters={**retrieval_filters, "user": user_id})
     # log_message(conversation_id, "assistant", result["answer"], citations=result["citations"])
     
     return result
@@ -169,20 +175,26 @@ def lambda_handler(event, _ctx):
     raw_body = event.get("body", event)
     payload = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
 
-    conversation_id = payload["conversation_id"]
-    question = payload["question"]
-    user_roles = payload.get("user_roles", [])
-    ui_filters = payload.get("ui_filters", {})
+    conversation_id = payload.get("conversation_id")
+    input_prompt = payload["input_prompt"]
+    retrieval_filters = payload.get("retrieval_filters", {})
     chat_history = payload.get("chat_history_hint", "")
     user_id = payload.get("user_id", "anon")
+
+    # Validate conversation_id if provided
+    if conversation_id and not conversation_id_exists(conversation_id):
+        return {
+            "statusCode": 404,
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps({"error": f"Conversation ID '{conversation_id}' does not exist"})
+        }
 
     # Call main app logic
     try:
         result = main(
             conversation_id=conversation_id,
-            question=question,
-            user_roles=user_roles,
-            ui_filters=ui_filters,
+            input_prompt=input_prompt,
+            retrieval_filters=retrieval_filters,
             user_id=user_id,
             chat_history_hint=chat_history
         )
@@ -204,23 +216,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAG Chat Application - CLI Mode")
     parser.add_argument(
         "--conversation-id",
+        default=None,
+        help="Unique identifier for the conversation session (optional, will be generated if not provided)"
+    )
+    parser.add_argument(
+        "--input-prompt",
         required=True,
-        help="Unique identifier for the conversation session"
+        help="User's input prompt"
     )
     parser.add_argument(
-        "--question",
-        required=True,
-        help="User's question"
-    )
-    parser.add_argument(
-        "--user-roles",
-        default="",
-        help="Comma-separated list of user roles (e.g., 'Finance,HR')"
-    )
-    parser.add_argument(
-        "--ui-filters",
+        "--retrieval-filters",
         default="{}",
-        help="JSON string of UI filters (e.g., '{\"document_type\": \"Policy\", \"version\": \"2023.4\"}')"
+        help="JSON string of retrieval filters (e.g., '{\"key1\": [\"val1\", \"val2\"], \"key2\": [\"val1\"]}')"
     )
     parser.add_argument(
         "--user-id",
@@ -235,22 +242,18 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Parse user_roles from comma-separated string
-    user_roles = [r.strip() for r in args.user_roles.split(",")] if args.user_roles else []
-    
-    # Parse ui_filters from JSON string
+    # Parse retrieval_filters from JSON string
     try:
-        ui_filters = json.loads(args.ui_filters) if args.ui_filters else {}
+        retrieval_filters = json.loads(args.retrieval_filters) if args.retrieval_filters else {}
     except json.JSONDecodeError:
-        print(f"Warning: Invalid JSON in --ui-filters, using empty dict: {args.ui_filters}")
-        ui_filters = {}
+        print(f"Warning: Invalid JSON in --retrieval-filters, using empty dict: {args.retrieval_filters}")
+        retrieval_filters = {}
     
     # Call main function
     result = main(
         conversation_id=args.conversation_id,
-        question=args.question,
-        user_roles=user_roles,
-        ui_filters=ui_filters,
+        input_prompt=args.input_prompt,
+        retrieval_filters=retrieval_filters,
         user_id=args.user_id,
         chat_history_hint=args.chat_history_hint
     )
