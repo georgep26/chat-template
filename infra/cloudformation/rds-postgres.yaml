@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Aurora Serverless v2 PostgreSQL Cluster for RAG Application Conversation History'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'rag-app'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  VpcId:
+    Type: String
+    Description: 'VPC ID from VPC stack'
+  
+  PrivateSubnet1Id:
+    Type: String
+    Description: 'Private Subnet 1 ID from VPC stack'
+  
+  PrivateSubnet2Id:
+    Type: String
+    Description: 'Private Subnet 2 ID from VPC stack'
+  
+  DBName:
+    Type: String
+    Default: 'ragapp'
+    Description: 'Database name'
+  
+  MasterUsername:
+    Type: String
+    Default: 'admin'
+    Description: 'Master database username (password stored in Secrets Manager)'
+  
+  MinACU:
+    Type: Number
+    Default: 0.5
+    Description: 'Minimum Aurora Capacity Units (ACU)'
+  
+  MaxACU:
+    Type: Number
+    Default: 4
+    Description: 'Maximum Aurora Capacity Units (ACU)'
+
+Resources:
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${ProjectName}-${Environment}-db-subnet-group'
+      DBSubnetGroupDescription: !Sub 'Subnet group for ${ProjectName}-${Environment}'
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db-subnet-group'
+
+  # Security Group for RDS
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-${Environment}-rds-sg'
+      GroupDescription: 'Security group for RDS Aurora PostgreSQL'
+      VpcId: !Ref VpcId
+      # Ingress rule will be added in Lambda template or manually
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-rds-sg'
+
+  # Secrets Manager Secret for DB Credentials
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-db-credentials'
+      Description: 'Database credentials for Aurora PostgreSQL'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${MasterUsername}"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db-secret'
+
+  # Aurora Serverless v2 Cluster
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      DatabaseName: !Ref DBName
+      DBClusterIdentifier: !Sub '${ProjectName}-${Environment}-aurora-cluster'
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref RDSSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref MinACU
+        MaxCapacity: !Ref MaxACU
+      EnableHttpEndpoint: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      StorageEncrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-aurora-cluster'
+
+  # Aurora Serverless v2 Instance
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-${Environment}-aurora-instance-1'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-aurora-instance-1'
+
+Outputs:
+  DBClusterEndpoint:
+    Description: 'Aurora Cluster Endpoint'
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterEndpoint'
+  
+  DBClusterPort:
+    Description: 'Aurora Cluster Port'
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterPort'
+  
+  DBSecretArn:
+    Description: 'ARN of the database secret in Secrets Manager'
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DBSecretArn'
+  
+  DBName:
+    Description: 'Database name'
+    Value: !Ref DBName
+    Export:
+      Name: !Sub '${AWS::StackName}-DBName'
+  
+  RDSSecurityGroupId:
+    Description: 'Security Group ID for RDS'
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSSecurityGroupId'
+

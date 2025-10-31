@@ -20,9 +20,24 @@ api:
   timeout: 30
 
 aws:
-  region: "us-east-1"
+  region: "${AWS_REGION}"  # Can be overridden via environment variable
   s3_bucket: "template-bucket"
   dynamodb_table: "template-table"
+
+# RAG Application Configuration
+rag:
+  # Bedrock Knowledge Base ID (set via environment variable or replace in deployment)
+  kb_id: "${KB_ID}"
+  
+  # Bedrock Model ID (e.g., anthropic.claude-3-5-sonnet-20240620-v1:0)
+  model_id: "${MODEL_ID}"
+  
+  # PostgreSQL connection string (set via environment variable or Secrets Manager)
+  # Format: postgresql://user:password@host:port/dbname
+  pg_dsn: "${PG_DSN}"
+  
+  # Default number of retrieval results
+  default_top_k: "${DEFAULT_TOP_K}"
 
 # Environment-specific overrides
 environments:
