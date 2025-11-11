@@ -2,7 +2,7 @@ name: project-env
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.14
   - pytest
   - pyaml
   - awscli
