@@ -16,8 +16,7 @@ conda activate project-env
 ```
 python-template/
 ├── config/              # Configuration files for the application
-│   ├── app_config.yml   # Application-specific configuration settings
-│   └── logging.yml      # Logging configuration
+│   └── app_config.yml   # Application configuration (includes app settings and logging)
 ├── docs/                # Documentation files
 │   └── template-outline.md
 ├── infra/               # Infrastructure as Code (IaC) definitions
@@ -52,7 +51,7 @@ python-template/
 
 ### Folder Descriptions
 
-- **config/**: Contains configuration files for application settings and logging. These YAML files allow you to configure the application behavior without modifying code.
+- **config/**: Contains the application configuration file (`app_config.yml`) which includes application settings, database configuration, API settings, AWS configuration, and logging configuration. This YAML file allows you to configure the application behavior without modifying code.
 
 - **docs/**: Documentation files for the project, including guides, API documentation, and project outlines.
 
