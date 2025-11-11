@@ -5,7 +5,7 @@
 # Commit Message Generation Rules
 # ──────────────────────────────────────────────
 when generating commit messages:
-  - Always use **conventional commit** style:
+  - Always use **conventional commit** style. Do not include any types in the '<type>:' that is not one of the following:
       • feature → for new functionality
       • fix → for bug fixes
       • docs → for documentation changes
