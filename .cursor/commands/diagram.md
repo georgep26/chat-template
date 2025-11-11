@@ -1,0 +1,1 @@
+Reference the instructions at https://github.com/georgep26/ai_diagrams. You should read through the full README.md file and AI_AGENT_GUIDE.md. Based on the instrucitons from the files and the tast you are performing you may have to read other files in the repository. 

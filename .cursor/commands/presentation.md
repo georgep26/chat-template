@@ -1,0 +1,1 @@
+Reference the instructions at https://github.com/georgep26/ai_presentations. Specifically, you should read the full AI_AGENT_GUIDE.md for instructions before proceeding with your task.
