@@ -1,0 +1,40 @@
+# Cursor Rules
+# These rules guide Cursor's AI when generating commit messages.
+
+# ──────────────────────────────────────────────
+# Commit Message Generation Rules
+# ──────────────────────────────────────────────
+when generating commit messages:
+  - Always use **conventional commit** style:
+      • feature → for new functionality
+      • fix → for bug fixes
+      • docs → for documentation changes
+      • refactor → for code restructuring without behavior change
+      • test → for adding or updating tests
+      • chore → for build or maintenance changes
+      • perf → for performance improvements
+  - Format should be:  
+    `<type>: <concise, lowercase description>`
+  - Example:  
+    `feature: adding new lambda function for metadata extraction`
+  - Use all lowercase for the entire commit message.
+  - Keep the subject line under 70 characters.
+  - Do not include punctuation at the end of the line (no periods).
+  - Avoid unnecessary adjectives; focus on what changed, not why.
+  - If the change introduces an incompatible or breaking modification,
+    append a `BREAKING CHANGE:` section in the body, describing what changed and required actions.
+  - Do not include ticket IDs, emojis, or extra formatting.
+
+# ──────────────────────────────────────────────
+# Example Commit Messages (for pattern reference)
+# ──────────────────────────────────────────────
+examples:
+  - "feature: adding new lambda function for metadata extraction"
+  - "fix: resolving timeout issue in batch job invocation"
+  - "refactor: reorganizing dynamodb query helpers"
+  - "docs: updating deployment instructions in readme"
+  - "test: adding unit tests for concurrency lambda"
+  - "chore: bumping dependencies and cleanup scripts"
+  - |
+    "feature: updating api response schema
+     BREAKING CHANGE: endpoint /v1/listings now requires 'listing_id' parameter"
