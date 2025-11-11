@@ -6,10 +6,40 @@ The purpose of this repository is to provide a template for future python projec
 - Changelog definition to support releases
 
 ## Environment Setup
+
+The full environment setup process is handled by the `scripts/setup_env.sh` script. This script will:
+- Detect your operating system (macOS, Linux, or Windows)
+- Check if conda is already installed
+- Install Miniconda if it's not installed (with OS-specific installation methods)
+- Create the conda environment from `environment.yml` with all required dependencies
+
+### Quick Start
+
+The easiest way to set up the environment is using the Makefile:
+
 ```bash
-conda env create -f environment.yml
-conda activate project-env
+make install
 ```
+
+Alternatively, you can run the setup script directly:
+
+```bash
+bash scripts/setup_env.sh
+```
+
+### Customizing the Environment Name
+
+**Important**: Before running the setup, you should update the environment name in `environment.yml` to match your project name. The default name is `project-env`, but you should change it to something specific to your project (e.g., `my-awesome-project-env`).
+
+### After Setup
+
+Once the environment is created, activate it with:
+
+```bash
+conda activate <your-environment-name>
+```
+
+Replace `<your-environment-name>` with the name you specified in `environment.yml`.
 
 ## Directory Structure
 

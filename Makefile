@@ -1,7 +1,7 @@
 .PHONY: install lint test clean all
 
 install:
-	conda env create -f environment.yml || conda env update -f environment.yml
+	@bash -c "eval \"$$(conda shell.bash hook)\" && bash scripts/setup_env.sh --activate"
 
 lint:
 	ruff .
