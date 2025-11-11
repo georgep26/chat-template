@@ -250,3 +250,7 @@ docs/build/
 # Local configuration
 config/local.yaml
 config/secrets.yaml
+
+
+# Notes files
+feature_ideas.md
