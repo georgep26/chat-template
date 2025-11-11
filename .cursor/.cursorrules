@@ -12,7 +12,7 @@ when generating commit messages:
       • refactor → for code restructuring without behavior change
       • test → for adding or updating tests
       • chore → for build or maintenance changes
-      • perf → for performance improvements
+      • performance → for performance improvements (can be functional performance increase - capability improvement, or compute performance increase - speed of computation)
   - Format should be:  
     `<type>: <concise, lowercase description>`
   - Example:  

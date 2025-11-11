@@ -8,12 +8,12 @@ Review the git history on the current branch and update the CHANGELOG.md file wi
    - Use `git log` to retrieve commit messages, excluding merge commits
 
 2. **Analyze commit messages:**
-   - The project uses conventional commit format (feature, fix, docs, refactor, test, chore, perf)
+   - The project uses conventional commit format (feature, fix, docs, refactor, test, chore, performance)
    - Map commit types to Keep a Changelog categories:
      - `feature:` → **Added** (new features)
      - `fix:` → **Fixed** (bug fixes)
      - `refactor:` → **Changed** (code restructuring)
-     - `perf:` → **Changed** (performance improvements)
+     - `performance:` → **Changed** (performance improvements - can be functional performance increase for capability improvement, or compute performance increase for speed of computation)
      - `docs:` → **Added** or **Changed** (documentation updates)
      - `test:` → Usually omit unless significant test infrastructure added
      - `chore:` → Usually omit unless significant build/maintenance changes
