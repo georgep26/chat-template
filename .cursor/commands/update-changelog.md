@@ -64,3 +64,68 @@ Make sure to:
 - Consolidate similar commits into single bullet points
 - Use present tense and active voice
 - Keep descriptions concise but informative
+
+## Documented Process Example
+
+Here's the actual process used in a recent update:
+
+### 1. Read Current CHANGELOG
+First, read the existing CHANGELOG.md to determine the last version and date:
+```bash
+cat CHANGELOG.md
+```
+
+### 2. Get Git History
+Get a quick overview of recent commits (excluding merges):
+```bash
+git log --oneline --no-merges --decorate | head -50
+```
+
+### 3. Get Detailed Commit Information
+Get detailed commit messages with dates since the last release. First, identify the last release date from CHANGELOG.md (e.g., 2025-10-07), then:
+```bash
+git log --format="%H|%ai|%s|%b" --no-merges --since="2025-10-07" | head -100
+```
+This provides:
+- `%H`: Full commit hash
+- `%ai`: Author date in ISO format
+- `%s`: Subject (commit message)
+- `%b`: Body (for BREAKING CHANGE detection)
+
+### 4. Get Current Date
+Get today's date for the new version entry:
+```bash
+date +%Y-%m-%d
+```
+
+### 5. Analyze and Categorize Commits
+Review the commit messages and categorize them:
+- Commits starting with `feature:` → **Added**
+- Commits starting with `fix:` → **Fixed**
+- Commits with `Refactor` or `refactor:` → **Changed**
+- Commits with `Update` or `docs:` → **Changed** or **Added** (depending on context)
+- Commits with `Add` → **Added**
+- Check commit bodies for `BREAKING CHANGE:` → **Breaking Changes**
+
+### 6. Determine Version Number
+- Last version: 1.0.0
+- New features present → Increment minor version → 1.1.0
+- No breaking changes → Keep major version at 1
+
+### 7. Update CHANGELOG.md
+Add the new version entry after `[Unreleased]` with:
+- Version number and date
+- Summary section (1-2 sentences)
+- Categorized sections (Added, Changed, Fixed) with bullet points
+- User-focused, concise descriptions
+
+### Example Commits Processed
+From the example run:
+- `feature: Provide detailed instructions...` → **Added**: CHANGELOG update instructions
+- `fix: update commit message generation rules...` → **Fixed**: Commit message generation rules
+- `Add AGENT.md: Introduce instructions...` → **Added**: AGENT.md with instructions
+- `Refactor application configuration...` → **Changed**: Configuration refactor
+- `Update Python version...` → **Changed**: Python version update
+- `feature: add cursor rules...` → **Added**: Cursor rules
+- `Update README.md...` → **Changed**: README updates
+- Various cleanup commits → Grouped or omitted if trivial
