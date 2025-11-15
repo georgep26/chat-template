@@ -1,7 +1,7 @@
-.PHONY: install lint test clean all eval
+.PHONY: dev-env lint test clean all eval
 
-install:
-	@bash -c "eval \"$$(conda shell.bash hook)\" && bash scripts/setup_env.sh --activate"
+dev-env:
+	@bash scripts/setup_env.sh
 
 lint:
 	ruff .

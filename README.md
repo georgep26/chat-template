@@ -26,7 +26,7 @@ The full environment setup process is handled by the `scripts/setup_env.sh` scri
 The easiest way to set up the environment is using the Makefile:
 
 ```bash
-make install
+make dev-env
 ```
 
 Alternatively, you can run the setup script directly:
@@ -35,13 +35,13 @@ Alternatively, you can run the setup script directly:
 bash scripts/setup_env.sh
 ```
 
-### After Setup
-
-Once the environment is created, activate it with:
+**Important**: After running `make dev-env` or `bash scripts/setup_env.sh`, you **must manually activate** the conda environment before using the application:
 
 ```bash
 conda activate chat-template-env
 ```
+
+The setup script only creates or updates the conda environment; it does not activate it automatically. You need to activate it in your terminal session before running any application commands.
 
 ## Configuration
 
