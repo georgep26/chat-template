@@ -24,6 +24,20 @@ aws:
   s3_bucket: "template-bucket"
   dynamodb_table: "template-table"
 
+rag:
+  memory:
+    backend: "postgres"  # Options: postgres, dynamo, vector
+    summarization_threshold: 20  # Number of messages before summarization
+
+bedrock:
+  region: "us-east-1"
+  knowledge_base_id: "${KB_ID}"
+  model:
+    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    temperature: 0.1
+  retrieval:
+    number_of_results: 10
+
 # Logging Configuration
 logging:
   version: 1
