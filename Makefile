@@ -1,4 +1,4 @@
-.PHONY: install lint test clean all
+.PHONY: install lint test clean all eval
 
 install:
 	@bash -c "eval \"$$(conda shell.bash hook)\" && bash scripts/setup_env.sh --activate"
@@ -9,6 +9,9 @@ lint:
 
 test:
 	pytest
+
+eval:
+	python -m evals.run_ragas
 
 clean:
 	find . -type f -name "*.pyc" -delete

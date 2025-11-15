@@ -1,9 +1,15 @@
-# Python Template Repository
+# RAG Chat Application
 
-The purpose of this repository is to provide a template for future python projects. Below are some features built in to this repository.
-- Standard directory structure
-- Environment setup (currently set to python 3.14)
-- Changelog definition to support releases
+A production-ready RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities.
+
+## Features
+
+- **LangGraph Orchestration**: Agentic RAG pipeline with query rewriting, clarification, splitting, retrieval, and answer generation
+- **AWS Bedrock Integration**: Uses Claude models via Bedrock Converse API and Amazon Knowledge Bases for retrieval
+- **Conversation Memory**: Postgres-based chat history with automatic summarization for long conversations
+- **Query Pipeline**: Intelligent query processing with rewrite, clarification, and multi-part query splitting
+- **RAGAS Evaluation**: Offline evaluation framework using RAGAS metrics (answer accuracy, context precision/recall)
+- **Lambda-Ready**: Standardized API interface for deployment as AWS Lambda function
 
 ## Environment Setup
 
@@ -27,19 +33,62 @@ Alternatively, you can run the setup script directly:
 bash scripts/setup_env.sh
 ```
 
-### Customizing the Environment Name
-
-**Important**: Before running the setup, you should update the environment name in `environment.yml` to match your project name. The default name is `project-env`, but you should change it to something specific to your project (e.g., `my-awesome-project-env`).
-
 ### After Setup
 
 Once the environment is created, activate it with:
 
 ```bash
-conda activate <your-environment-name>
+conda activate chat-template-env
 ```
 
-Replace `<your-environment-name>` with the name you specified in `environment.yml`.
+## Configuration
+
+### Environment Variables
+
+The application requires the following environment variables:
+
+- `KB_ID`: AWS Bedrock Knowledge Base ID (or set in `config/app_config.yml`)
+- `PG_CONN_INFO`: Postgres connection string (e.g., `postgresql://user:password@host:port/dbname`)
+
+### Application Configuration
+
+Edit `config/app_config.yml` to configure:
+
+- **AWS/Bedrock Settings**: Region, model ID, temperature, knowledge base ID
+- **Memory Settings**: Backend type (postgres/dynamo/vector), summarization threshold
+- **Database Settings**: Postgres connection details
+
+Example configuration:
+
+```yaml
+bedrock:
+  region: "us-east-1"
+  knowledge_base_id: "${KB_ID}"
+  model:
+    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    temperature: 0.1
+
+rag:
+  memory:
+    backend: "postgres"
+    summarization_threshold: 20
+```
+
+### Postgres Database Setup
+
+The application uses Postgres for chat history storage. Ensure Postgres is running and accessible:
+
+1. Create a database:
+   ```sql
+   CREATE DATABASE rag_chat_db;
+   ```
+
+2. Set the `PG_CONN_INFO` environment variable:
+   ```bash
+   export PG_CONN_INFO="postgresql://user:password@localhost:5432/rag_chat_db"
+   ```
+
+The application will automatically create the required tables on first run.
 
 ## Directory Structure
 
@@ -69,9 +118,18 @@ python-template/
 │   │   └── README.md
 │   └── setup_env.sh     # Environment setup script
 ├── src/                 # Source code for the application
-│   └── main.py
+│   ├── main.py          # Lambda handler entry point
+│   └── rag_app/         # RAG application package
+│       ├── graph/       # LangGraph state, nodes, and graph definition
+│       ├── api/         # API models and chat service
+│       └── memory/      # Chat history storage abstractions
+├── evals/               # RAGAS evaluation pipeline
+├── data/                # Evaluation data (CSV files)
 ├── tests/               # Unit and integration tests
-│   └── test_main.py
+│   ├── test_graph_smoke.py
+│   ├── test_api_lambda.py
+│   ├── test_ragas_pipeline.py
+│   └── test_memory_store.py
 ├── CHANGELOG.md         # Project changelog for version tracking
 ├── environment.yml      # Conda environment definition
 ├── Makefile             # Make commands for common tasks
@@ -92,8 +150,15 @@ python-template/
 - **scripts/**: Utility scripts for automation, deployment, and environment setup. The `deploy/` subdirectory contains scripts for deploying infrastructure and applications.
 
 - **src/**: Main source code directory. Contains the core application logic and modules.
+  - `rag_app/graph/`: LangGraph components (state, nodes, graph construction)
+  - `rag_app/api/`: API models (ChatRequest, ChatResponse) and chat service
+  - `rag_app/memory/`: Chat history storage (Postgres implementation, factory, summarization)
+
+- **evals/**: RAGAS evaluation pipeline scripts and utilities
 
 - **tests/**: Test files for unit testing, integration testing, and validation of the application code.
+
+- **data/**: Evaluation datasets (CSV files with questions and reference answers)
 
 ## Code Quality Tools (Optional)
 
@@ -143,3 +208,50 @@ This template includes a comprehensive pre-commit configuration (`.pre-commit-co
    ```
 
 Once enabled, these tools will automatically run before each commit, ensuring consistent code quality across your project.
+
+## Usage
+
+### Running Tests
+
+```bash
+make test
+```
+
+### Running Evaluation
+
+Create `data/eval_questions.csv` with columns `question` and `reference_answer`, then run:
+
+```bash
+make eval
+```
+
+Results will be saved to `data/eval_results.csv`.
+
+### Lambda Deployment
+
+The `src/main.py` file contains the Lambda handler. Deploy using your preferred method (SAM, Terraform, CloudFormation).
+
+Example Lambda event:
+
+```json
+{
+  "body": {
+    "conversation_id": "conv-123",
+    "user_id": "user-456",
+    "message": "What is the cancellation policy?",
+    "metadata": {}
+  }
+}
+```
+
+## Architecture
+
+The RAG pipeline follows this flow:
+
+1. **Query Rewrite**: Enhances user query for better retrieval
+2. **Clarification**: Asks clarifying questions if query is underspecified
+3. **Query Splitting**: Splits multi-part queries into subqueries
+4. **Retrieval**: Retrieves relevant documents from Bedrock Knowledge Base
+5. **Answer Generation**: Generates answer using retrieved context and conversation history
+
+Conversation memory is automatically loaded before processing and persisted after completion. Long conversations are automatically summarized to maintain context window efficiency.
