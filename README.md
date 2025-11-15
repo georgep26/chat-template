@@ -19,6 +19,8 @@ The full environment setup process is handled by the `scripts/setup_env.sh` scri
 - Install Miniconda if it's not installed (with OS-specific installation methods)
 - Create the conda environment from `environment.yml` with all required dependencies
 
+**Note**: The conda environment created from `environment.yml` is intended for **local development and testing**. It contains the same dependencies as the application's Lambda functions, allowing you to test the application locally before deploying to AWS. This ensures that your local development environment matches the production runtime environment.
+
 ### Quick Start
 
 The easiest way to set up the environment is using the Makefile:
