@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     user_id: str
     message: str
     metadata: Dict[str, Any] = {}
+    retrieval_filters: Optional[Dict[str, List[str]]] = None
 
 
 class Source(BaseModel):
