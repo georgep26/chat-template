@@ -2,6 +2,32 @@
 
 # Aurora Serverless v2 PostgreSQL Database Deployment Script
 # This script deploys the light_db CloudFormation stack for different environments
+#
+# Usage Examples:
+#   # Deploy to development environment (default region: us-east-1)
+#   ./scripts/deploy/deploy_history_store_db.sh dev deploy --master-password MySecurePass123
+#
+#   # Deploy to staging with custom region
+#   ./scripts/deploy/deploy_history_store_db.sh staging deploy --master-password MySecurePass123 --region us-west-2
+#
+#   # Deploy to production with custom username and capacity
+#   ./scripts/deploy/deploy_history_store_db.sh prod deploy --master-password MySecurePass123 \
+#     --master-username admin --min-capacity 0.5 --max-capacity 4
+#
+#   # Validate template before deployment
+#   ./scripts/deploy/deploy_history_store_db.sh dev validate
+#
+#   # Check stack status
+#   ./scripts/deploy/deploy_history_store_db.sh dev status
+#
+#   # Update existing stack
+#   ./scripts/deploy/deploy_history_store_db.sh dev update --master-password NewPassword123
+#
+#   # Delete stack (with confirmation prompt)
+#   ./scripts/deploy/deploy_history_store_db.sh dev delete
+#
+# Note: VPC ID and subnet IDs are hardcoded in the script.
+#       The script will automatically create a Secrets Manager secret if it doesn't exist.
 
 set -e
 
