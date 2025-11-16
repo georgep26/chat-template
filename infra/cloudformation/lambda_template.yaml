@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RAG Chat Lambda Function - CloudFormation Template'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+  
+  LambdaImageUri:
+    Type: String
+    Description: 'URI of the Lambda container image in ECR (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/rag-lambda:latest)'
+  
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    Description: 'Memory size for Lambda function in MB'
+    MinValue: 128
+    MaxValue: 10240
+  
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    Description: 'Timeout for Lambda function in seconds'
+    MinValue: 3
+    MaxValue: 900
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC ID where the Lambda will be deployed (required for RDS access)'
+  
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'List of subnet IDs for Lambda (at least 2 subnets in different AZs)'
+  
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: 'Security group IDs for Lambda (should allow outbound to RDS)'
+  
+  DBSecretArn:
+    Type: String
+    Description: 'ARN of the Secrets Manager secret containing database credentials'
+  
+  KnowledgeBaseId:
+    Type: String
+    Default: ''
+    Description: 'AWS Bedrock Knowledge Base ID for retrieval'
+  
+  ConfigS3Bucket:
+    Type: String
+    Default: ''
+    Description: 'S3 bucket name for config file (optional, leave empty for local config)'
+  
+  ConfigS3Key:
+    Type: String
+    Default: ''
+    Description: 'S3 key for config file (optional, leave empty for local config)'
+  
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: 'ARN of the Lambda execution role (from lambda_execution_role stack)'
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, 'prod']
+  HasConfigS3: !And
+    - !Not [!Equals [!Ref ConfigS3Bucket, '']]
+    - !Not [!Equals [!Ref ConfigS3Key, '']]
+
+Resources:
+  # CloudWatch Log Group
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}-rag-chat'
+      RetentionInDays: !If [IsProduction, 30, 7]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-rag-chat-logs'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Lambda Function
+  RAGChatLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-rag-chat'
+      Description: 'RAG Chat Lambda function with LangGraph orchestration'
+      PackageType: Image
+      ImageUri: !Ref LambdaImageUri
+      Role: !Ref LambdaExecutionRoleArn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          APP_CONFIG_PATH: !If
+            - HasConfigS3
+            - !Sub 's3://${ConfigS3Bucket}/${ConfigS3Key}'
+            - 'config/app_config.yml'
+          AWS_REGION: !Ref AWSRegion
+          ENVIRONMENT: !Ref Environment
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds: !Ref SecurityGroupIds
+      LoggingConfig:
+        LogFormat: JSON
+        LogGroup: !Ref LambdaLogGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-rag-chat'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref RAGChatLambda
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionName'
+  
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt RAGChatLambda.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionArn'
+  
+  LambdaLogGroupName:
+    Description: 'Name of the CloudWatch Log Group'
+    Value: !Ref LambdaLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaLogGroupName'
+
