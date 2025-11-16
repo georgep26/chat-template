@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 from langchain_core.messages import HumanMessage
 
-from rag_app.graph.graph import build_rag_graph
+from src.rag_lambda.graph.graph import build_rag_graph
 
 # Build graph once at module level
 graph = build_rag_graph()

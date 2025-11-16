@@ -49,7 +49,6 @@ The setup script only creates or updates the conda environment; it does not acti
 
 The application requires the following environment variables:
 
-- `KB_ID`: AWS Bedrock Knowledge Base ID (or set in `config/app_config.yml`)
 - `PG_CONN_INFO`: Postgres connection string (e.g., `postgresql://user:password@host:port/dbname`)
 
 ### Application Configuration
@@ -65,7 +64,7 @@ Example configuration:
 ```yaml
 bedrock:
   region: "us-east-1"
-  knowledge_base_id: "${KB_ID}"
+  knowledge_base_id: "your-knowledge-base-id-here"
   model:
     id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     temperature: 0.1
@@ -231,7 +230,7 @@ Results will be saved to `data/eval_results.csv`.
 
 ### Lambda Deployment
 
-The `src/main.py` file contains the Lambda handler. Deploy using your preferred method (SAM, Terraform, CloudFormation).
+The `src/rag_lambda/main.py` file contains the Lambda handler. The RAG application code is organized in the `src/rag_lambda/` folder with its own `Dockerfile` and `requirements.txt`. Deploy using your preferred method (SAM, Terraform, CloudFormation).
 
 Example Lambda event:
 

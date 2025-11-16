@@ -4,9 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_app.memory.base import ChatHistoryStore
-from rag_app.memory.factory import create_history_store
-from rag_app.memory.postgres_store import PostgresHistoryStore
+from src.rag_lambda.memory.base import ChatHistoryStore
+from src.rag_lambda.memory.factory import create_history_store
+from src.rag_lambda.memory.postgres_store import PostgresHistoryStore
 
 
 def test_chat_history_store_interface():
@@ -15,7 +15,7 @@ def test_chat_history_store_interface():
         ChatHistoryStore()  # Should not be instantiable
 
 
-@patch("rag_app.memory.postgres_store._get_connection")
+@patch("src.rag_lambda.memory.postgres_store._get_connection")
 def test_postgres_history_store_init(mock_conn):
     """Test PostgresHistoryStore initialization."""
     mock_conn.return_value = MagicMock()
@@ -26,7 +26,7 @@ def test_postgres_history_store_init(mock_conn):
     mock_conn.assert_called_once()
 
 
-@patch("rag_app.memory.postgres_store._get_connection")
+@patch("src.rag_lambda.memory.postgres_store._get_connection")
 def test_postgres_history_store_methods(mock_conn):
     """Test PostgresHistoryStore methods."""
     mock_conn_instance = MagicMock()

@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_app.api.models import ChatRequest, ChatResponse
-from src.main import lambda_handler
+from src.rag_lambda.api.models import ChatRequest, ChatResponse
+from src.rag_lambda.main import lambda_handler
 
 
 def test_lambda_handler_structure():
@@ -24,7 +24,7 @@ def test_lambda_handler_structure():
     context = MagicMock()
 
     # Mock the chat service to avoid AWS dependencies
-    with patch("rag_app.api.chat_service.handle_chat") as mock_handle:
+    with patch("src.rag_lambda.api.chat_service.handle_chat") as mock_handle:
         mock_handle.return_value = ChatResponse(
             conversation_id="test-conv-123",
             answer="Hello! How can I help you?",
@@ -58,7 +58,7 @@ def test_lambda_handler_string_body():
     }
     context = MagicMock()
 
-    with patch("rag_app.api.chat_service.handle_chat") as mock_handle:
+    with patch("src.rag_lambda.api.chat_service.handle_chat") as mock_handle:
         mock_handle.return_value = ChatResponse(
             conversation_id="test", answer="hi", sources=[]
         )

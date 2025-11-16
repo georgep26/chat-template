@@ -4,8 +4,8 @@ import json
 import logging
 from typing import Any, Dict
 
-from rag_app.api.chat_service import handle_chat
-from rag_app.api.models import ChatRequest
+from api.chat_service import handle_chat
+from api.models import ChatRequest
 
 logger = logging.getLogger(__name__)
 
