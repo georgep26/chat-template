@@ -13,6 +13,7 @@ rag_chat:
       temperature: 0.1 # Temperature for the summarization model
       region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
   retrieval: # Retrieval settings for the knowledge base
+    region: "us-east-1" # Region for the retrieval model (defaults to the region of the database)
     knowledge_base_id: "" # Knowledge base ID to use for retrieval
     number_of_results: 10 # Number of results to retrieve from the knowledge base
 

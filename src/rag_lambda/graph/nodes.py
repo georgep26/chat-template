@@ -33,17 +33,7 @@ llm = ChatBedrockConverse(
     temperature=_bedrock_config.get("model", {}).get("temperature", 0.1),
 )
 
-# Bedrock KB retriever
-kb_id = _bedrock_config.get("knowledge_base_id", "")
-kb_retriever = AmazonKnowledgeBasesRetriever(
-    knowledge_base_id=kb_id,
-    region_name=_bedrock_config.get("region", _aws_config.get("region", "us-east-1")),
-    retrieval_config={
-        "vectorSearchConfiguration": {
-            "numberOfResults": _bedrock_config.get("retrieval", {}).get("number_of_results", 10)
-        }
-    },
-)
+
 
 
 def rewrite_node(state: MessagesState) -> MessagesState:
@@ -54,30 +44,7 @@ def rewrite_node(state: MessagesState) -> MessagesState:
     return state
 
 
-def retrieve_node(state: MessagesState) -> MessagesState:
-    """Retrieve relevant documents from knowledge base."""
-    last_user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
-    docs = kb_retriever.get_relevant_documents(last_user.content)
-    # Attach retrieved docs as a synthetic system message
-    context_text = "\n\n".join(d.page_content for d in docs)
-    state["messages"].append(
-        SystemMessage(
-            name="retriever_context",
-            content=f"Relevant context:\n{context_text}",
-        )
-    )
-    # Capture document metadata for sources
-    sources = []
-    for doc in docs:
-        source_info = {
-            "document_id": doc.metadata.get("id", doc.metadata.get("source", "unknown")),
-            "source_type": doc.metadata.get("source_type", "document"),
-            "score": doc.metadata.get("score", 0.0),
-            "snippet": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-        }
-        sources.append(source_info)
-    state["sources"] = sources
-    return state
+
 
 
 def answer_node(state: MessagesState) -> MessagesState:

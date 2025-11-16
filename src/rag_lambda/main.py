@@ -50,9 +50,10 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
     
     config = read_config(config_path)
-    chat_history_config = config.get("rag_chat", {}).get("chat_history_store", {})
-    summarization_config = config.get("rag_chat", {}).get("summarization", {})
-
+    rag_chat_config = config.get("rag_chat", {})
+    chat_history_config = rag_chat_config.get("chat_history_store", {})
+    summarization_config = rag_chat_config.get("summarization", {})
+    retrieval_config = rag_chat_config.get("retrieval", {})
 
     # Create request model
     req = ChatRequest(**event_body)
@@ -74,6 +75,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Initial state with prior messages and new user message
     state = {
         "messages": prior_messages + [HumanMessage(content=req.message)],
+        "retrieval_config": retrieval_config,
     }
 
     # Build graph
