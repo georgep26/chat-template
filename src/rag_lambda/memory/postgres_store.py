@@ -9,8 +9,6 @@ from langchain_postgres import PostgresChatMessageHistory
 
 from .base import ChatHistoryStore
 
-TABLE_NAME = "chat_history"
-
 
 def _get_connection():
     """Get Postgres connection from environment variable."""
@@ -23,15 +21,21 @@ def _get_connection():
 class PostgresHistoryStore(ChatHistoryStore):
     """Postgres-based chat history storage."""
 
-    def __init__(self):
-        """Initialize Postgres connection and create tables if needed."""
+    def __init__(self, table_name: str = "chat_history"):
+        """
+        Initialize Postgres connection and create tables if needed.
+        
+        Args:
+            table_name: Name of the table to store chat history
+        """
+        self._table_name = table_name
         self._conn = _get_connection()
-        PostgresChatMessageHistory.create_tables(self._conn, TABLE_NAME)
+        PostgresChatMessageHistory.create_tables(self._conn, self._table_name)
 
     def _history(self, conversation_id: str) -> PostgresChatMessageHistory:
         """Get PostgresChatMessageHistory instance for a conversation."""
         return PostgresChatMessageHistory(
-            TABLE_NAME, conversation_id, sync_connection=self._conn
+            self._table_name, conversation_id, sync_connection=self._conn
         )
 
     def get_messages(self, conversation_id: str) -> List[BaseMessage]:

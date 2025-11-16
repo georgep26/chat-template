@@ -5,6 +5,7 @@ rag_chat:
   db_connection_secret_name: "rag-chat-db-connection"
   memory:
     backend: "postgres"  # Options: postgres, dynamo, vector
+    table_name: "chat_history"  # Postgres table name for chat history
     summarization_threshold: 20  # Number of messages before summarization
     recent_messages_count: 10  # Number of recent messages to keep when summarizing
   region: "us-east-1"
