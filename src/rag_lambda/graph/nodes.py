@@ -7,8 +7,8 @@ import yaml
 from langchain_aws import ChatBedrockConverse
 from langchain_community.retrievers.bedrock import AmazonKnowledgeBasesRetriever
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
 
+from .prompts import answer_prompt, clarify_prompt, rewrite_prompt, split_prompt
 from .state import MessagesState
 
 # Load configuration
@@ -43,14 +43,6 @@ kb_retriever = AmazonKnowledgeBasesRetriever(
             "numberOfResults": _bedrock_config.get("retrieval", {}).get("number_of_results", 10)
         }
     },
-)
-
-# Query rewrite prompt
-rewrite_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "Rewrite the user query for retrieval. Expand acronyms and fix typos."),
-        ("human", "{query}"),
-    ]
 )
 
 
@@ -88,20 +80,6 @@ def retrieve_node(state: MessagesState) -> MessagesState:
     return state
 
 
-# Answer generation prompt
-answer_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a RAG assistant. Use the provided context. "
-            "If the answer is not in the context, say you don't know.",
-        ),
-        ("system", "{context}"),
-        ("human", "{question}"),
-    ]
-)
-
-
 def answer_node(state: MessagesState) -> MessagesState:
     """Generate answer using retrieved context."""
     user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
@@ -112,20 +90,6 @@ def answer_node(state: MessagesState) -> MessagesState:
     return state
 
 
-# Clarification prompt
-clarify_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a query assistant. Decide if you need clarification.\n"
-            "If the query is underspecified, respond ONLY with a clarifying question.\n"
-            "If it's clear, respond with the word CLEAR.",
-        ),
-        ("human", "{question}"),
-    ]
-)
-
-
 def clarify_node(state: MessagesState) -> MessagesState:
     """Ask clarifying questions for underspecified queries."""
     user = [m for m in state["messages"] if m.type == "human"][-1]
@@ -134,19 +98,6 @@ def clarify_node(state: MessagesState) -> MessagesState:
         # Ask a clarifying question - graph should end here, caller will show question to user
         state["messages"].append(resp)
     return state
-
-
-# Subquery splitting prompt
-split_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "If the user query has multiple distinct questions, split it into a numbered list "
-            "of simpler queries. If not, return just the original query as item 1.",
-        ),
-        ("human", "{question}"),
-    ]
-)
 
 
 def split_node(state: MessagesState) -> MessagesState:
