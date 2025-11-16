@@ -54,12 +54,13 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     summarization_threshold = memory_config.get("summarization_threshold", 20)
     recent_messages_count = memory_config.get("recent_messages_count", 10)
     memory_backend_type = memory_config.get("backend", "postgres")
+    table_name = memory_config.get("table_name", "chat_history")
 
     # Create request model
     req = ChatRequest(**event_body)
 
     # Initialize memory store
-    memory_store = create_history_store(memory_backend_type)
+    memory_store = create_history_store(memory_backend_type, table_name=table_name)
 
     # Load prior messages
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
