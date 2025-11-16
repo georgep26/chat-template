@@ -6,18 +6,34 @@ import os
 from typing import Any, Dict, List
 
 from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import END, StateGraph
 
-from graph.graph import build_rag_graph
+from graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
+from graph.state import MessagesState
 from memory.factory import create_history_store
 from memory.summary import summarize_messages
 from api.models import ChatRequest, ChatResponse, Source
 from utils.config import read_config
 from utils.logger import get_logger
 
-logger = get_logger(__name__)
+log = get_logger(__name__)
 
-# Build graph once at module level
-graph = build_rag_graph()
+
+def build_rag_graph(config: Dict[str, Any] = None):
+    """Build and compile the RAG LangGraph with query pipeline enhancements."""
+    graph = StateGraph(MessagesState)
+    graph.add_node("rewrite", rewrite_node)
+    graph.add_node("clarify", clarify_node)
+    graph.add_node("split", split_node)
+    graph.add_node("retrieve", retrieve_node)
+    graph.add_node("answer", answer_node)
+    graph.set_entry_point("rewrite")
+    graph.add_edge("rewrite", "clarify")
+    graph.add_edge("clarify", "split")
+    graph.add_edge("split", "retrieve")
+    graph.add_edge("retrieve", "answer")
+    graph.add_edge("answer", END)
+    return graph.compile()
 
 
 def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
@@ -59,6 +75,9 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     state = {
         "messages": prior_messages + [HumanMessage(content=req.message)],
     }
+
+    # Build graph
+    graph = build_rag_graph(config)
 
     # Invoke graph
     final_state = graph.invoke(state)
