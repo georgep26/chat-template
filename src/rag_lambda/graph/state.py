@@ -10,4 +10,5 @@ class MessagesState(TypedDict, total=False):
 
     messages: List[BaseMessage]
     sources: List[Dict[str, Any]]  # Document metadata for sources
+    retrieval_config: Dict[str, Any]  # Retrieval configuration
 
