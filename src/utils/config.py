@@ -78,7 +78,7 @@ def read_config(config_path: str) -> Dict[str, Any]:
             response = s3_client.get_object(Bucket=bucket_name, Key=key)
             content = response['Body'].read().decode('utf-8')
         except NoCredentialsError:
-            raise NoCredentialsError(
+            raise ValueError(
                 "AWS credentials not found. Configure credentials using AWS CLI or "
                 "environment variables."
             )
@@ -88,8 +88,7 @@ def read_config(config_path: str) -> Dict[str, Any]:
                 raise FileNotFoundError(f"Config file not found in S3: {config_path}")
             raise ClientError(
                 e.response['Error'],
-                e.operation_name,
-                f"Failed to read config from S3: {config_path}"
+                e.operation_name
             )
     else:
         # Read from local filesystem
