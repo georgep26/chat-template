@@ -8,11 +8,11 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
-from graph.state import MessagesState
-from memory.factory import create_history_store
-from memory.summary import summarize_messages
-from api.models import ChatRequest, ChatResponse, Source
+from .graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
+from .graph.state import MessagesState
+from .memory.factory import create_history_store
+from .memory.summary import summarize_messages
+from .api.models import ChatRequest, ChatResponse, Source
 from utils.config import read_config
 from utils.logger import get_logger
 
@@ -47,7 +47,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         HTTP response with status code, headers, and body
     """
     # Load configuration
-    config_path = os.getenv("APP_CONFIG_PATH")
+    config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
     
     config = read_config(config_path)
     memory_config = config.get("rag_chat", {}).get("memory", {})
