@@ -5,33 +5,19 @@ import json
 import os
 from typing import Any, Dict, List
 
-import yaml
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from graph.graph import build_rag_graph
 from memory.factory import create_history_store
 from memory.summary import summarize_messages
 from api.models import ChatRequest, ChatResponse, Source
+from utils.config import read_config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Build graph once at module level
 graph = build_rag_graph()
-
-# Load configuration for summarization threshold
-_config_path = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "..",
-    "config",
-    "app_config.yml",
-)
-_config_path = os.path.abspath(_config_path)
-
-with open(_config_path, "r") as f:
-    _config = yaml.safe_load(f)
-
-_summarization_threshold = _config.get("rag", {}).get("memory", {}).get("summarization_threshold", 20)
 
 
 def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,6 +30,12 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         HTTP response with status code, headers, and body
     """
+    # Load configuration
+    config_path = os.getenv("APP_CONFIG_PATH")
+    
+    config = read_config(config_path)
+    summarization_threshold = config.get("rag", {}).get("memory", {}).get("summarization_threshold", 20)
+
     # Create request model
     req = ChatRequest(**event_body)
 
@@ -54,7 +46,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
 
     # Check if summarization is needed
-    if len(prior_messages) > _summarization_threshold:
+    if len(prior_messages) > summarization_threshold:
         # Summarize older messages, keep recent ones
         recent_messages = prior_messages[-10:]  # Keep last 10 messages
         older_messages = prior_messages[:-10]
