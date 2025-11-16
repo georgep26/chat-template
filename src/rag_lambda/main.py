@@ -77,6 +77,10 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         "messages": prior_messages + [HumanMessage(content=req.message)],
         "retrieval_config": retrieval_config,
     }
+    
+    # Add retrieval filters to state if provided
+    if req.retrieval_filters:
+        state["retrieval_filters"] = req.retrieval_filters
 
     # Build graph
     graph = build_rag_graph()
@@ -87,9 +91,14 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Extract new messages (everything after prior_messages + user message)
     new_messages = final_state["messages"][len(prior_messages) + 1 :]
 
+    # Prepare metadata with retrieval_filters if they were used
+    metadata = None
+    if req.retrieval_filters:
+        metadata = {"retrieval_filters": req.retrieval_filters}
+
     # Append new messages to memory store
     if new_messages:
-        memory_store.append_messages(req.conversation_id, new_messages)
+        memory_store.append_messages(req.conversation_id, new_messages, metadata=metadata)
 
     # Extract answer from final state
     ai_msgs = [m for m in final_state["messages"] if m.type == "ai"]
