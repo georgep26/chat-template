@@ -1,5 +1,6 @@
 """Lambda handler for RAG chat application."""
 
+import argparse
 import json
 import logging
 from typing import Any, Dict
@@ -8,6 +9,29 @@ from api.chat_service import handle_chat
 from api.models import ChatRequest
 
 logger = logging.getLogger(__name__)
+
+
+def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Main function to handle chat requests.
+
+    Args:
+        event_body: Parsed event body dictionary
+
+    Returns:
+        HTTP response with status code, headers, and body
+    """
+    # Create request model
+    req = ChatRequest(**event_body)
+
+    # Handle chat request
+    resp = handle_chat(req)
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": resp.model_dump_json(),
+    }
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -21,27 +45,28 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     Returns:
         HTTP response with status code, headers, and body
     """
-    try:
-        # Parse request body
-        body = event.get("body")
-        if isinstance(body, str):
-            body = json.loads(body)
+    # Parse request body
+    body = event.get("body")
+    if isinstance(body, str):
+        body = json.loads(body)
 
-        # Create request model
-        req = ChatRequest(**body)
+    # Call main function
+    return main(body)
 
-        # Handle chat request
-        resp = handle_chat(req)
 
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": resp.model_dump_json(),
-        }
-    except Exception as e:
-        logger.error(f"Error processing chat request: {e}", exc_info=True)
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": "Internal server error"}),
-        }
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="RAG chat application - process chat requests"
+    )
+    parser.add_argument(
+        "--event-body",
+        type=str,
+        required=True,
+        help="JSON string containing the event body (e.g., '{\"conversation_id\": \"123\", \"user_id\": \"user1\", \"message\": \"Hello\"}')",
+    )
+    args = parser.parse_args()
+    # Parse the event_body JSON string
+    event_body = json.loads(args.event_body)
+
+    # Call main function
+    main(event_body)
