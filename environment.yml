@@ -9,12 +9,4 @@ dependencies:
   - awscli
   - boto3
   - pip:
-      - langchain>=0.2.0
-      - langgraph>=0.2.0
-      - langchain-aws>=1.0.0
-      - langchain-postgres>=0.0.10
-      - ragas>=0.2.0
-      - psycopg[binary]>=3.1.0
-      - fastapi
-      - uvicorn
-      - boto3
+    - -r src/rag_lambda/requirements.txt
