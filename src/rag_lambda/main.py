@@ -5,15 +5,13 @@ import json
 import os
 from typing import Any, Dict, List
 
-import boto3
-from botocore.exceptions import ClientError
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
 from .graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
 from .graph.state import MessagesState
 from .memory.factory import create_history_store
-from .memory.summary import summarize_messages
+from .memory.chat_summary import summarization_check
 from .api.models import ChatRequest, ChatResponse, Source
 from utils.config import read_config
 from utils.logger import get_logger
@@ -21,7 +19,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
-def build_rag_graph(config: Dict[str, Any] = None):
+def build_rag_graph():
     """Build and compile the RAG LangGraph with query pipeline enhancements."""
     graph = StateGraph(MessagesState)
     graph.add_node("rewrite", rewrite_node)
@@ -52,43 +50,26 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
     
     config = read_config(config_path)
-    memory_config = config.get("rag_chat", {}).get("chat_history_store", {})
-    summarization_threshold = memory_config.get("summarization", {}).get("summarization_threshold", 20)
-    memory_backend_type = memory_config.get("backend_type", "postgres")
-    table_name = memory_config.get("table_name", "chat_history")
-    db_connection_secret_name = memory_config.get("db_connection_secret_name")
+    chat_history_config = config.get("rag_chat", {}).get("chat_history_store", {})
+    summarization_config = config.get("rag_chat", {}).get("summarization", {})
 
-    # Retrieve database credentials from AWS Secrets Manager
-    secrets_client = boto3.client("secretsmanager")
-    response = secrets_client.get_secret_value(SecretId=db_connection_secret_name)
-    secret_string = response["SecretString"]
-    
-    # Parse the secret (assuming it's JSON)
-    db_creds = json.loads(secret_string)
 
     # Create request model
     req = ChatRequest(**event_body)
 
-    # Initialize memory store with backend-specific arguments
-    memory_store_arguments = {}
-    if memory_backend_type == "postgres":
-        memory_store_arguments = {
-            "db_creds": db_creds,
-            "table_name": table_name
-        }
-    
-    memory_store = create_history_store(memory_backend_type, memory_store_arguments=memory_store_arguments)
+    # Create memory store
+    memory_store = create_history_store(memory_backend_type=chat_history_config.pop("memory_backend_type"), 
+                                        memory_store_arguments=chat_history_config)
 
     # Load prior messages
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
 
-    # Check if summarization is needed
-    if len(prior_messages) > summarization_threshold:
-        # Summarize older messages, keep recent ones
-        recent_messages = prior_messages[-summarization_threshold:]
-        older_messages = prior_messages[:-summarization_threshold]
-        summary = summarize_messages(older_messages)
-        prior_messages = [summary] + recent_messages
+    # Check if summarization is needed for long conversations
+    prior_messages = summarization_check(
+        messages=prior_messages,
+        summarization_threshold=summarization_config.get("summarization_threshold"),
+        summarization_model_config=summarization_config.get("model"),
+    )
 
     # Initial state with prior messages and new user message
     state = {
@@ -96,7 +77,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # Build graph
-    graph = build_rag_graph(config)
+    graph = build_rag_graph()
 
     # Invoke graph
     final_state = graph.invoke(state)
