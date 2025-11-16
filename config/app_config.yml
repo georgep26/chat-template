@@ -3,15 +3,15 @@
 
 rag_chat:
   chat_history_store: # History of the conversation settings
-    backend_type: "postgres"  # Options: postgres, dynamo, vector, local_sqlite
+    memory_backend_type: "postgres"  # Options: postgres, dynamo, vector, local_sqlite
     db_connection_secret_name: "rag-chat-db-connection"  # Secret name for the database connection
     table_name: "chat_history"  # Postgres table name for chat history
-    summarization: # Summarization settings for when the conversation is too long
-      summarization_threshold: 20  # Number of messages before summarization
-      model: # Model to use for summarization
-        id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-        temperature: 0.1 # Temperature for the summarization model
-        region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
+  summarization: # Summarization settings for when the conversation is too long
+    summarization_threshold: 20  # Number of messages before summarization
+    model: # Model to use for summarization
+      id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      temperature: 0.1 # Temperature for the summarization model
+      region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
   retrieval: # Retrieval settings for the knowledge base
     knowledge_base_id: "" # Knowledge base ID to use for retrieval
     number_of_results: 10 # Number of results to retrieve from the knowledge base
