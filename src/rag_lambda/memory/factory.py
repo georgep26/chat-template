@@ -26,6 +26,9 @@ def create_history_store(memory_backend_type: str, table_name: str = "chat_histo
     elif memory_backend_type == "vector":
         # TODO: Implement VectorHistoryStore
         raise NotImplementedError("Vector store backend not yet implemented")
+    elif memory_backend_type == "local_sqlite":
+        # TODO: Implement LocalSQLiteHistoryStore
+        raise NotImplementedError("Local SQLite backend not yet implemented")
     else:
         raise ValueError(f"Unsupported memory backend: {memory_backend_type}")
 
