@@ -13,7 +13,7 @@ from .state import MessagesState
 
 # Load configuration
 _config_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    os.path.dirname(os.path.dirname(__file__)),
     "..",
     "config",
     "app_config.yml",
@@ -34,7 +34,7 @@ llm = ChatBedrockConverse(
 )
 
 # Bedrock KB retriever
-kb_id = os.getenv("KB_ID") or _bedrock_config.get("knowledge_base_id", "")
+kb_id = _bedrock_config.get("knowledge_base_id", "")
 kb_retriever = AmazonKnowledgeBasesRetriever(
     knowledge_base_id=kb_id,
     region_name=_bedrock_config.get("region", _aws_config.get("region", "us-east-1")),

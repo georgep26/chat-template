@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 # Load configuration
 _config_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    os.path.dirname(os.path.dirname(__file__)),
     "..",
     "config",
     "app_config.yml",

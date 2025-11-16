@@ -35,7 +35,7 @@ When designing and implementing applications using this template as a foundation
    - Follow the organizational patterns established in the template
 
 2. **Replace Example Code with Real Application Logic**
-   - The template contains **example/placeholder code** (e.g., `src/main.py`, `tests/test_main.py`)
+   - The template contains **example/placeholder code** (e.g., `src/rag_lambda/main.py`, `tests/test_main.py`)
    - **Swap out these examples** with actual application-specific code
    - Keep the same file structure and naming conventions, but implement real functionality
 
@@ -66,7 +66,7 @@ When designing and implementing applications using this template as a foundation
 1. Read `README.md` and `docs/template-outline.md` completely
 2. Understand the directory structure and configuration approach
 3. Identify which template files are examples vs. configuration
-4. Replace example code (`src/main.py`, `tests/test_main.py`) with actual application code
+4. Replace example code (`src/rag_lambda/main.py`, `tests/test_main.py`) with actual application code
 5. Update configuration files with real application settings
 6. Customize documentation to reflect the actual application
 7. Maintain the template's structure, standards, and best practices
