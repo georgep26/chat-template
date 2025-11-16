@@ -2,7 +2,7 @@
 
 from langchain_core.messages import HumanMessage
 
-from src.rag_lambda.graph.graph import build_rag_graph
+from src.rag_lambda.main import build_rag_graph
 
 
 def test_graph_builds():
