@@ -2,27 +2,25 @@
 # This file contains configuration settings for the application, including logging configuration
 
 rag_chat:
-  db_connection_secret_name: "rag-chat-db-connection"
-  memory:
-    backend: "postgres"  # Options: postgres, dynamo, vector
+  chat_history_store: # History of the conversation settings
+    backend_type: "postgres"  # Options: postgres, dynamo, vector, local_sqlite
+    db_connection_secret_name: "rag-chat-db-connection"  # Secret name for the database connection
     table_name: "chat_history"  # Postgres table name for chat history
-    summarization_threshold: 20  # Number of messages before summarization
-  region: "us-east-1"
-  knowledge_base_id: ""  # Set your AWS Bedrock Knowledge Base ID here
-  model:
-    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-    temperature: 0.1
-  retrieval:
-    number_of_results: 10
+    summarization: # Summarization settings for when the conversation is too long
+      summarization_threshold: 20  # Number of messages before summarization
+      model: # Model to use for summarization
+        id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        temperature: 0.1 # Temperature for the summarization model
+        region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
+  retrieval: # Retrieval settings for the knowledge base
+    knowledge_base_id: "" # Knowledge base ID to use for retrieval
+    number_of_results: 10 # Number of results to retrieve from the knowledge base
 
 api:
   host: "0.0.0.0"
   port: 8000
   timeout: 30
 
-memory:
-  summarization_threshold: 20
-  recent_messages_count: 10
 
 
 # Logging Configuration
