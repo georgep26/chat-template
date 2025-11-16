@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Aurora Serverless v2 PostgreSQL Database - Light DB for Chat History Storage'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'python-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC ID where the database will be deployed'
+  
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'List of subnet IDs for the DB subnet group (at least 2 subnets in different AZs)'
+  
+  MasterUsername:
+    Type: String
+    Default: 'postgres'
+    NoEcho: true
+    Description: 'Master username for the database'
+  
+  MasterUserPassword:
+    Type: String
+    NoEcho: true
+    Description: 'Master password for the database (minimum 8 characters)'
+    MinLength: 8
+  
+  DatabaseName:
+    Type: String
+    Default: 'rag_chat_db'
+    Description: 'Name of the initial database to create'
+  
+  MinCapacity:
+    Type: Number
+    Default: 0
+    Description: 'Minimum Aurora Capacity Units (ACU). Set to 0 for scale-to-zero (requires Aurora PostgreSQL 13.15+), or 0.5 for minimum capacity'
+    MinValue: 0
+  
+  MaxCapacity:
+    Type: Number
+    Default: 1
+    Description: 'Maximum Aurora Capacity Units (ACU)'
+    MinValue: 0.5
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  # Security Group for the database
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-light-db-sg-${Environment}'
+      GroupDescription: 'Security group for Aurora Serverless v2 PostgreSQL database'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref DBSecurityGroup
+          Description: 'Allow PostgreSQL access from same security group'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-light-db-sg-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${ProjectName}-light-db-subnet-group-${Environment}'
+      DBSubnetGroupDescription: 'Subnet group for Aurora Serverless v2 PostgreSQL database'
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-light-db-subnet-group-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # DB Cluster Parameter Group (for custom settings)
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      DBClusterParameterGroupName: !Sub '${ProjectName}-light-db-cluster-params-${Environment}'
+      Description: 'Parameter group for Aurora Serverless v2 PostgreSQL cluster'
+      Family: aurora-postgresql15
+      Parameters:
+        # Optimize for minimal resource usage
+        shared_preload_libraries: 'pg_stat_statements'
+        log_connections: '0'
+        log_disconnections: '0'
+        log_statement: 'none'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-light-db-cluster-params-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Aurora Serverless v2 DB Cluster
+  LightDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Sub '${ProjectName}-light-db-cluster-${Environment}'
+      Engine: aurora-postgresql
+      EngineMode: provisioned
+      EngineVersion: '15.4'
+      DatabaseName: !Ref DatabaseName
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DBSecurityGroup
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref MinCapacity
+        MaxCapacity: !Ref MaxCapacity
+      # Note: Aurora Serverless v2 does not have built-in auto-pause.
+      # To achieve scale-to-zero after 30 minutes of inactivity, you would need
+      # additional automation (e.g., Lambda + EventBridge) to monitor and scale the cluster.
+      BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      StorageEncrypted: true
+      DeletionProtection: !If [IsProduction, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-light-db-cluster-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Aurora Serverless v2 DB Instance (required - at least one instance needed)
+  LightDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-light-db-instance-${Environment}'
+      DBClusterIdentifier: !Ref LightDBCluster
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-light-db-instance-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  DBClusterIdentifier:
+    Description: 'Aurora DB Cluster Identifier'
+    Value: !Ref LightDBCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterIdentifier'
+  
+  DBClusterEndpoint:
+    Description: 'Aurora DB Cluster Endpoint'
+    Value: !GetAtt LightDBCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterEndpoint'
+  
+  DBClusterPort:
+    Description: 'Aurora DB Cluster Port'
+    Value: !GetAtt LightDBCluster.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterPort'
+  
+  DBClusterReaderEndpoint:
+    Description: 'Aurora DB Cluster Reader Endpoint'
+    Value: !GetAtt LightDBCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterReaderEndpoint'
+  
+  DatabaseName:
+    Description: 'Name of the database'
+    Value: !Ref DatabaseName
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseName'
+  
+  SecurityGroupId:
+    Description: 'Security Group ID for the database'
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'
+  
+  ConnectionString:
+    Description: 'PostgreSQL connection string (without password)'
+    Value: !Sub 'postgresql://${MasterUsername}@${LightDBCluster.Endpoint.Address}:${LightDBCluster.Endpoint.Port}/${DatabaseName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ConnectionString'
+
