@@ -7,7 +7,6 @@ rag_chat:
     backend: "postgres"  # Options: postgres, dynamo, vector
     table_name: "chat_history"  # Postgres table name for chat history
     summarization_threshold: 20  # Number of messages before summarization
-    recent_messages_count: 10  # Number of recent messages to keep when summarizing
   region: "us-east-1"
   knowledge_base_id: ""  # Set your AWS Bedrock Knowledge Base ID here
   model:
@@ -21,7 +20,9 @@ api:
   port: 8000
   timeout: 30
 
-
+memory:
+  summarization_threshold: 20
+  recent_messages_count: 10
 
 
 # Logging Configuration

@@ -52,7 +52,6 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     config = read_config(config_path)
     memory_config = config.get("rag_chat", {}).get("memory", {})
     summarization_threshold = memory_config.get("summarization_threshold", 20)
-    recent_messages_count = memory_config.get("recent_messages_count", 10)
     memory_backend_type = memory_config.get("backend", "postgres")
     table_name = memory_config.get("table_name", "chat_history")
 
@@ -68,8 +67,8 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Check if summarization is needed
     if len(prior_messages) > summarization_threshold:
         # Summarize older messages, keep recent ones
-        recent_messages = prior_messages[-recent_messages_count:]
-        older_messages = prior_messages[:-recent_messages_count]
+        recent_messages = prior_messages[-summarization_threshold:]
+        older_messages = prior_messages[:-summarization_threshold]
         summary = summarize_messages(older_messages)
         prior_messages = [summary] + recent_messages
 
