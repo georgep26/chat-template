@@ -1,42 +1,27 @@
 # Application Configuration
 # This file contains configuration settings for the application, including logging configuration
 
-app:
-  name: "python-template-project"
-  version: "1.0.0"
-  debug: false
-  log_level: "INFO"
-
-database:
-  host: "localhost"
-  port: 5432
-  name: "template_db"
-  user: "template_user"
-  password: "${DB_PASSWORD}"
+rag_chat:
+  db_connection_secret_name: "rag-chat-db-connection"
+  memory:
+    backend: "postgres"  # Options: postgres, dynamo, vector
+    summarization_threshold: 20  # Number of messages before summarization
+    recent_messages_count: 10  # Number of recent messages to keep when summarizing
+  region: "us-east-1"
+  knowledge_base_id: ""  # Set your AWS Bedrock Knowledge Base ID here
+  model:
+    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    temperature: 0.1
+  retrieval:
+    number_of_results: 10
 
 api:
   host: "0.0.0.0"
   port: 8000
   timeout: 30
 
-aws:
-  region: "us-east-1"
-  s3_bucket: "template-bucket"
-  dynamodb_table: "template-table"
 
-rag:
-  memory:
-    backend: "postgres"  # Options: postgres, dynamo, vector
-    summarization_threshold: 20  # Number of messages before summarization
 
-bedrock:
-  region: "us-east-1"
-  knowledge_base_id: "${KB_ID}"
-  model:
-    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-    temperature: 0.1
-  retrieval:
-    number_of_results: 10
 
 # Logging Configuration
 logging:

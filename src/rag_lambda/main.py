@@ -34,7 +34,9 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     config_path = os.getenv("APP_CONFIG_PATH")
     
     config = read_config(config_path)
-    summarization_threshold = config.get("rag", {}).get("memory", {}).get("summarization_threshold", 20)
+    memory_config = config.get("rag_chat", {}).get("memory", {})
+    summarization_threshold = memory_config.get("summarization_threshold", 20)
+    recent_messages_count = memory_config.get("recent_messages_count", 10)
 
     # Create request model
     req = ChatRequest(**event_body)
@@ -48,8 +50,8 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Check if summarization is needed
     if len(prior_messages) > summarization_threshold:
         # Summarize older messages, keep recent ones
-        recent_messages = prior_messages[-10:]  # Keep last 10 messages
-        older_messages = prior_messages[:-10]
+        recent_messages = prior_messages[-recent_messages_count:]
+        older_messages = prior_messages[:-recent_messages_count]
         summary = summarize_messages(older_messages)
         prior_messages = [summary] + recent_messages
 
