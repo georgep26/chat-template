@@ -2,13 +2,13 @@
 
 import argparse
 import json
-import logging
 from typing import Any, Dict
 
 from api.chat_service import handle_chat
 from api.models import ChatRequest
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
