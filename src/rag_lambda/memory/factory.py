@@ -8,7 +8,7 @@ from .postgres_store import PostgresHistoryStore
 
 def create_history_store(
     memory_backend_type: str,
-    memory_store_arguments: Optional[Dict[str, Any]] = None
+    **memory_store_arguments: Optional[Dict[str, Any]] 
 ) -> ChatHistoryStore:
     """
     Create a chat history store instance based on backend type.
