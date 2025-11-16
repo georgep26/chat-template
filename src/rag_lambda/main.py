@@ -53,12 +53,13 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     memory_config = config.get("rag_chat", {}).get("memory", {})
     summarization_threshold = memory_config.get("summarization_threshold", 20)
     recent_messages_count = memory_config.get("recent_messages_count", 10)
+    memory_backend_type = memory_config.get("backend", "postgres")
 
     # Create request model
     req = ChatRequest(**event_body)
 
     # Initialize memory store
-    memory_store = create_history_store()
+    memory_store = create_history_store(memory_backend_type)
 
     # Load prior messages
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
