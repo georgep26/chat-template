@@ -1,25 +1,38 @@
 """Factory for creating chat history store instances."""
 
+from typing import Any, Dict, Optional
+
 from .base import ChatHistoryStore
 from .postgres_store import PostgresHistoryStore
 
 
-def create_history_store(memory_backend_type: str, table_name: str = "chat_history") -> ChatHistoryStore:
+def create_history_store(
+    memory_backend_type: str,
+    memory_store_arguments: Optional[Dict[str, Any]] = None
+) -> ChatHistoryStore:
     """
     Create a chat history store instance based on backend type.
 
     Args:
         memory_backend_type: Backend type (e.g., "postgres", "dynamo", "vector")
-        table_name: Table name for postgres backend (default: "chat_history")
+        memory_store_arguments: Dictionary of arguments specific to the backend type.
+                               For postgres: {"db_creds": {...}, "table_name": "..."}
 
     Returns:
         ChatHistoryStore instance
 
     Raises:
-        ValueError: If backend type is not supported
+        ValueError: If backend type is not supported or required arguments are missing
     """
+    if memory_store_arguments is None:
+        memory_store_arguments = {}
+    
     if memory_backend_type == "postgres":
-        return PostgresHistoryStore(table_name=table_name)
+        db_creds = memory_store_arguments.get("db_creds")
+        if db_creds is None:
+            raise ValueError("db_creds is required for postgres backend in memory_store_arguments")
+        table_name = memory_store_arguments.get("table_name", "chat_history")
+        return PostgresHistoryStore(db_creds=db_creds, table_name=table_name)
     elif memory_backend_type == "dynamo":
         # TODO: Implement DynamoHistoryStore
         raise NotImplementedError("DynamoDB backend not yet implemented")
