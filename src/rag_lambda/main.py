@@ -5,6 +5,8 @@ import json
 import os
 from typing import Any, Dict, List
 
+import boto3
+from botocore.exceptions import ClientError
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
@@ -50,16 +52,32 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
     
     config = read_config(config_path)
-    memory_config = config.get("rag_chat", {}).get("memory", {})
-    summarization_threshold = memory_config.get("summarization_threshold", 20)
-    memory_backend_type = memory_config.get("backend", "postgres")
+    memory_config = config.get("rag_chat", {}).get("chat_history_store", {})
+    summarization_threshold = memory_config.get("summarization", {}).get("summarization_threshold", 20)
+    memory_backend_type = memory_config.get("backend_type", "postgres")
     table_name = memory_config.get("table_name", "chat_history")
+    db_connection_secret_name = memory_config.get("db_connection_secret_name")
+
+    # Retrieve database credentials from AWS Secrets Manager
+    secrets_client = boto3.client("secretsmanager")
+    response = secrets_client.get_secret_value(SecretId=db_connection_secret_name)
+    secret_string = response["SecretString"]
+    
+    # Parse the secret (assuming it's JSON)
+    db_creds = json.loads(secret_string)
 
     # Create request model
     req = ChatRequest(**event_body)
 
-    # Initialize memory store
-    memory_store = create_history_store(memory_backend_type, table_name=table_name)
+    # Initialize memory store with backend-specific arguments
+    memory_store_arguments = {}
+    if memory_backend_type == "postgres":
+        memory_store_arguments = {
+            "db_creds": db_creds,
+            "table_name": table_name
+        }
+    
+    memory_store = create_history_store(memory_backend_type, memory_store_arguments=memory_store_arguments)
 
     # Load prior messages
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)

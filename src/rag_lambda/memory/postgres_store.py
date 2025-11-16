@@ -1,36 +1,34 @@
 """Postgres implementation of chat history storage."""
 
-import os
-from typing import List
+from typing import Dict, List
 
-import psycopg
+import psycopg2
 from langchain_core.messages import BaseMessage
 from langchain_postgres import PostgresChatMessageHistory
 
 from .base import ChatHistoryStore
 
 
-def _get_connection():
-    """Get Postgres connection from environment variable."""
-    conn_info = os.getenv("PG_CONN_INFO")
-    if not conn_info:
-        raise ValueError("PG_CONN_INFO environment variable must be set")
-    return psycopg.connect(conn_info)
-
-
 class PostgresHistoryStore(ChatHistoryStore):
     """Postgres-based chat history storage."""
 
-    def __init__(self, table_name: str = "chat_history"):
+    def __init__(self, db_creds: Dict[str, str], table_name: str = "chat_history"):
         """
         Initialize Postgres connection and create tables if needed.
         
         Args:
+            db_creds: Dictionary containing database connection credentials
+                     (e.g., {'host': '...', 'port': '...', 'database': '...', 'user': '...', 'password': '...'})
             table_name: Name of the table to store chat history
         """
+        self._db_creds = db_creds
         self._table_name = table_name
-        self._conn = _get_connection()
+        self._conn = self._get_connection()
         PostgresChatMessageHistory.create_tables(self._conn, self._table_name)
+
+    def _get_connection(self):
+        """Get Postgres connection using db_creds."""
+        return psycopg2.connect(**self._db_creds)
 
     def _history(self, conversation_id: str) -> PostgresChatMessageHistory:
         """Get PostgresChatMessageHistory instance for a conversation."""
