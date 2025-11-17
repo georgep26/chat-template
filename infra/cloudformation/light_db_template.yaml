@@ -149,9 +149,7 @@ Resources:
       ServerlessV2ScalingConfiguration:
         MinCapacity: !Ref MinCapacity
         MaxCapacity: !Ref MaxCapacity
-      # Note: Aurora Serverless v2 does not have built-in auto-pause.
-      # To achieve scale-to-zero after 30 minutes of inactivity, you would need
-      # additional automation (e.g., Lambda + EventBridge) to monitor and scale the cluster.
+        SecondsUntilAutoPause: 600
       BackupRetentionPeriod: !If [IsProduction, 7, 1]
       PreferredBackupWindow: '03:00-04:00'
       PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
