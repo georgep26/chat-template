@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 Bucket for Knowledge Base Documents Storage'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  BucketName:
+    Type: String
+    Description: 'Name of the S3 bucket (must be globally unique). If not provided, will use: ${ProjectName}-kb-documents-${Environment}'
+
+  EnableVersioning:
+    Type: String
+    Default: 'Enabled'
+    AllowedValues: ['Enabled', 'Suspended']
+    Description: 'Enable versioning for the bucket'
+
+  EnableLifecycleRules:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: 'Enable lifecycle rules to transition old versions to cheaper storage'
+
+  TransitionToIA:
+    Type: Number
+    Default: 30
+    Description: 'Days before transitioning objects to Infrequent Access storage'
+    MinValue: 1
+    MaxValue: 365
+
+  TransitionToGlacier:
+    Type: Number
+    Default: 90
+    Description: 'Days before transitioning objects to Glacier storage (0 to disable)'
+    MinValue: 0
+    MaxValue: 365
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, 'prod']
+  HasCustomBucketName: !Not [!Equals [!Ref BucketName, '']]
+  EnableLifecycle: !Equals [!Ref EnableLifecycleRules, 'true']
+  EnableGlacierTransition: !And
+    - !Equals [!Ref EnableLifecycleRules, 'true']
+    - !Not [!Equals [!Ref TransitionToGlacier, 0]]
+
+Resources:
+  ########################################
+  # S3 Bucket for Knowledge Base Documents
+  ########################################
+  KnowledgeBaseBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If
+        - HasCustomBucketName
+        - !Ref BucketName
+        - !Sub '${ProjectName}-kb-documents-${Environment}'
+      VersioningConfiguration:
+        Status: !Ref EnableVersioning
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration: !If
+        - EnableLifecycle
+        - Rules:
+            - Id: TransitionToIA
+              Status: Enabled
+              Transitions:
+                - TransitionInDays: !Ref TransitionToIA
+                  StorageClass: STANDARD_IA
+            - Id: TransitionToGlacier
+              Status: !If
+                - EnableGlacierTransition
+                - Enabled
+                - Disabled
+              Transitions:
+                - TransitionInDays: !Ref TransitionToGlacier
+                  StorageClass: GLACIER
+              NoncurrentVersionTransitions:
+                - TransitionInDays: !Ref TransitionToGlacier
+                  StorageClass: GLACIER
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-kb-documents-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Purpose
+          Value: 'Knowledge Base Documents'
+
+  ########################################
+  # Bucket Policy for Bedrock Knowledge Base Access
+  ########################################
+  KnowledgeBaseBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref KnowledgeBaseBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow Bedrock Knowledge Base service to list bucket
+          - Sid: AllowBedrockKnowledgeBaseListBucket
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt KnowledgeBaseBucket.Arn
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+          # Allow Bedrock Knowledge Base service to read objects
+          - Sid: AllowBedrockKnowledgeBaseGetObject
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource: !Sub '${KnowledgeBaseBucket}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+Outputs:
+  BucketName:
+    Description: 'Name of the S3 bucket'
+    Value: !Ref KnowledgeBaseBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+
+  BucketArn:
+    Description: 'ARN of the S3 bucket'
+    Value: !GetAtt KnowledgeBaseBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketArn'
+
+  BucketDomainName:
+    Description: 'Domain name of the S3 bucket'
+    Value: !GetAtt KnowledgeBaseBucket.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketDomainName'
+
+  BucketRegionalDomainName:
+    Description: 'Regional domain name of the S3 bucket'
+    Value: !GetAtt KnowledgeBaseBucket.RegionalDomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketRegionalDomainName'
+
