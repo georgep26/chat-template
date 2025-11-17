@@ -37,10 +37,10 @@ CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
 -- Using HNSW index for better performance on large datasets
 -- Note: HNSW requires pgvector 0.5.0+ and may not be available in all Aurora versions
 -- If HNSW is not available, use ivfflat index instead
-CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
-ON bedrock_integration.bedrock_kb 
-USING hnsw (embedding vector_cosine_ops)
-WITH (m = 16, ef_construction = 64);
+-- CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
+-- ON bedrock_integration.bedrock_kb 
+-- USING hnsw (embedding vector_cosine_ops)
+-- WITH (m = 16, ef_construction = 64);
 
 -- Alternative: If HNSW is not available, uncomment the following and comment out the above:
 -- CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
@@ -49,9 +49,9 @@ WITH (m = 16, ef_construction = 64);
 -- WITH (lists = 100);
 
 -- Create an index on metadata for faster filtering queries
-CREATE INDEX IF NOT EXISTS bedrock_kb_metadata_idx 
-ON bedrock_integration.bedrock_kb 
-USING GIN (metadata);
+-- CREATE INDEX IF NOT EXISTS bedrock_kb_metadata_idx 
+-- ON bedrock_integration.bedrock_kb 
+-- USING GIN (metadata);
 
 -- Grant necessary permissions (adjust as needed for your setup)
 -- The Bedrock Knowledge Base service role will need access to this table
