@@ -54,9 +54,15 @@ Parameters:
     Default: 1
     Description: 'Maximum Aurora Capacity Units (ACU)'
     MinValue: 0.5
+  
+  AllowedPublicIP:
+    Type: String
+    Default: ''
+    Description: 'Public IP address to allow inbound access from (CIDR format, e.g., 1.2.3.4/32). Leave empty to deny all public access.'
 
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
+  HasAllowedIP: !Not [!Equals [!Ref AllowedPublicIP, '']]
 
 Resources:
   # Security Group for the database
@@ -66,12 +72,8 @@ Resources:
       GroupName: !Sub '${ProjectName}-light-db-sg-${Environment}'
       GroupDescription: 'Security group for Aurora Serverless v2 PostgreSQL database'
       VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !Ref DBSecurityGroup
-          Description: 'Allow PostgreSQL access from same security group'
+      # Note: Security groups automatically allow traffic from themselves
+      # Additional ingress rules are added via AWS::EC2::SecurityGroupIngress resource below
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-light-db-sg-${Environment}'
@@ -79,6 +81,18 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
+
+  # Security Group Ingress Rule for public IP access
+  DBSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasAllowedIP
+    Properties:
+      GroupId: !Ref DBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: !Ref AllowedPublicIP
+      Description: !Sub 'Allow PostgreSQL access from ${AllowedPublicIP}'
 
   # DB Subnet Group
   DBSubnetGroup:
@@ -123,11 +137,12 @@ Resources:
       DBClusterIdentifier: !Sub '${ProjectName}-light-db-cluster-${Environment}'
       Engine: aurora-postgresql
       EngineMode: provisioned
-      EngineVersion: '15.4'
+      EngineVersion: '15.7'
       DatabaseName: !Ref DatabaseName
       MasterUsername: !Ref MasterUsername
       MasterUserPassword: !Ref MasterUserPassword
       DBSubnetGroupName: !Ref DBSubnetGroup
+      Port: 5432
       VpcSecurityGroupIds:
         - !Ref DBSecurityGroup
       DBClusterParameterGroupName: !Ref DBClusterParameterGroup
@@ -158,7 +173,7 @@ Resources:
       DBClusterIdentifier: !Ref LightDBCluster
       Engine: aurora-postgresql
       DBInstanceClass: db.serverless
-      PubliclyAccessible: false
+      PubliclyAccessible: true
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-light-db-instance-${Environment}'

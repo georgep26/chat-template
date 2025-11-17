@@ -80,6 +80,7 @@ show_usage() {
     echo "  --min-capacity <acu>          - Minimum ACU (default: 0 for scale-to-zero)"
     echo "  --max-capacity <acu>          - Maximum ACU (default: 1)"
     echo "  --region <region>             - AWS region (default: us-east-1)"
+    echo "  --public-ip <ip>              - Public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Auto-detected if not provided."
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --master-password mypass123"
@@ -128,6 +129,7 @@ MIN_CAPACITY="0"
 MAX_CAPACITY="1"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
+PUBLIC_IP=""  # Will be auto-detected if not provided
 
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
@@ -154,6 +156,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --region)
             AWS_REGION="$2"
+            shift 2
+            ;;
+        --public-ip)
+            PUBLIC_IP="$2"
             shift 2
             ;;
         *)
@@ -201,54 +207,174 @@ get_base_parameters() {
     esac
 }
 
-# Function to get all parameters
-get_parameters() {
+# Function to get public IP address
+get_public_ip() {
+    print_status "Detecting your public IP address..." >&2
+    
+    # Try multiple services in case one is unavailable
+    local public_ip=""
+    
+    # Try ipify.org first (simple and reliable)
+    public_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null)
+    
+    # If that fails, try ifconfig.me
+    if [ -z "$public_ip" ] || ! echo "$public_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        public_ip=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null)
+    fi
+    
+    # If that fails, try icanhazip.com
+    if [ -z "$public_ip" ] || ! echo "$public_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        public_ip=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null)
+    fi
+    
+    # Validate IP format
+    if [ -z "$public_ip" ] || ! echo "$public_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        print_error "Failed to detect public IP address. Please provide it manually using --public-ip option." >&2
+        return 1
+    fi
+    
+    # Format as CIDR (/32 for single IP)
+    # Only output the IP to stdout (for command substitution)
+    echo "${public_ip}/32"
+}
+
+# Function to build parameters array for AWS CLI
+build_parameters_array() {
+    local params=()
+    
+    # Base parameters
     local base_params=$(get_base_parameters)
-    local params="$base_params"
+    # Split base params and add to array
+    while IFS= read -r param; do
+        [ -n "$param" ] && params+=("$param")
+    done <<< "$(echo "$base_params" | tr ' ' '\n')"
     
     if [ -n "$VPC_ID" ]; then
-        params="$params ParameterKey=VpcId,ParameterValue=$VPC_ID"
+        params+=("ParameterKey=VpcId,ParameterValue=$VPC_ID")
     fi
     
     if [ -n "$SUBNET_IDS" ]; then
-        # Convert comma-separated to space-separated for CloudFormation
-        local subnet_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
-        params="$params ParameterKey=SubnetIds,ParameterValue=\"$subnet_list\""
+        # For CloudFormation List parameters, pass comma-separated values
+        # AWS CLI expects a single string value for List parameters
+        params+=("ParameterKey=SubnetIds,ParameterValue=$SUBNET_IDS")
     fi
     
     # Use provided username or default to postgres (matching template default)
     local db_username="${MASTER_USERNAME:-postgres}"
-    params="$params ParameterKey=MasterUsername,ParameterValue=$db_username"
+    params+=("ParameterKey=MasterUsername,ParameterValue=$db_username")
     
     if [ -n "$MASTER_PASSWORD" ]; then
-        params="$params ParameterKey=MasterUserPassword,ParameterValue=$MASTER_PASSWORD"
+        params+=("ParameterKey=MasterUserPassword,ParameterValue=$MASTER_PASSWORD")
     fi
     
     if [ -n "$DATABASE_NAME" ]; then
-        params="$params ParameterKey=DatabaseName,ParameterValue=$DATABASE_NAME"
+        params+=("ParameterKey=DatabaseName,ParameterValue=$DATABASE_NAME")
     fi
     
     if [ -n "$MIN_CAPACITY" ]; then
-        params="$params ParameterKey=MinCapacity,ParameterValue=$MIN_CAPACITY"
+        params+=("ParameterKey=MinCapacity,ParameterValue=$MIN_CAPACITY")
     fi
     
     if [ -n "$MAX_CAPACITY" ]; then
-        params="$params ParameterKey=MaxCapacity,ParameterValue=$MAX_CAPACITY"
+        params+=("ParameterKey=MaxCapacity,ParameterValue=$MAX_CAPACITY")
     fi
     
-    echo "$params"
+    # Get public IP and add to parameters
+    local public_ip_cidr=""
+    if [ -n "$PUBLIC_IP" ]; then
+        # If provided manually, validate and format
+        if echo "$PUBLIC_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            # If already in CIDR format, use as-is, otherwise add /32
+            if echo "$PUBLIC_IP" | grep -q '/'; then
+                public_ip_cidr="$PUBLIC_IP"
+            else
+                public_ip_cidr="${PUBLIC_IP}/32"
+            fi
+        else
+            print_error "Invalid IP address format: $PUBLIC_IP"
+            return 1
+        fi
+    else
+        # Auto-detect public IP
+        public_ip_cidr=$(get_public_ip)
+        if [ $? -ne 0 ] || [ -z "$public_ip_cidr" ]; then
+            print_error "Failed to get public IP address"
+            return 1
+        fi
+    fi
+    
+    print_status "Using public IP: ${public_ip_cidr}"
+    params+=("ParameterKey=AllowedPublicIP,ParameterValue=$public_ip_cidr")
+    
+    # Print array elements, one per line (for use with array expansion)
+    printf '%s\n' "${params[@]}"
 }
 
 # Function to validate template
 validate_template() {
     print_status "Validating CloudFormation template..."
-    aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION
-    if [ $? -eq 0 ]; then
+    if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
         print_status "Template validation successful"
     else
         print_error "Template validation failed"
         exit 1
     fi
+}
+
+# Function to check stack status and detect errors
+check_stack_status() {
+    local stack_status=$(aws cloudformation describe-stacks \
+        --stack-name $STACK_NAME \
+        --region $AWS_REGION \
+        --query 'Stacks[0].StackStatus' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$stack_status" ]; then
+        return 1
+    fi
+    
+    # Check for failure/rollback states
+    case "$stack_status" in
+        ROLLBACK_COMPLETE|CREATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
+            print_error "Stack is in failed state: $stack_status"
+            echo ""
+            
+            # Get stack status reason
+            local status_reason=$(aws cloudformation describe-stacks \
+                --stack-name $STACK_NAME \
+                --region $AWS_REGION \
+                --query 'Stacks[0].StackStatusReason' \
+                --output text 2>/dev/null)
+            
+            if [ -n "$status_reason" ] && [ "$status_reason" != "None" ]; then
+                print_error "Status Reason: $status_reason"
+                echo ""
+            fi
+            
+            # Get recent stack events with errors
+            print_error "Recent stack events with errors:"
+            echo ""
+            aws cloudformation describe-stack-events \
+                --stack-name $STACK_NAME \
+                --region $AWS_REGION \
+                --max-items 20 \
+                --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
+                --output table 2>/dev/null || true
+            
+            echo ""
+            print_error "For more details, check the AWS Console or run:"
+            print_error "aws cloudformation describe-stack-events --stack-name $STACK_NAME --region $AWS_REGION"
+            
+            return 1
+            ;;
+        CREATE_COMPLETE|UPDATE_COMPLETE)
+            return 0
+            ;;
+        *)
+            # Other states (IN_PROGRESS, etc.) - not an error yet
+            return 0
+            ;;
+    esac
 }
 
 # Function to show stack status
@@ -293,7 +419,28 @@ get_db_outputs() {
     echo "$db_host|$db_port|$db_name"
 }
 
-# Function to prompt for DB credentials
+# Function to ensure credentials are provided (prompt if needed)
+ensure_credentials() {
+    # Use provided username or default to postgres
+    if [ -z "$MASTER_USERNAME" ]; then
+        read -p "Enter database username [postgres]: " input_username
+        MASTER_USERNAME=${input_username:-postgres}
+    fi
+    
+    # Password is required - prompt if not provided
+    if [ -z "$MASTER_PASSWORD" ]; then
+        read -sp "Enter database password: " input_password
+        echo
+        if [ -z "$input_password" ]; then
+            print_error "Password cannot be empty"
+            return 1
+        fi
+        MASTER_PASSWORD="$input_password"
+    fi
+    return 0
+}
+
+# Function to prompt for DB credentials (used when creating secret)
 prompt_db_credentials() {
     # Get the username used for the DB (from parameters or default)
     # Try to get it from the DB stack parameters first
@@ -366,17 +513,31 @@ deploy_secret() {
         return 1
     fi
     
-    # Get base parameters
-    local base_params=$(get_base_parameters)
+    # Create a temporary parameters file for secret stack
+    local secret_param_file=$(mktemp)
+    trap "rm -f $secret_param_file" EXIT
     
-    # Build secret parameters
-    local secret_params="$base_params"
-    secret_params="$secret_params ParameterKey=SecretName,ParameterValue=$SECRET_NAME"
-    secret_params="$secret_params ParameterKey=DBHost,ParameterValue=$db_host"
-    secret_params="$secret_params ParameterKey=DBPort,ParameterValue=$db_port"
-    secret_params="$secret_params ParameterKey=DBName,ParameterValue=$db_name"
-    secret_params="$secret_params ParameterKey=DBUsername,ParameterValue=$MASTER_USERNAME"
-    secret_params="$secret_params ParameterKey=DBPassword,ParameterValue=$MASTER_PASSWORD"
+    # Build secret parameters JSON file (secret template doesn't need AWSRegion)
+    {
+        echo "["
+        printf '  {\n    "ParameterKey": "ProjectName",\n    "ParameterValue": "%s"\n  }' "$PROJECT_NAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "Environment",\n    "ParameterValue": "%s"\n  }' "$ENVIRONMENT"
+        echo ","
+        printf '  {\n    "ParameterKey": "SecretName",\n    "ParameterValue": "%s"\n  }' "$SECRET_NAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "DBHost",\n    "ParameterValue": "%s"\n  }' "$db_host"
+        echo ","
+        printf '  {\n    "ParameterKey": "DBPort",\n    "ParameterValue": "%s"\n  }' "$db_port"
+        echo ","
+        printf '  {\n    "ParameterKey": "DBName",\n    "ParameterValue": "%s"\n  }' "$db_name"
+        echo ","
+        printf '  {\n    "ParameterKey": "DBUsername",\n    "ParameterValue": "%s"\n  }' "$MASTER_USERNAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "DBPassword",\n    "ParameterValue": "%s"\n  }' "$MASTER_PASSWORD"
+        echo ""
+        echo "]"
+    } > "$secret_param_file"
     
     print_status "Deploying secret stack: $SECRET_STACK_NAME"
     
@@ -386,14 +547,14 @@ deploy_secret() {
         aws cloudformation update-stack \
             --stack-name $SECRET_STACK_NAME \
             --template-body file://$SECRET_TEMPLATE_FILE \
-            --parameters $secret_params \
+            --parameters file://$secret_param_file \
             --region $AWS_REGION
     else
         print_status "Creating new secret stack: $SECRET_STACK_NAME"
         aws cloudformation create-stack \
             --stack-name $SECRET_STACK_NAME \
             --template-body file://$SECRET_TEMPLATE_FILE \
-            --parameters $secret_params \
+            --parameters file://$secret_param_file \
             --region $AWS_REGION
     fi
     
@@ -408,11 +569,7 @@ deploy_secret() {
 
 # Function to deploy stack
 deploy_stack() {
-    # Validate required parameters
-    if [ -z "$MASTER_PASSWORD" ]; then
-        print_error "Master password is required. Use --master-password <password>"
-        exit 1
-    fi
+    # Credentials should already be provided at this point (checked before validation)
     
     # Validate subnet count (need at least 2 for Aurora)
     local subnet_count=$(echo "$SUBNET_IDS" | tr ',' '\n' | wc -l | tr -d ' ')
@@ -423,34 +580,147 @@ deploy_stack() {
     
     print_status "Deploying CloudFormation stack: $STACK_NAME"
     
+    # Get public IP first (before building JSON to avoid status messages in JSON)
+    local public_ip_cidr=""
+    if [ -n "$PUBLIC_IP" ]; then
+        # If provided manually, validate and format
+        if echo "$PUBLIC_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            # If already in CIDR format, use as-is, otherwise add /32
+            if echo "$PUBLIC_IP" | grep -q '/'; then
+                public_ip_cidr="$PUBLIC_IP"
+            else
+                public_ip_cidr="${PUBLIC_IP}/32"
+            fi
+        else
+            print_error "Invalid IP address format: $PUBLIC_IP"
+            exit 1
+        fi
+    else
+        # Auto-detect public IP
+        public_ip_cidr=$(get_public_ip)
+        if [ $? -ne 0 ] || [ -z "$public_ip_cidr" ]; then
+            print_error "Failed to get public IP address"
+            exit 1
+        fi
+    fi
+    
+    print_status "Using public IP: ${public_ip_cidr}"
+    
+    # Create a temporary parameters file to avoid issues with comma-separated List values
+    local param_file=$(mktemp)
+    trap "rm -f $param_file" EXIT
+    
+    # Build parameters JSON file
+    {
+        echo "["
+        
+        # Base parameters (ProjectName, Environment, AWSRegion)
+        printf '  {\n    "ParameterKey": "ProjectName",\n    "ParameterValue": "%s"\n  }' "$PROJECT_NAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "Environment",\n    "ParameterValue": "%s"\n  }' "$ENVIRONMENT"
+        echo ","
+        printf '  {\n    "ParameterKey": "AWSRegion",\n    "ParameterValue": "%s"\n  }' "$AWS_REGION"
+        echo ","
+        printf '  {\n    "ParameterKey": "VpcId",\n    "ParameterValue": "%s"\n  }' "$VPC_ID"
+        echo ","
+        # For List parameters, pass as comma-separated string
+        printf '  {\n    "ParameterKey": "SubnetIds",\n    "ParameterValue": "%s"\n  }' "$SUBNET_IDS"
+        echo ","
+        local db_username="${MASTER_USERNAME:-postgres}"
+        printf '  {\n    "ParameterKey": "MasterUsername",\n    "ParameterValue": "%s"\n  }' "$db_username"
+        echo ","
+        printf '  {\n    "ParameterKey": "MasterUserPassword",\n    "ParameterValue": "%s"\n  }' "$MASTER_PASSWORD"
+        echo ","
+        printf '  {\n    "ParameterKey": "DatabaseName",\n    "ParameterValue": "%s"\n  }' "$DATABASE_NAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "MinCapacity",\n    "ParameterValue": "%s"\n  }' "$MIN_CAPACITY"
+        echo ","
+        printf '  {\n    "ParameterKey": "MaxCapacity",\n    "ParameterValue": "%s"\n  }' "$MAX_CAPACITY"
+        echo ","
+        printf '  {\n    "ParameterKey": "AllowedPublicIP",\n    "ParameterValue": "%s"\n  }' "$public_ip_cidr"
+        echo ""
+        echo "]"
+    } > "$param_file"
+    
     # Check if stack exists
+    local stack_operation_result=0
+    local no_updates=false
+    
     if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
         print_warning "Stack $STACK_NAME already exists. Updating..."
-        aws cloudformation update-stack \
+        local update_output=$(aws cloudformation update-stack \
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
-            --parameters $(get_parameters) \
+            --parameters file://$param_file \
             --capabilities CAPABILITY_NAMED_IAM \
-            --region $AWS_REGION
+            --region $AWS_REGION 2>&1)
+        stack_operation_result=$?
+        
+        # Check if the error is "No updates are to be performed"
+        if [ $stack_operation_result -ne 0 ]; then
+            if echo "$update_output" | grep -q "No updates are to be performed"; then
+                print_status "No updates needed for stack $STACK_NAME. Stack is already up to date."
+                no_updates=true
+                stack_operation_result=0  # Treat as success
+            else
+                print_error "Stack update failed:"
+                echo "$update_output"
+            fi
+        fi
     else
         print_status "Creating new stack: $STACK_NAME"
         aws cloudformation create-stack \
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
-            --parameters $(get_parameters) \
+            --parameters file://$param_file \
             --capabilities CAPABILITY_NAMED_IAM \
             --region $AWS_REGION
+        stack_operation_result=$?
     fi
     
-    if [ $? -eq 0 ]; then
-        print_status "Stack operation initiated successfully"
-        print_status "Waiting for stack to be ready before creating secret..."
-        
-        # Wait for stack to be in a stable state
-        print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
-        aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null || \
-        aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null || \
-        print_warning "Stack operation may still be in progress. Continuing with secret creation..."
+    if [ $stack_operation_result -eq 0 ]; then
+        if [ "$no_updates" = false ]; then
+            print_status "Stack operation initiated successfully"
+            print_status "Waiting for stack to be ready before creating secret..."
+            
+            # Wait for stack to be in a stable state
+            print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
+            
+            # Try waiting for create first, then update
+            local wait_result=0
+            aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
+            wait_result=$?
+            
+            if [ $wait_result -ne 0 ]; then
+                # If create wait failed, try update wait
+                aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
+                wait_result=$?
+            fi
+            
+            # Check stack status after wait
+            if ! check_stack_status; then
+                print_error "Stack deployment failed. See errors above."
+                exit 1
+            fi
+            
+            if [ $wait_result -eq 0 ]; then
+                print_status "Stack operation completed successfully"
+            else
+                # Wait command timed out or failed, but check if stack is actually in a good state
+                if ! check_stack_status; then
+                    print_error "Stack deployment failed. See errors above."
+                    exit 1
+                fi
+                print_warning "Stack operation may still be in progress, but current status is valid."
+            fi
+        else
+            # No updates needed, but verify stack is in good state
+            if ! check_stack_status; then
+                print_error "Stack is in a failed state. See errors above."
+                exit 1
+            fi
+            print_status "Stack is up to date and ready."
+        fi
         
         # Deploy secret after DB stack is ready
         deploy_secret
@@ -461,23 +731,42 @@ deploy_stack() {
         print_warning "      However, auto-pause after 30 minutes requires additional automation."
         print_warning "      The cluster will scale based on load but won't auto-pause without custom automation."
     else
-        print_error "Stack operation failed"
+        print_error "Stack operation failed to initiate"
         exit 1
     fi
 }
 
 # Function to delete stack
 delete_stack() {
-    print_warning "Deleting CloudFormation stack: $STACK_NAME"
-    print_warning "This will delete the Aurora database cluster and all data!"
-    read -p "Are you sure you want to delete the stack? (y/N): " -n 1 -r
+    print_warning "Deleting CloudFormation stacks"
+    print_warning "This will delete:"
+    print_warning "  - Aurora database cluster and all data"
+    print_warning "  - Database connection secret"
+    read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Delete secret stack first (if it exists)
+        if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
+            print_status "Deleting secret stack: $SECRET_STACK_NAME"
+            aws cloudformation delete-stack --stack-name $SECRET_STACK_NAME --region $AWS_REGION
+            if [ $? -eq 0 ]; then
+                print_status "Secret stack deletion initiated"
+            else
+                print_error "Failed to initiate secret stack deletion"
+                exit 1
+            fi
+        else
+            print_status "Secret stack $SECRET_STACK_NAME does not exist, skipping"
+        fi
+        
+        # Delete DB stack
+        print_status "Deleting DB stack: $STACK_NAME"
         aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
         if [ $? -eq 0 ]; then
-            print_status "Stack deletion initiated"
+            print_status "DB stack deletion initiated"
+            print_status "Both stacks are being deleted. This may take several minutes."
         else
-            print_error "Failed to initiate stack deletion"
+            print_error "Failed to initiate DB stack deletion"
             exit 1
         fi
     else
@@ -494,6 +783,10 @@ case $ACTION in
         show_status
         ;;
     deploy|update)
+        # Ensure credentials are provided before validation
+        if ! ensure_credentials; then
+            exit 1
+        fi
         validate_template
         deploy_stack
         ;;
