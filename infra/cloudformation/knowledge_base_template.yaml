@@ -149,8 +149,6 @@ Resources:
             TextField: 'chunks'           # text column
             MetadataField: 'metadata'     # json/jsonb column
             PrimaryKeyField: 'id'         # primary key column
-            # Optional but recommended: custom metadata field for arbitrary metadata
-            CustomMetadataField: 'custom_metadata'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-kb-${Environment}'
