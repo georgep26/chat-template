@@ -132,7 +132,7 @@ Resources:
             Action:
               - s3:GetObject
               - s3:GetObjectVersion
-            Resource: !Sub '${KnowledgeBaseBucket}/*'
+            Resource: !Join ['', [!GetAtt KnowledgeBaseBucket.Arn, '/*']]
             Condition:
               StringEquals:
                 'aws:SourceAccount': !Ref AWS::AccountId
