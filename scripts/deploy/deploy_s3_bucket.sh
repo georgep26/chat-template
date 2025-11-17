@@ -373,7 +373,25 @@ deploy_stack() {
         
         if [ -n "$bucket_name" ] && [ "$bucket_name" != "None" ]; then
             print_status "S3 Bucket Name: $bucket_name"
-            print_status "You can upload documents to: s3://$bucket_name/docs/"
+            
+            # Create kb_sources folder in the bucket
+            print_status "Creating kb_sources folder in bucket..."
+            if aws s3api put-object \
+                --bucket "$bucket_name" \
+                --key "kb_sources/" \
+                --region "$AWS_REGION" \
+                --content-length 0 >/dev/null 2>&1; then
+                print_status "Successfully created kb_sources folder"
+            else
+                # Check if folder already exists (this is fine)
+                if aws s3 ls "s3://$bucket_name/kb_sources/" --region "$AWS_REGION" >/dev/null 2>&1; then
+                    print_status "kb_sources folder already exists"
+                else
+                    print_warning "Failed to create kb_sources folder, but continuing..."
+                fi
+            fi
+            
+            print_status "You can upload documents to: s3://$bucket_name/kb_sources/"
             print_status "The knowledge base will automatically ingest documents from this bucket."
         fi
         
