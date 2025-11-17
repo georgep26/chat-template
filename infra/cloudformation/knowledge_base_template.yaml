@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS Bedrock Knowledge Base with Aurora PostgreSQL + pgvector and S3 data source.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  DBClusterIdentifier:
+    Type: String
+    Description: 'Aurora PostgreSQL DB Cluster identifier (e.g., my-aurora-cluster)'
+
+  DatabaseName:
+    Type: String
+    Default: 'chat_template_db'
+    Description: 'Name of the PostgreSQL database used by the Knowledge Base'
+
+  DBSecretArn:
+    Type: String
+    Description: 'ARN of the Secrets Manager secret containing DB credentials for the Aurora cluster'
+
+  TableName:
+    Type: String
+    Default: 'bedrock_integration.bedrock_kb'
+    Description: 'Fully-qualified table name in PostgreSQL (schema.table) for pgvector index'
+
+  EmbeddingModelId:
+    Type: String
+    Default: 'amazon.titan-embed-text-v2'
+    Description: 'Bedrock embedding model ID for vector embeddings'
+    AllowedValues:
+      - 'amazon.titan-embed-text-v1'
+      - 'amazon.titan-embed-text-v2'
+      - 'cohere.embed-english-v3'
+      - 'cohere.embed-multilingual-v3'
+
+  S3BucketName:
+    Type: String
+    Description: 'Name of the S3 bucket that stores source documents for the Knowledge Base'
+
+  S3InclusionPrefix:
+    Type: String
+    Default: 'docs/'
+    Description: 'S3 key prefix under which documents for the KB are stored (e.g., docs/)'
+
+Resources:
+  ########################################
+  # IAM Role for Bedrock Knowledge Base
+  ########################################
+  KnowledgeBaseServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-kb-service-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Convenience; also attach explicit least-privilege policies below.
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        # Allow Bedrock KB to read DB credentials
+        - PolicyName: SecretsManagerAccessForKB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref DBSecretArn
+
+        # Allow Bedrock KB to talk to Aurora (describe + Data API calls)
+        - PolicyName: AuroraAccessForKB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                Resource:
+                  - !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DBClusterIdentifier}'
+              - Effect: Allow
+                Action:
+                  - rds-data:ExecuteStatement
+                  - rds-data:BatchExecuteStatement
+                  - rds-data:BeginTransaction
+                  - rds-data:CommitTransaction
+                  - rds-data:RollbackTransaction
+                Resource:
+                  - !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DBClusterIdentifier}'
+
+        # Allow Bedrock KB to read from the S3 bucket used as a data source
+        - PolicyName: S3AccessForKB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/${S3InclusionPrefix}*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-kb-service-role-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ########################################
+  # Bedrock Knowledge Base (RDS + pgvector)
+  ########################################
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Sub '${ProjectName}-kb-${Environment}'
+      Description: !Sub 'Knowledge base for ${ProjectName} in ${Environment} using Aurora PostgreSQL + pgvector'
+      RoleArn: !GetAtt KnowledgeBaseServiceRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
+      StorageConfiguration:
+        Type: RDS
+        RdsConfiguration:
+          ResourceArn: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DBClusterIdentifier}'
+          CredentialsSecretArn: !Ref DBSecretArn
+          DatabaseName: !Ref DatabaseName
+          TableName: !Ref TableName
+          FieldMapping:
+            # These must match your actual column names in the target table
+            VectorField: 'embedding'      # vector(N) column
+            TextField: 'chunks'           # text column
+            MetadataField: 'metadata'     # json/jsonb column
+            PrimaryKeyField: 'id'         # primary key column
+            # Optional but recommended: custom metadata field for arbitrary metadata
+            CustomMetadataField: 'custom_metadata'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-kb-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ########################################
+  # S3 Data Source for the Knowledge Base
+  ########################################
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: !Sub '${ProjectName}-kb-datasource-${Environment}'
+      Description: !Sub 'S3 data source for ${ProjectName} Knowledge Base in ${Environment}'
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !Sub 'arn:aws:s3:::${S3BucketName}'
+          InclusionPrefixes:
+            - !Ref S3InclusionPrefix
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 512
+            OverlapPercentage: 20
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-kb-datasource-${Environment}'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  KnowledgeBaseId:
+    Description: 'AWS Bedrock Knowledge Base ID'
+    Value: !Ref KnowledgeBase
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseId'
+
+  KnowledgeBaseArn:
+    Description: 'ARN of the Knowledge Base'
+    Value: !GetAtt KnowledgeBase.KnowledgeBaseArn
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseArn'
+
+  DataSourceId:
+    Description: 'Data Source ID'
+    Value: !Ref KnowledgeBaseDataSource
+    Export:
+      Name: !Sub '${AWS::StackName}-DataSourceId'
+
+  ServiceRoleArn:
+    Description: 'IAM Role ARN for Knowledge Base service'
+    Value: !GetAtt KnowledgeBaseServiceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceRoleArn'
