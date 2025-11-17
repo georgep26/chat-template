@@ -2,29 +2,30 @@
 
 # Aurora Serverless v2 PostgreSQL Database Deployment Script
 # This script deploys the light_db CloudFormation stack for different environments
+# The database (chat_template_db) includes chat history and embeddings using pgvector
 #
 # Usage Examples:
 #   # Deploy to development environment (default region: us-east-1)
-#   ./scripts/deploy/deploy_history_store_db.sh dev deploy --master-password MySecurePass123
+#   ./scripts/deploy/deploy_chat_template_db.sh dev deploy --master-password MySecurePass123
 #
 #   # Deploy to staging with custom region
-#   ./scripts/deploy/deploy_history_store_db.sh staging deploy --master-password MySecurePass123 --region us-west-2
+#   ./scripts/deploy/deploy_chat_template_db.sh staging deploy --master-password MySecurePass123 --region us-west-2
 #
 #   # Deploy to production with custom username and capacity
-#   ./scripts/deploy/deploy_history_store_db.sh prod deploy --master-password MySecurePass123 \
+#   ./scripts/deploy/deploy_chat_template_db.sh prod deploy --master-password MySecurePass123 \
 #     --master-username admin --min-capacity 0.5 --max-capacity 4
 #
 #   # Validate template before deployment
-#   ./scripts/deploy/deploy_history_store_db.sh dev validate
+#   ./scripts/deploy/deploy_chat_template_db.sh dev validate
 #
 #   # Check stack status
-#   ./scripts/deploy/deploy_history_store_db.sh dev status
+#   ./scripts/deploy/deploy_chat_template_db.sh dev status
 #
 #   # Update existing stack
-#   ./scripts/deploy/deploy_history_store_db.sh dev update --master-password NewPassword123
+#   ./scripts/deploy/deploy_chat_template_db.sh dev update --master-password NewPassword123
 #
 #   # Delete stack (with confirmation prompt)
-#   ./scripts/deploy/deploy_history_store_db.sh dev delete
+#   ./scripts/deploy/deploy_chat_template_db.sh dev delete
 #
 # Note: VPC ID and subnet IDs are hardcoded in the script.
 #       The script will automatically create a Secrets Manager secret if it doesn't exist.
@@ -76,7 +77,7 @@ show_usage() {
     echo "Options:"
     echo "  --master-password <password>   - Master database password (required for deploy/update)"
     echo "  --master-username <username>  - Master database username (default: postgres)"
-    echo "  --database-name <name>        - Database name (default: chat_history_store_db)"
+    echo "  --database-name <name>        - Database name (default: chat_template_db)"
     echo "  --min-capacity <acu>          - Minimum ACU (default: 0 for scale-to-zero)"
     echo "  --max-capacity <acu>          - Maximum ACU (default: 1)"
     echo "  --region <region>             - AWS region (default: us-east-1)"
@@ -94,7 +95,7 @@ show_usage() {
     echo "  After deploying the DB stack, the script will automatically check if a secret exists."
     echo "  If the secret doesn't exist, you will be prompted for DB username and password."
     echo "  The secret will be created in AWS Secrets Manager with the name:"
-    echo "  python-template-rag-chat-db-connection-<environment>"
+    echo "  python-template-chat-template-db-connection-<environment>"
 }
 
 # Check if environment is provided
@@ -106,11 +107,11 @@ fi
 
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
-STACK_NAME="chat-history-store-light-db-${ENVIRONMENT}"
+STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
 TEMPLATE_FILE="infra/cloudformation/light_db_template.yaml"
-SECRET_STACK_NAME="chat-history-store-db-secret-${ENVIRONMENT}"
+SECRET_STACK_NAME="chat-template-db-secret-${ENVIRONMENT}"
 SECRET_TEMPLATE_FILE="infra/cloudformation/db_secret_template.yaml"
-SECRET_NAME="chat-history-store-db-connection"
+SECRET_NAME="chat-template-db-connection"
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -124,7 +125,7 @@ VPC_ID="vpc-0b861444c1836203c"  # Hardcoded VPC ID
 SUBNET_IDS="subnet-08625da8598758097,subnet-06b3a20eaed18c74b,subnet-0766239ba33841e09,subnet-07bb1e0f18d632d99,subnet-06f6bccd8afb0a296,subnet-036d51a3f336fdc5d"  # Hardcoded subnet IDs
 MASTER_PASSWORD=""
 MASTER_USERNAME=""
-DATABASE_NAME="chat_history_store_db"
+DATABASE_NAME="chat_template_db"
 MIN_CAPACITY="0"
 MAX_CAPACITY="1"
 PROJECT_NAME="chat-template"
