@@ -254,3 +254,6 @@ config/secrets.yaml
 
 # Notes files
 feature_ideas.md
+
+# Local credentials
+creds.yaml
