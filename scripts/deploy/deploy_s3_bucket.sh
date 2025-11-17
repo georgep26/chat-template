@@ -26,7 +26,7 @@
 #   ./scripts/deploy/deploy_s3_bucket.sh dev delete
 #
 # Note: S3 bucket names must be globally unique across all AWS accounts.
-#       If you don't specify a bucket name, the script will use: chat-template-kb-documents-<env>
+#       If you don't specify a bucket name, the script will use: chat-template-s3-bucket-<env>
 
 set -e
 
@@ -75,7 +75,7 @@ show_usage() {
     echo "Options:"
     echo "  --bucket-name <name>             - Custom S3 bucket name (must be globally unique)"
     echo "  --enable-versioning <true|false> - Enable versioning (default: Enabled)"
-    echo "  --enable-lifecycle <true|false>  - Enable lifecycle rules (default: true)"
+    echo "  --enable-lifecycle <true|false>  - Enable lifecycle rules (default: false)"
     echo "  --transition-ia <days>          - Days before transitioning to IA storage (default: 30)"
     echo "  --transition-glacier <days>      - Days before transitioning to Glacier (default: 90, 0 to disable)"
     echo "  --region <region>                - AWS region (default: us-east-1)"
@@ -86,7 +86,7 @@ show_usage() {
     echo "  $0 prod deploy --transition-ia 60 --transition-glacier 180"
     echo ""
     echo "Note: S3 bucket names must be globally unique. If not specified,"
-    echo "      the script will use: chat-template-kb-documents-<environment>"
+    echo "      the script will use: chat-template-s3-bucket-<environment>"
 }
 
 # Check if environment is provided
@@ -104,7 +104,7 @@ PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
 BUCKET_NAME="chat-template-s3-bucket-${ENVIRONMENT}"
 ENABLE_VERSIONING="Enabled"
-ENABLE_LIFECYCLE_RULES="true"
+ENABLE_LIFECYCLE_RULES="false"
 TRANSITION_TO_IA=30
 TRANSITION_TO_GLACIER=90
 

@@ -15,7 +15,7 @@ Parameters:
 
   BucketName:
     Type: String
-    Description: 'Name of the S3 bucket (must be globally unique). If not provided, will use: ${ProjectName}-kb-documents-${Environment}'
+    Description: 'Name of the S3 bucket (must be globally unique). If not provided, will use: chat-template-s3-bucket-${Environment}'
 
   EnableVersioning:
     Type: String
@@ -25,7 +25,7 @@ Parameters:
 
   EnableLifecycleRules:
     Type: String
-    Default: 'true'
+    Default: 'false'
     AllowedValues: ['true', 'false']
     Description: 'Enable lifecycle rules to transition old versions to cheaper storage'
 
@@ -61,7 +61,7 @@ Resources:
       BucketName: !If
         - HasCustomBucketName
         - !Ref BucketName
-        - !Sub '${ProjectName}-kb-documents-${Environment}'
+        - !Sub 'chat-template-s3-bucket-${Environment}'
       VersioningConfiguration:
         Status: !Ref EnableVersioning
       BucketEncryption:
