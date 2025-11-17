@@ -48,8 +48,8 @@ Parameters:
 
   S3InclusionPrefix:
     Type: String
-    Default: 'docs/'
-    Description: 'S3 key prefix under which documents for the KB are stored (e.g., docs/)'
+    Default: 'kb_sources/'
+    Description: 'S3 key prefix under which documents for the KB are stored (default: kb_sources/)'
 
 Resources:
   ########################################
