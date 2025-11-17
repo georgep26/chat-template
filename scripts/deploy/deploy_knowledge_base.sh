@@ -29,8 +29,8 @@
 # Note: This script requires:
 #       1. The database stack to be deployed first (via deploy_chat_template_db.sh)
 #       2. The database table to be created (run sql/embeddings_table_setup.sql)
-#       3. An S3 bucket with documents for the knowledge base
-#       It will automatically retrieve DB stack outputs (cluster ID, secret ARN, etc.)
+#       3. An S3 bucket with documents for the knowledge base (deploy via deploy_s3_bucket.sh)
+#       It will automatically retrieve DB stack outputs and S3 bucket name (if S3 stack exists)
 
 set -e
 
@@ -80,8 +80,8 @@ show_usage() {
     echo "  --db-stack-name <name>          - Database stack name (default: chat-template-light-db-<env>)"
     echo "  --embedding-model <model-id>    - Embedding model ID (default: amazon.titan-embed-text-v2)"
     echo "  --table-name <name>             - PostgreSQL table name for embeddings (default: bedrock_integration.bedrock_kb)"
-    echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents (required)"
-    echo "  --s3-prefix <prefix>            - S3 key prefix for documents (default: docs/)"
+    echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents (auto-detected from S3 stack if not provided)"
+    echo "  --s3-prefix <prefix>            - S3 key prefix for documents (default: kb_sources/)"
     echo "  --region <region>               - AWS region (default: us-east-1)"
     echo ""
     echo "Examples:"
@@ -110,7 +110,7 @@ AWS_REGION="us-east-1"  # Default AWS region
 EMBEDDING_MODEL="amazon.titan-embed-text-v2"
 TABLE_NAME="bedrock_integration.bedrock_kb"
 S3_BUCKET_NAME=""
-S3_INCLUSION_PREFIX="docs/"
+S3_INCLUSION_PREFIX="kb_sources/"
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -244,6 +244,33 @@ get_db_stack_outputs() {
     echo "$db_cluster_id|$db_name|$secret_arn"
 }
 
+# Function to get S3 bucket name from S3 bucket stack
+get_s3_bucket_name() {
+    local s3_stack_name="chat-template-s3-bucket-${ENVIRONMENT}"
+    print_status "Retrieving S3 bucket name from stack: $s3_stack_name"
+    
+    # Check if S3 stack exists
+    if ! aws cloudformation describe-stacks --stack-name "$s3_stack_name" --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_warning "S3 bucket stack $s3_stack_name does not exist in region $AWS_REGION"
+        print_warning "You can deploy it using deploy_s3_bucket.sh or provide --s3-bucket parameter"
+        return 1
+    fi
+    
+    # Get bucket name from stack outputs
+    local bucket_name=$(aws cloudformation describe-stacks \
+        --stack-name "$s3_stack_name" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$bucket_name" ] || [ "$bucket_name" == "None" ]; then
+        print_warning "Could not retrieve bucket name from stack $s3_stack_name"
+        return 1
+    fi
+    
+    echo "$bucket_name"
+}
+
 # Function to validate template
 validate_template() {
     print_status "Validating CloudFormation template..."
@@ -343,10 +370,18 @@ deploy_stack() {
     print_status "Using Database Name: $db_name"
     print_status "Using Secret ARN: $secret_arn"
     
-    # Validate required S3 bucket parameter
+    # Get S3 bucket name if not provided
     if [ -z "$S3_BUCKET_NAME" ]; then
-        print_error "S3 bucket name is required. Use --s3-bucket <bucket-name>"
-        exit 1
+        print_status "S3 bucket name not provided, attempting to retrieve from S3 bucket stack..."
+        local retrieved_bucket=$(get_s3_bucket_name)
+        if [ $? -eq 0 ] && [ -n "$retrieved_bucket" ]; then
+            S3_BUCKET_NAME="$retrieved_bucket"
+            print_status "Auto-detected S3 bucket: $S3_BUCKET_NAME"
+        else
+            print_error "S3 bucket name is required. Use --s3-bucket <bucket-name>"
+            print_error "Or deploy the S3 bucket stack first using deploy_s3_bucket.sh"
+            exit 1
+        fi
     fi
     
     print_status "Using S3 Bucket: $S3_BUCKET_NAME"
