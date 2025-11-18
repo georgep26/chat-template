@@ -146,6 +146,7 @@ Resources:
       VpcSecurityGroupIds:
         - !Ref DBSecurityGroup
       DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      EnableHttpEndpoint: true
       ServerlessV2ScalingConfiguration:
         MinCapacity: !Ref MinCapacity
         MaxCapacity: !Ref MaxCapacity
