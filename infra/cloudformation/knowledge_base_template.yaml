@@ -34,13 +34,13 @@ Parameters:
 
   EmbeddingModelId:
     Type: String
-    Default: 'amazon.titan-embed-text-v2'
-    Description: 'Bedrock embedding model ID for vector embeddings'
+    Default: 'amazon.titan-embed-text-v2:0'
+    Description: 'Bedrock embedding model ID for vector embeddings (must include minor version, e.g., :0)'
     AllowedValues:
-      - 'amazon.titan-embed-text-v1'
-      - 'amazon.titan-embed-text-v2'
-      - 'cohere.embed-english-v3'
-      - 'cohere.embed-multilingual-v3'
+      - 'amazon.titan-embed-text-v1:0'
+      - 'amazon.titan-embed-text-v2:0'
+      - 'cohere.embed-english-v3:0'
+      - 'cohere.embed-multilingual-v3:0'
 
   S3BucketName:
     Type: String
@@ -150,12 +150,9 @@ Resources:
             MetadataField: 'metadata'     # json/jsonb column
             PrimaryKeyField: 'id'         # primary key column
       Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-kb-${Environment}'
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
+        Name: !Sub '${ProjectName}-kb-${Environment}'
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
 
   ########################################
   # S3 Data Source for the Knowledge Base
@@ -178,13 +175,6 @@ Resources:
           FixedSizeChunkingConfiguration:
             MaxTokens: 512
             OverlapPercentage: 20
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-kb-datasource-${Environment}'
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
 Outputs:
   KnowledgeBaseId:
