@@ -1,0 +1,1 @@
+select * from bedrock_integration.bedrock_kb limit 10;
