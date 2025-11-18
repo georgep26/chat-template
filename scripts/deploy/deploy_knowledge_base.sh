@@ -78,7 +78,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --db-stack-name <name>          - Database stack name (default: chat-template-light-db-<env>)"
-    echo "  --embedding-model <model-id>    - Embedding model ID (default: amazon.titan-embed-text-v2)"
+    echo "  --embedding-model <model-id>    - Embedding model ID (default: amazon.titan-embed-text-v2:0)"
     echo "  --table-name <name>             - PostgreSQL table name for embeddings (default: bedrock_integration.bedrock_kb)"
     echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents (auto-detected from S3 stack if not provided)"
     echo "  --s3-prefix <prefix>            - S3 key prefix for documents (default: kb_sources/)"
@@ -107,7 +107,7 @@ TEMPLATE_FILE="infra/cloudformation/knowledge_base_template.yaml"
 DB_STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
-EMBEDDING_MODEL="amazon.titan-embed-text-v2"
+EMBEDDING_MODEL="amazon.titan-embed-text-v2:0"
 TABLE_NAME="bedrock_integration.bedrock_kb"
 S3_BUCKET_NAME=""
 S3_INCLUSION_PREFIX="kb_sources/"
@@ -178,12 +178,12 @@ fi
 
 # Function to get DB stack outputs
 get_db_stack_outputs() {
-    print_status "Retrieving database stack outputs from: $DB_STACK_NAME"
+    print_status "Retrieving database stack outputs from: $DB_STACK_NAME" >&2
     
     # Check if DB stack exists
     if ! aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_error "Database stack $DB_STACK_NAME does not exist in region $AWS_REGION"
-        print_error "Please deploy the database stack first using deploy_chat_template_db.sh"
+        print_error "Database stack $DB_STACK_NAME does not exist in region $AWS_REGION" >&2
+        print_error "Please deploy the database stack first using deploy_chat_template_db.sh" >&2
         return 1
     fi
     
@@ -227,17 +227,17 @@ get_db_stack_outputs() {
     fi
     
     if [ -z "$db_cluster_id" ] || [ "$db_cluster_id" == "None" ]; then
-        print_error "Could not retrieve DB cluster identifier from stack $DB_STACK_NAME"
+        print_error "Could not retrieve DB cluster identifier from stack $DB_STACK_NAME" >&2
         return 1
     fi
     
     if [ -z "$db_name" ] || [ "$db_name" == "None" ]; then
-        print_error "Could not retrieve database name from stack $DB_STACK_NAME"
+        print_error "Could not retrieve database name from stack $DB_STACK_NAME" >&2
         return 1
     fi
     
     if [ -z "$secret_arn" ] || [ "$secret_arn" == "None" ]; then
-        print_error "Could not retrieve secret ARN. Make sure the database secret stack is deployed."
+        print_error "Could not retrieve secret ARN. Make sure the database secret stack is deployed." >&2
         return 1
     fi
     
@@ -247,12 +247,12 @@ get_db_stack_outputs() {
 # Function to get S3 bucket name from S3 bucket stack
 get_s3_bucket_name() {
     local s3_stack_name="chat-template-s3-bucket-${ENVIRONMENT}"
-    print_status "Retrieving S3 bucket name from stack: $s3_stack_name"
+    print_status "Retrieving S3 bucket name from stack: $s3_stack_name" >&2
     
     # Check if S3 stack exists
     if ! aws cloudformation describe-stacks --stack-name "$s3_stack_name" --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_warning "S3 bucket stack $s3_stack_name does not exist in region $AWS_REGION"
-        print_warning "You can deploy it using deploy_s3_bucket.sh or provide --s3-bucket parameter"
+        print_warning "S3 bucket stack $s3_stack_name does not exist in region $AWS_REGION" >&2
+        print_warning "You can deploy it using deploy_s3_bucket.sh or provide --s3-bucket parameter" >&2
         return 1
     fi
     
@@ -264,7 +264,7 @@ get_s3_bucket_name() {
         --output text 2>/dev/null)
     
     if [ -z "$bucket_name" ] || [ "$bucket_name" == "None" ]; then
-        print_warning "Could not retrieve bucket name from stack $s3_stack_name"
+        print_warning "Could not retrieve bucket name from stack $s3_stack_name" >&2
         return 1
     fi
     
@@ -370,17 +370,18 @@ deploy_stack() {
     print_status "Using Database Name: $db_name"
     print_status "Using Secret ARN: $secret_arn"
     
-    # Get S3 bucket name if not provided
+    # Get S3 bucket name - try auto-detection first, then use default pattern
     if [ -z "$S3_BUCKET_NAME" ]; then
+        # Try to auto-detect from S3 bucket stack first
         print_status "S3 bucket name not provided, attempting to retrieve from S3 bucket stack..."
         local retrieved_bucket=$(get_s3_bucket_name)
         if [ $? -eq 0 ] && [ -n "$retrieved_bucket" ]; then
             S3_BUCKET_NAME="$retrieved_bucket"
-            print_status "Auto-detected S3 bucket: $S3_BUCKET_NAME"
+            print_status "Auto-detected S3 bucket from stack: $S3_BUCKET_NAME"
         else
-            print_error "S3 bucket name is required. Use --s3-bucket <bucket-name>"
-            print_error "Or deploy the S3 bucket stack first using deploy_s3_bucket.sh"
-            exit 1
+            # Use default bucket name pattern (matches deploy_s3_bucket.sh)
+            S3_BUCKET_NAME="chat-template-s3-bucket-${ENVIRONMENT}"
+            print_status "Using default S3 bucket name: $S3_BUCKET_NAME"
         fi
     fi
     
