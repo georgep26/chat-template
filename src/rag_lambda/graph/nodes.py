@@ -8,8 +8,8 @@ from langchain_aws import ChatBedrockConverse
 from langchain_community.retrievers.bedrock import AmazonKnowledgeBasesRetriever
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from prompts import answer_prompt, clarify_prompt, rewrite_prompt, split_prompt
-from state import MessagesState
+from .prompts import answer_prompt, clarify_prompt, rewrite_prompt, split_prompt
+from .state import MessagesState
 
 
 def rewrite_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
