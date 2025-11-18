@@ -36,13 +36,15 @@ CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
 -- Create an index on the vector column for efficient similarity search
 -- Using HNSW index for better performance on large datasets
 -- Note: HNSW requires pgvector 0.5.0+ and may not be available in all Aurora versions
--- If HNSW is not available, use ivfflat index instead
--- CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
--- ON bedrock_integration.bedrock_kb 
--- USING hnsw (embedding vector_cosine_ops)
--- WITH (m = 16, ef_construction = 64);
+-- This index is REQUIRED by AWS Bedrock Knowledge Base
+CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
+ON bedrock_integration.bedrock_kb 
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
 
--- Alternative: If HNSW is not available, uncomment the following and comment out the above:
+-- Alternative: If HNSW is not available, use ivfflat index instead
+-- Note: Bedrock Knowledge Base requires an index on the embedding column
+-- If HNSW fails, uncomment the following and comment out the above:
 -- CREATE INDEX IF NOT EXISTS bedrock_kb_embedding_idx 
 -- ON bedrock_integration.bedrock_kb 
 -- USING ivfflat (embedding vector_cosine_ops)
@@ -52,6 +54,12 @@ CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
 -- CREATE INDEX IF NOT EXISTS bedrock_kb_metadata_idx 
 -- ON bedrock_integration.bedrock_kb 
 -- USING GIN (metadata);
+
+-- Create a GIN index on the chunks column for full-text search
+-- This is required by AWS Bedrock Knowledge Base
+CREATE INDEX IF NOT EXISTS bedrock_kb_chunks_idx 
+ON bedrock_integration.bedrock_kb 
+USING gin (to_tsvector('english', chunks));
 
 -- Grant necessary permissions (adjust as needed for your setup)
 -- The Bedrock Knowledge Base service role will need access to this table
