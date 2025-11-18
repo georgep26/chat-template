@@ -63,12 +63,18 @@ def convert_filters_to_kb_format(retrieval_filters: Dict[str, List[str]]) -> Dic
         return {"andAll": field_filters}
 
 
-def retrieve_node(state: MessagesState) -> MessagesState:
+def retrieve_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     """Retrieve relevant documents from knowledge base."""
-    # Get retrieval config from state
+    # Get retrieval config from state (retrieval config is still in state for backward compatibility)
     retrieval_config = state.get("retrieval_config")
     if not retrieval_config:
-        raise ValueError("retrieval_config is required. Provide it in the state.")
+        # Fallback to config if not in state
+        app_config = config.get("configurable", {})
+        rag_chat_config = app_config.get("rag_chat", {})
+        retrieval_config = rag_chat_config.get("retrieval", {})
+    
+    if not retrieval_config:
+        raise ValueError("retrieval_config is required. Provide it in the state or config.")
     
     knowledge_base_id = retrieval_config.get("knowledge_base_id")
     if not knowledge_base_id:

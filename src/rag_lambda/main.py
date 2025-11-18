@@ -8,11 +8,11 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from .graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
-from .graph.state import MessagesState
-from .memory.factory import create_history_store
-from .memory.chat_summary import summarization_check
-from .api.models import ChatRequest, ChatResponse, Source
+from graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
+from graph.state import MessagesState
+from memory.factory import create_history_store
+from memory.chat_summary import summarization_check
+from api.models import ChatRequest, ChatResponse, Source
 from utils.config import read_config
 from utils.logger import get_logger
 
@@ -85,8 +85,15 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Build graph
     graph = build_rag_graph()
 
-    # Invoke graph
-    final_state = graph.invoke(state)
+    # Prepare config for graph invocation (LangGraph expects config in "configurable" key)
+    graph_config = {
+        "configurable": {
+            "rag_chat": rag_chat_config,
+        }
+    }
+
+    # Invoke graph with config
+    final_state = graph.invoke(state, config=graph_config)
 
     # Extract new messages (everything after prior_messages + user message)
     new_messages = final_state["messages"][len(prior_messages) + 1 :]
