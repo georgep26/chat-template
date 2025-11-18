@@ -8,11 +8,13 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from graph.nodes import answer_node, clarify_node, retrieve_node, rewrite_node, split_node
+from graph.nodes import answer_node, clarify_node, rewrite_node, split_node
 from graph.state import MessagesState
+from graph.retrieval import retrieve_node
 from memory.factory import create_history_store
 from memory.chat_summary import summarization_check
 from api.models import ChatRequest, ChatResponse, Source
+from utils.aws_utils import get_db_credentials_from_secret
 from utils.config import read_config
 from utils.logger import get_logger
 
@@ -58,9 +60,28 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Create request model
     req = ChatRequest(**event_body)
 
+    # Extract database credentials from AWS Secrets Manager
+    db_creds = None
+    memory_backend_type = chat_history_config.get("memory_backend_type")
+    if memory_backend_type == "postgres":
+        db_connection_secret_name = chat_history_config.get("db_connection_secret_name")
+        if not db_connection_secret_name:
+            raise ValueError("db_connection_secret_name is required for postgres backend")
+        
+        # Get region from config or default to us-east-1
+        region = retrieval_config.get("region", "us-east-1")
+        db_creds = get_db_credentials_from_secret(db_connection_secret_name, region=region)
+        log.info(f"Retrieved database credentials from secret: {db_connection_secret_name}")
+
     # Create memory store
-    memory_store = create_history_store(memory_backend_type=chat_history_config.pop("memory_backend_type"), 
-                                        memory_store_arguments=chat_history_config)
+    memory_store_arguments = {
+        "db_creds": db_creds,
+        "table_name": chat_history_config.get("table_name", "chat_history"),
+    }
+    memory_store = create_history_store(
+        memory_backend_type=memory_backend_type,
+        **memory_store_arguments
+    )
 
     # Load prior messages
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
