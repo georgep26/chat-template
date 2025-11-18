@@ -33,32 +33,6 @@ def rewrite_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     return state
 
 
-
-
-
-def answer_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
-    """Generate answer using retrieved context."""
-    # Get config from LangGraph configurable
-    app_config = config.get("configurable", {})
-    rag_chat_config = app_config.get("rag_chat", {})
-    generation_config = rag_chat_config.get("generation", {})
-    model_config = generation_config.get("model", {})
-    
-    # Initialize LLM (e.g. Claude via Bedrock Converse)
-    llm = ChatBedrockConverse(
-        model=model_config.get("id", "us.anthropic.claude-3-7-sonnet-20250219-v1:0"),
-        region_name=model_config.get("region", "us-east-1"),
-        temperature=model_config.get("temperature", 0.0),
-    )
-
-    user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
-    ctx_msgs = [m for m in state["messages"] if getattr(m, "name", "") == "retriever_context"]
-    context = ctx_msgs[-1].content if ctx_msgs else ""
-    resp = (answer_prompt | llm).invoke({"context": context, "question": user.content})
-    state["messages"].append(resp)
-    return state
-
-
 def clarify_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     """Ask clarifying questions for underspecified queries."""
     # Get config from LangGraph configurable
@@ -111,3 +85,25 @@ def split_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     )
     return state
 
+
+def answer_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+    """Generate answer using retrieved context."""
+    # Get config from LangGraph configurable
+    app_config = config.get("configurable", {})
+    rag_chat_config = app_config.get("rag_chat", {})
+    generation_config = rag_chat_config.get("generation", {})
+    model_config = generation_config.get("model", {})
+    
+    # Initialize LLM (e.g. Claude via Bedrock Converse)
+    llm = ChatBedrockConverse(
+        model=model_config.get("id", "us.anthropic.claude-3-7-sonnet-20250219-v1:0"),
+        region_name=model_config.get("region", "us-east-1"),
+        temperature=model_config.get("temperature", 0.0),
+    )
+
+    user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
+    ctx_msgs = [m for m in state["messages"] if getattr(m, "name", "") == "retriever_context"]
+    context = ctx_msgs[-1].content if ctx_msgs else ""
+    resp = (answer_prompt | llm).invoke({"context": context, "question": user.content})
+    state["messages"].append(resp)
+    return state
