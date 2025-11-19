@@ -79,6 +79,7 @@ This document outlines the coding standards and best practices for this project.
 - Use absolute imports over relative imports when possible
 - Avoid wildcard imports (`from module import *`)
 - Keep imports at the top of the file (after module docstring)
+- No imports within functions or classes
 
 ## Version Control
 
