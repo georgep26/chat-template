@@ -1,7 +1,10 @@
-.PHONY: dev-env lint test clean all eval
+.PHONY: dev-env install lint test clean all eval
 
 dev-env:
 	@bash scripts/setup_env.sh
+
+install:
+	conda env create -f environment.yml || conda env update -f environment.yml
 
 lint:
 	ruff .

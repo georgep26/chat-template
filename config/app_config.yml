@@ -42,8 +42,6 @@ api:
   port: 8000
   timeout: 30
 
-
-
 # Logging Configuration
 logging:
   version: 1
