@@ -20,8 +20,8 @@ def get_db_credentials_from_secret(secret_name: str, region: str = "us-east-1") 
         region: AWS region where the secret is stored (default: us-east-1)
     
     Returns:
-        Dictionary with database credentials in format expected by psycopg2:
-        {'host': ..., 'port': ..., 'database': ..., 'user': ..., 'password': ...}
+        Dictionary with database credentials in format expected by psycopg:
+        {'host': ..., 'port': ..., 'dbname': ..., 'user': ..., 'password': ...}
     
     Raises:
         ClientError: If there's an error retrieving the secret
@@ -34,17 +34,18 @@ def get_db_credentials_from_secret(secret_name: str, region: str = "us-east-1") 
         secret_string = response['SecretString']
         secret_dict = json.loads(secret_string)
         
-        # Map secret format to psycopg2 format
+        # Map secret format to psycopg format
+        # psycopg3 uses 'dbname' (not 'database') and 'user' (not 'username')
         db_creds = {
             'host': secret_dict.get('host'),
             'port': secret_dict.get('port'),
-            'database': secret_dict.get('dbname'),  # Map dbname to database
+            'dbname': secret_dict.get('dbname'),
             'user': secret_dict.get('username'),    # Map username to user
             'password': secret_dict.get('password'),
         }
         
         # Validate required fields
-        required_fields = ['host', 'port', 'database', 'user', 'password']
+        required_fields = ['host', 'port', 'dbname', 'user', 'password']
         missing_fields = [field for field in required_fields if db_creds.get(field) is None]
         if missing_fields:
             raise ValueError(
