@@ -19,7 +19,7 @@ rag_chat:
       region: "us-east-1" # Region for the split model
   retrieval: # Retrieval settings for the knowledge base
     region: "us-east-1" # Region for the retrieval model (defaults to the region of the database)
-    knowledge_base_id: "" # Knowledge base ID to use for retrieval
+    knowledge_base_id: "K5WQNHFD0C" # Knowledge base ID to use for retrieval
     number_of_results: 10 # Number of results to retrieve from the knowledge base
   generation: # Generation settings for the answer
     model: # Model to use for generation
