@@ -5,7 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 # Query rewrite prompt
 rewrite_prompt = ChatPromptTemplate.from_messages(
     [
-        ("system", "Rewrite the user query for retrieval. Expand acronyms and fix typos."),
+        ("system", "You are a pre-reviewer for a chatbot. Rewrite the user query for retrieval. Expand acronyms and fix typos. Do not answer the question, just rewrite it for retrieval."),
         ("human", "{query}"),
     ]
 )
