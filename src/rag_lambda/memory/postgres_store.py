@@ -3,7 +3,8 @@
 import json
 from typing import Any, Dict, List, Optional
 
-import psycopg2
+import psycopg
+from psycopg import sql
 from langchain_core.messages import BaseMessage
 from langchain_postgres import PostgresChatMessageHistory
 
@@ -19,7 +20,7 @@ class PostgresHistoryStore(ChatHistoryStore):
         
         Args:
             db_creds: Dictionary containing database connection credentials
-                     (e.g., {'host': '...', 'port': '...', 'database': '...', 'user': '...', 'password': '...'})
+                     (e.g., {'host': '...', 'port': '...', 'dbname': '...', 'user': '...', 'password': '...'})
             table_name: Name of the table to store chat history
         """
         self._db_creds = db_creds
@@ -30,11 +31,10 @@ class PostgresHistoryStore(ChatHistoryStore):
 
     def _get_connection(self):
         """Get Postgres connection using db_creds."""
-        return psycopg2.connect(**self._db_creds)
+        return psycopg.connect(**self._db_creds)
 
     def _ensure_metadata_table(self):
         """Ensure the conversation_metadata table exists with JSONB column."""
-        from psycopg2 import sql
         with self._conn.cursor() as cur:
             # Create table if it doesn't exist
             metadata_table_name = sql.Identifier(f"{self._table_name}_metadata")
@@ -72,7 +72,6 @@ class PostgresHistoryStore(ChatHistoryStore):
         
         # Store metadata if provided
         if metadata:
-            from psycopg2 import sql
             with self._conn.cursor() as cur:
                 # Upsert metadata
                 metadata_table_name = sql.Identifier(f"{self._table_name}_metadata")
