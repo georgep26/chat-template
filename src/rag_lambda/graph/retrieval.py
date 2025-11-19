@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 from langchain_community.retrievers.bedrock import AmazonKnowledgeBasesRetriever
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from .state import MessagesState
 
@@ -63,12 +64,13 @@ def convert_filters_to_kb_format(retrieval_filters: Dict[str, List[str]]) -> Dic
         return {"andAll": field_filters}
 
 
-def retrieve_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Retrieve relevant documents from knowledge base."""
     # Get retrieval config from state (retrieval config is still in state for backward compatibility)
     retrieval_config = state.get("retrieval_config")
     if not retrieval_config:
         # Fallback to config if not in state
+        config = config or {}
         app_config = config.get("configurable", {})
         rag_chat_config = app_config.get("rag_chat", {})
         retrieval_config = rag_chat_config.get("retrieval", {})
@@ -102,7 +104,7 @@ def retrieve_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState
     )
     
     last_user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
-    docs = kb_retriever.get_relevant_documents(last_user.content)
+    docs = kb_retriever.invoke(last_user.content)
     
     # Attach retrieved docs as a synthetic system message
     context_text = "\n\n".join(d.page_content for d in docs)

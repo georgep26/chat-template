@@ -1,20 +1,22 @@
 """LangGraph nodes for RAG pipeline."""
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 from langchain_aws import ChatBedrockConverse
 from langchain_community.retrievers.bedrock import AmazonKnowledgeBasesRetriever
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from .prompts import answer_prompt, clarify_prompt, rewrite_prompt, split_prompt
 from .state import MessagesState
 
 
-def rewrite_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+def rewrite_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Rewrite user query for better retrieval."""
     # Get config from LangGraph configurable
+    config = config or {}
     app_config = config.get("configurable", {})
     rag_chat_config = app_config.get("rag_chat", {})
     rewrite_config = rag_chat_config.get("rewrite", {})
@@ -33,9 +35,10 @@ def rewrite_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     return state
 
 
-def clarify_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+def clarify_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Ask clarifying questions for underspecified queries."""
     # Get config from LangGraph configurable
+    config = config or {}
     app_config = config.get("configurable", {})
     rag_chat_config = app_config.get("rag_chat", {})
     clarify_config = rag_chat_config.get("clarify", {})
@@ -56,9 +59,10 @@ def clarify_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     return state
 
 
-def split_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+def split_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Split multi-part queries into subqueries."""
     # Get config from LangGraph configurable
+    config = config or {}
     app_config = config.get("configurable", {})
     rag_chat_config = app_config.get("rag_chat", {})
     split_config = rag_chat_config.get("split", {})
@@ -86,9 +90,10 @@ def split_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
     return state
 
 
-def answer_node(state: MessagesState, config: Dict[str, Any]) -> MessagesState:
+def answer_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Generate answer using retrieved context."""
     # Get config from LangGraph configurable
+    config = config or {}
     app_config = config.get("configurable", {})
     rag_chat_config = app_config.get("rag_chat", {})
     generation_config = rag_chat_config.get("generation", {})
