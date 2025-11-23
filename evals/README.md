@@ -69,8 +69,8 @@ python -m evals.cli --config evals/evals_config.yaml --output-type json
 ```yaml
 run:
   mode: "local"              # "local" or "lambda"
-  max_concurrency: 20        # Concurrent requests
-  experiment_name: "irc_rag_v2"  # Output directory name
+  max_concurrent_async_tasks: 20        # Maximum number of concurrent asyncio tasks
+  evaluation_run_name: "irc_rag_v2"  # Output directory name
 ```
 
 ### RAG App Configuration
