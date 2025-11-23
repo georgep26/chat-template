@@ -23,10 +23,10 @@ You are grading the factual correctness of the model answer
 compared to the reference answer.
 
 Question:
-{sample["question"]}
+{sample.input}
 
 Reference answer:
-{sample["reference_answer"]}
+{sample.human_reference_answer}
 
 Model answer:
 {output["answer"]}
@@ -47,7 +47,7 @@ Return JSON with:
                 obj = {"score": 0, "explanation": "Failed to parse judge response."}
             
             return {
-                "id": sample["id"],
+                "id": sample.sample_id,
                 "metric": self.name,
                 "score": float(obj.get("score", 0)),
                 "extra": {"explanation": obj.get("explanation", "")},

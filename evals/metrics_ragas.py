@@ -26,10 +26,10 @@ class RagasMetricCollection(BaseMetric):
     
     async def evaluate(self, samples, outputs, llm=None):
         data = {
-            "question": [s["question"] for s in samples],
+            "question": [s.input for s in samples],
             "answer": [o["answer"] for o in outputs],
             "contexts": [o["contexts"] for o in outputs],
-            "ground_truth": [s["reference_answer"] for s in samples],
+            "ground_truth": [s.human_reference_answer for s in samples],
         }
         
         ds = Dataset.from_dict(data)
@@ -49,7 +49,7 @@ class RagasMetricCollection(BaseMetric):
             for metric_name in self.metric_names:
                 score = getattr(row, metric_name)
                 results.append({
-                    "id": sample["id"],
+                    "id": sample.sample_id,
                     "metric": metric_name,
                     "score": float(score),
                     "extra": {},

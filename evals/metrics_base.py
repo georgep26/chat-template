@@ -10,7 +10,7 @@ class BaseMetric(ABC):
     @abstractmethod
     async def evaluate(self, samples, outputs, llm=None):
         """
-        samples: list of dicts (id, question, reference_answer, metadata)
+        samples: list of EvalSample dataclass instances
         outputs: list of dicts (answer, contexts, raw)
         llm: optional LangChain LLM (for metrics that need an LLM)
         
