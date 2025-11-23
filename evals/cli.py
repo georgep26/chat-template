@@ -38,7 +38,7 @@ def main():
     config["outputs"].setdefault("types", ["html", "json", "csv"])
     config.setdefault("run", {})
     config["run"].setdefault("max_concurrency", 10)
-    
+
     # CLI override for output types
     if args.output_type:
         config["outputs"]["types"] = [
