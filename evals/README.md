@@ -104,31 +104,89 @@ metrics:
   ragas:
     enabled: true
     metric_names: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+    judge_model:
+      provider: "openai"     # "openai" or "bedrock"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+      # For Bedrock:
+      # region_name: "us-east-1"
+      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
   correctness:
     enabled: true
     implementation: "binary"  # or "atomic"
     judge_model:
-      provider: "openai"     # "openai" or "bedrock"
-      model_name: "gpt-4o-mini"
-      openai:
-        api_key_env: "OPENAI_API_KEY"
-      bedrock:
-        region_name: "us-east-1"
-        model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+      provider: "openai"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+      # Additional LangChain parameters (temperature, max_tokens, etc.) can be added here
 ```
 
 ### LLM Configuration
 
+LLM model definitions use `src.utils.llm_factory.create_llm()` to create LangChain LLM instances. The configuration accepts the same arguments as the underlying LangChain implementations (`ChatOpenAI` for OpenAI and `ChatBedrockConverse` for Bedrock), allowing you to pass through any LangChain parameters directly.
+
+**OpenAI Configuration**:
 ```yaml
 llm:
   default:
     provider: "openai"
-    model_name: "gpt-4o-mini"
-    openai:
-      api_key_env: "OPENAI_API_KEY"
-    bedrock:
-      region_name: "us-east-1"
-      model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+    model: "gpt-4o-mini"              # LangChain ChatOpenAI 'model' parameter
+    openai_api_key_env: "OPENAI_API_KEY"  # Environment variable name for API key
+    temperature: 0.0                  # Optional: LangChain ChatOpenAI parameters
+    max_tokens: 1000                  # Optional: any other ChatOpenAI arguments
+```
+
+**Bedrock Configuration**:
+```yaml
+llm:
+  default:
+    provider: "bedrock"
+    model: "anthropic.claude-3-sonnet-20240229-v1:0"  # LangChain ChatBedrockConverse 'model' parameter
+    region_name: "us-east-1"          # Required for Bedrock
+    temperature: 0.0                  # Optional: LangChain ChatBedrockConverse parameters
+    max_tokens: 1024                  # Optional: any other ChatBedrockConverse arguments
+```
+
+**Judge Model Configuration** (for metrics):
+```yaml
+metrics:
+  correctness:
+    enabled: true
+    implementation: "binary"
+    judge_model:
+      provider: "openai"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+      temperature: 0.0                # Any ChatOpenAI parameter
+```
+
+The LLM factory handles provider-specific requirements (API key lookup for OpenAI, region configuration for Bedrock) and passes all other arguments directly to the LangChain constructors. This means you can use any parameter supported by `ChatOpenAI` or `ChatBedrockConverse` in your configuration.
+
+#### LLM Factory Details
+
+The evaluation framework uses `src.utils.llm_factory.create_llm()` to create LangChain LLM instances. This factory:
+
+- **Unifies configuration**: Provides a consistent interface for both OpenAI and Bedrock models
+- **Handles provider-specific setup**: 
+  - For OpenAI: Reads API key from environment variable specified by `openai_api_key_env`
+  - For Bedrock: Requires `region_name` and uses AWS credentials from the environment
+- **Passes through LangChain arguments**: All other configuration parameters are passed directly to the LangChain constructors (`ChatOpenAI` or `ChatBedrockConverse`)
+
+This design means:
+- You can use any parameter from the LangChain documentation (e.g., `temperature`, `max_tokens`, `timeout`, `streaming`, etc.)
+- The configuration format closely matches LangChain's native API
+- No need to learn a custom configuration format beyond the provider selection
+
+For example, to use streaming with a custom timeout:
+```yaml
+judge_model:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  openai_api_key_env: "OPENAI_API_KEY"
+  temperature: 0.7
+  max_tokens: 2000
+  timeout: 30.0
+  streaming: true
 ```
 
 ### Output Configuration
