@@ -3,7 +3,7 @@
 import json
 import numpy as np
 from .data import load_judge_validation_dataframe
-from .llm_factory import create_llm
+from src.utils.llm_factory import create_llm
 
 
 async def run_judge_validation(config: dict):

@@ -1,4 +1,4 @@
-# evals/llm_factory.py
+"""LLM factory for creating LangChain LLM instances."""
 
 import os
 from langchain_openai import ChatOpenAI
@@ -7,13 +7,23 @@ from langchain_aws.chat_models.bedrock_converse import ChatBedrockConverse
 
 def create_llm(model_cfg: dict):
     """
-    model_cfg example:
-    {
-      "provider": "openai",
-      "model_name": "gpt-4o-mini",
-      "openai": { "api_key_env": "OPENAI_API_KEY" },
-      "bedrock": { "region_name": "us-east-1", "model_id": "..." }
-    }
+    Create a LangChain LLM instance based on configuration.
+    
+    Args:
+        model_cfg: Dictionary with LLM configuration. Example:
+            {
+              "provider": "openai",
+              "model_name": "gpt-4o-mini",
+              "openai": { "api_key_env": "OPENAI_API_KEY" },
+              "bedrock": { "region_name": "us-east-1", "model_id": "..." }
+            }
+    
+    Returns:
+        LangChain LLM instance (ChatOpenAI or ChatBedrockConverse)
+    
+    Raises:
+        RuntimeError: If OpenAI API key is missing
+        ValueError: If provider is unsupported
     """
     provider = model_cfg["provider"]
     
