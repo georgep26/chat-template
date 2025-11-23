@@ -6,17 +6,12 @@ from .metrics_base import BaseMetric
 
 
 class BinaryCorrectnessMetric(BaseMetric):
-    def __init__(self, judge_model_cfg: dict):
-        super().__init__(name="correctness_binary")
-        self.judge_model_cfg = judge_model_cfg
+    def __init__(self, judge_model):
+        if judge_model is None:
+            raise ValueError("BinaryCorrectnessMetric requires a judge_model (LLM)")
+        super().__init__(name="correctness_binary", judge_model=judge_model)
     
-    async def evaluate(self, samples, outputs, llm=None):
-        """
-        llm: LangChain LLM created from judge_model_cfg
-        """
-        if llm is None:
-            raise ValueError("BinaryCorrectnessMetric requires an LLM")
-        
+    async def evaluate(self, samples, outputs):
         async def _grade_one(sample, output):
             prompt = f"""
 You are grading the factual correctness of the model answer
@@ -36,7 +31,7 @@ Return JSON with:
 - explanation: short explanation
 """
             # LangChain LLM call (async)
-            resp = await llm.ainvoke(prompt)
+            resp = await self.judge_model.ainvoke(prompt)
             content = resp.content if hasattr(resp, "content") else str(resp)
             
             # assume model returns JSON or JSON-like

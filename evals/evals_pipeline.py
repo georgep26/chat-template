@@ -21,20 +21,41 @@ from .judge_validation import run_judge_validation
 
 
 def build_metrics(config: dict):
+    """Build metrics from config, creating LLMs for metrics that require them."""
     metrics = []
     mcfg = config.get("metrics", {})
     
+    # RAGAS metrics
     ragas_cfg = mcfg.get("ragas", {})
     if ragas_cfg.get("enabled", False):
+        if "judge_model" not in ragas_cfg:
+            raise ValueError("RAGAS metrics require a judge_model configuration")
+        judge_llm = create_llm(ragas_cfg["judge_model"])
         metrics.append(
-            RagasMetricCollection(metric_names=ragas_cfg["metric_names"])
+            RagasMetricCollection(
+                metric_names=ragas_cfg["metric_names"],
+                judge_model=judge_llm
+            )
         )
     
+    # Correctness metric
     corr_cfg = mcfg.get("correctness", {})
     if corr_cfg.get("enabled", False) and corr_cfg["implementation"] == "binary":
+        if "judge_model" not in corr_cfg:
+            raise ValueError("Correctness metric requires a judge_model configuration")
+        judge_llm = create_llm(corr_cfg["judge_model"])
         metrics.append(
-            BinaryCorrectnessMetric(judge_model_cfg=corr_cfg["judge_model"])
+            BinaryCorrectnessMetric(judge_model=judge_llm)
         )
+    
+    # Context relevance metric
+    ctx_rel_cfg = mcfg.get("context_relevance", {})
+    if ctx_rel_cfg.get("enabled", False) and ctx_rel_cfg["implementation"] == "binary":
+        if "judge_model" not in ctx_rel_cfg:
+            raise ValueError("Context relevance metric requires a judge_model configuration")
+        judge_llm = create_llm(ctx_rel_cfg["judge_model"])
+        # TODO: Create ContextRelevanceMetric when implemented
+        # metrics.append(ContextRelevanceMetric(judge_model=judge_llm))
     
     # further implementations (atomic, etc.) can be added here
     
@@ -59,22 +80,13 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         samples, max_concurrency=run_cfg["max_concurrent_async_tasks"]
     )
     
-    # 4) Build metrics & LLMs
+    # 4) Build metrics (LLMs are created within build_metrics)
     metrics = build_metrics(config)
-    # default LLM if needed
-    default_llm = create_llm(config["llm"]["default"])
     
     # 5) Run metrics (per-sample scores)
     per_sample_results = []
     for metric in metrics:
-        # pick LLM for this metric
-        if metric.name.startswith("correctness"):
-            llm_cfg = config["metrics"]["correctness"]["judge_model"]
-            llm = create_llm(llm_cfg)
-        else:
-            llm = default_llm
-        
-        res = await metric.evaluate(samples, model_outputs, llm=llm)
+        res = await metric.evaluate(samples, model_outputs)
         per_sample_results.extend(res)
     
     # 6) Aggregate
