@@ -174,17 +174,17 @@ Run with `--run-judge-validation` flag to include judge validation results in th
 The framework consists of:
 
 - **cli.py**: Command-line interface and argument parsing
-- **config.py**: YAML configuration loading and validation
 - **data.py**: CSV dataset loading and sample extraction
 - **client.py**: Async RAG clients (local and Lambda)
-- **llm_factory.py**: LangChain LLM creation (OpenAI/Bedrock)
 - **metrics_base.py**: Abstract base class for metrics
 - **metrics_ragas.py**: RAGAS metric collection wrapper
 - **metrics_custom.py**: Custom correctness metrics
-- **pipeline.py**: Core orchestration logic
+- **evals_pipeline.py**: Core orchestration logic
 - **judge_validation.py**: Judge vs human comparison
 - **outputs.py**: Output writers (JSON/CSV/HTML/S3)
 - **stats_utils.py**: Statistical aggregation and confidence intervals
+
+Note: Configuration loading uses `src.utils.config.read_config()` and LLM creation uses `src.utils.llm_factory.create_llm()` from the shared utilities.
 
 ## Request/Response Format Mapping
 
