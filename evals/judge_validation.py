@@ -68,7 +68,7 @@ Return JSON: {{ "score": 0 or 1, "explanation": "short explanation" }}
         acc = None
     
     return {
-        "judge_model": judge_llm_cfg["model_name"],
+        "judge_model": judge_llm_cfg.get("model", "unknown"),
         "n_samples": int(len(samples)),
         "accuracy_vs_human": acc,
     }

@@ -16,7 +16,7 @@ def create_llm(model_cfg: dict):
         model_cfg: Dictionary with LLM configuration. Example for OpenAI:
             {
               "provider": "openai",
-              "model_name": "gpt-4o-mini",
+              "model": "gpt-4o-mini",
               "openai_api_key_env": "OPENAI_API_KEY",
               "temperature": 0.0,
               "max_tokens": 1000
@@ -24,7 +24,7 @@ def create_llm(model_cfg: dict):
             Example for Bedrock:
             {
               "provider": "bedrock",
-              "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+              "model": "anthropic.claude-3-sonnet-20240229-v1:0",
               "region_name": "us-east-1",
               "temperature": 0.0,
               "max_tokens": 1024
@@ -42,28 +42,18 @@ def create_llm(model_cfg: dict):
     provider = cfg.pop("provider")
     
     if provider == "openai":
-        # Handle OpenAI-specific: openai_api_key_env -> api_key
+        # Handle OpenAI-specific: openai_api_key_env -> api_key (environment variable lookup)
         env_var = cfg.pop("openai_api_key_env", "OPENAI_API_KEY")
         api_key = os.environ.get(env_var)
         if not api_key:
             raise RuntimeError(f"Missing OpenAI API key in env var {env_var}")
         
-        # Map model_name to model (LangChain uses "model")
-        model_name = cfg.pop("model_name", None)
-        if model_name:
-            cfg["model"] = model_name
-        
-        # Pass all other args through to ChatOpenAI
+        # Pass all other args through to ChatOpenAI (including "model")
         return ChatOpenAI(api_key=api_key, **cfg)
     
     elif provider == "bedrock":
-        # Map model_id to model (ChatBedrockConverse uses "model")
-        model_id = cfg.pop("model_id", None)
-        if not model_id:
-            raise ValueError("Bedrock provider requires 'model_id' in model_cfg")
-        
-        # Pass all other args through to ChatBedrockConverse
-        return ChatBedrockConverse(model=model_id, **cfg)
+        # Pass all args through to ChatBedrockConverse (including "model")
+        return ChatBedrockConverse(**cfg)
     
     else:
         raise ValueError(f"Unsupported provider: {provider}")
