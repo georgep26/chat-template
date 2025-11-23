@@ -2,7 +2,6 @@ run: # Configuration for a particular evaluation run
   evaluation_run_name: "example_evaluation_1"
   mode: "local"                   # "local" or "lambda"
   max_concurrency: 20
-  experiment_name: "irc_rag_v2"
 
 rag_app:
   local_entrypoint: "src.rag_lambda.main:main"
