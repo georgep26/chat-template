@@ -22,43 +22,43 @@ metrics:
     metric_names: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
     judge_model:
       provider: "openai"          # "openai" or "bedrock"
-      model_name: "gpt-4o-mini"
+      model: "gpt-4o-mini"
       # For OpenAI:
       openai_api_key_env: "OPENAI_API_KEY"
       # For Bedrock (uncomment and use instead of OpenAI):
       # region_name: "us-east-1"
-      # model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
   correctness:
     enabled: true
     implementation: "binary"      # or "atomic"
     judge_model:
       provider: "openai"          # "openai" or "bedrock"
-      model_name: "gpt-4o-mini"
+      model: "gpt-4o-mini"
       # For OpenAI:
       openai_api_key_env: "OPENAI_API_KEY"
       # For Bedrock (uncomment and use instead of OpenAI):
       # region_name: "us-east-1"
-      # model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
   context_relevance:
     enabled: true
     implementation: "binary"
     judge_model:
       provider: "openai"
-      model_name: "gpt-4o-mini"
+      model: "gpt-4o-mini"
       openai_api_key_env: "OPENAI_API_KEY"
       # For Bedrock:
       # region_name: "us-east-1"
-      # model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
 
 llm:
   default:
     provider: "openai"            # "openai" or "bedrock"
-    model_name: "gpt-4o-mini"
+    model: "gpt-4o-mini"
     # For OpenAI:
     openai_api_key_env: "OPENAI_API_KEY"
     # For Bedrock (uncomment and use instead of OpenAI):
     # region_name: "us-east-1"
-    # model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+    # model: "anthropic.claude-3-sonnet-20240229-v1:0"
     # Additional LangChain parameters can be added here (e.g., temperature, max_tokens)
 
 outputs:
