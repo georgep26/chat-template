@@ -137,7 +137,7 @@ Resources:
       DBClusterIdentifier: !Sub '${ProjectName}-light-db-cluster-${Environment}'
       Engine: aurora-postgresql
       EngineMode: provisioned
-      EngineVersion: '15.7'
+      EngineVersion: '15.13'
       DatabaseName: !Ref DatabaseName
       MasterUsername: !Ref MasterUsername
       MasterUserPassword: !Ref MasterUserPassword
