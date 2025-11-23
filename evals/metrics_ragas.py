@@ -20,11 +20,13 @@ RAGAS_METRIC_MAP = {
 
 
 class RagasMetricCollection(BaseMetric):
-    def __init__(self, metric_names):
-        super().__init__(name="ragas_collection")
+    def __init__(self, metric_names, judge_model):
+        if judge_model is None:
+            raise ValueError("RagasMetricCollection requires a judge_model (LLM)")
+        super().__init__(name="ragas_collection", judge_model=judge_model)
         self.metric_names = metric_names
     
-    async def evaluate(self, samples, outputs, llm=None):
+    async def evaluate(self, samples, outputs):
         data = {
             "question": [s.input for s in samples],
             "answer": [o["answer"] for o in outputs],

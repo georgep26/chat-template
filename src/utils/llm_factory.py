@@ -9,13 +9,25 @@ def create_llm(model_cfg: dict):
     """
     Create a LangChain LLM instance based on configuration.
     
+    All arguments in model_cfg (except provider-specific handling) are passed through
+    directly to the LangChain constructor, allowing full access to LangChain parameters.
+    
     Args:
-        model_cfg: Dictionary with LLM configuration. Example:
+        model_cfg: Dictionary with LLM configuration. Example for OpenAI:
             {
               "provider": "openai",
               "model_name": "gpt-4o-mini",
-              "openai": { "api_key_env": "OPENAI_API_KEY" },
-              "bedrock": { "region_name": "us-east-1", "model_id": "..." }
+              "openai_api_key_env": "OPENAI_API_KEY",
+              "temperature": 0.0,
+              "max_tokens": 1000
+            }
+            Example for Bedrock:
+            {
+              "provider": "bedrock",
+              "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+              "region_name": "us-east-1",
+              "temperature": 0.0,
+              "max_tokens": 1024
             }
     
     Returns:
@@ -23,29 +35,35 @@ def create_llm(model_cfg: dict):
     
     Raises:
         RuntimeError: If OpenAI API key is missing
-        ValueError: If provider is unsupported
+        ValueError: If provider is unsupported or required fields are missing
     """
-    provider = model_cfg["provider"]
+    # Create a copy to avoid modifying the original config
+    cfg = model_cfg.copy()
+    provider = cfg.pop("provider")
     
     if provider == "openai":
-        env_var = model_cfg.get("openai", {}).get("api_key_env", "OPENAI_API_KEY")
+        # Handle OpenAI-specific: openai_api_key_env -> api_key
+        env_var = cfg.pop("openai_api_key_env", "OPENAI_API_KEY")
         api_key = os.environ.get(env_var)
         if not api_key:
             raise RuntimeError(f"Missing OpenAI API key in env var {env_var}")
         
-        return ChatOpenAI(
-            model=model_cfg["model_name"],
-            api_key=api_key,
-            temperature=0.0,
-        )
+        # Map model_name to model (LangChain uses "model")
+        model_name = cfg.pop("model_name", None)
+        if model_name:
+            cfg["model"] = model_name
+        
+        # Pass all other args through to ChatOpenAI
+        return ChatOpenAI(api_key=api_key, **cfg)
     
     elif provider == "bedrock":
-        bed_cfg = model_cfg["bedrock"]
-        return ChatBedrockConverse(
-            model=bed_cfg["model_id"],
-            region_name=bed_cfg.get("region_name", "us-east-1"),
-            temperature=0.0,
-        )
+        # Map model_id to model (ChatBedrockConverse uses "model")
+        model_id = cfg.pop("model_id", None)
+        if not model_id:
+            raise ValueError("Bedrock provider requires 'model_id' in model_cfg")
+        
+        # Pass all other args through to ChatBedrockConverse
+        return ChatBedrockConverse(model=model_id, **cfg)
     
     else:
         raise ValueError(f"Unsupported provider: {provider}")
