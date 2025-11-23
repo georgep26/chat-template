@@ -44,8 +44,8 @@ def build_metrics(config: dict):
 async def run_evaluation(config: dict, run_judge_validation: bool = False):
     run_cfg = config["run"]
     outputs_cfg = config["outputs"]
+    evaluation_run_name = run_cfg.get("evaluation_run_name", "evaluation_run_default")
     base_dir = Path(outputs_cfg.get("local", {}).get("base_dir", "eval_outputs"))
-    experiment = run_cfg.get("experiment_name", "default")
     
     # 1) Load data
     df = load_eval_dataframe(config)
@@ -79,6 +79,11 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
     
     # 6) Aggregate
     summary = build_aggregate_summary(per_sample_results)
+    # Add run metadata to summary
+    summary["run"] = {
+        "evaluation_run_name": evaluation_run_name,
+        "mode": run_cfg.get("mode", "unknown"),
+    }
     
     # 7) Optional judge validation
     judge_val_result = None
@@ -90,15 +95,15 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
     # 8) Outputs
     generated_paths = []
     if "json" in outputs_cfg["types"]:
-        p = write_json_summary(summary, base_dir, experiment)
+        p = write_json_summary(summary, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
     if "csv" in outputs_cfg["types"]:
-        p = write_csv_results(per_sample_results, base_dir, experiment)
+        p = write_csv_results(per_sample_results, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
     if "html" in outputs_cfg["types"]:
-        p = write_html_report(summary, base_dir, experiment)
+        p = write_html_report(summary, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
     # 9) Optional S3 upload
