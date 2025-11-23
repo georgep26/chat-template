@@ -7,18 +7,14 @@ run: # Configuration for a particular evaluation run
 rag_app:
   local_entrypoint: "src.rag_lambda.main:main"
   # lambda_function_name: "my-rag-lambda-prod" # uncomment this if you want to run the evaluation on a lambda function
-  request_template:
-    question_key: "question"
-    metadata_key: "metadata"
-  response_keys:
-    answer: "answer"
-    contexts: "contexts"
+
 
 data:
   eval_csv_path: "data/validation_questions.csv"
   eval_id_column: "validation_question_id"
   eval_question_column: "validation_question"
-  eval_reference_column: "answer"
+  eval_reference_column: "human_reference_answer"
+  eval_citation_column: "human_citation"
   # optional extra columns auto-loaded into metadata
 
 metrics:
