@@ -111,9 +111,15 @@ metrics:
       # For Bedrock:
       # region_name: "us-east-1"
       # model: "anthropic.claude-3-sonnet-20240229-v1:0"
-  correctness:
+  binary_correctness:
     enabled: true
-    implementation: "binary"  # or "atomic"
+    judge_model:
+      provider: "openai"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+      # Additional LangChain parameters (temperature, max_tokens, etc.) can be added here
+  atomic_correctness:
+    enabled: false
     judge_model:
       provider: "openai"
       model: "gpt-4o-mini"
@@ -150,9 +156,15 @@ llm:
 **Judge Model Configuration** (for metrics):
 ```yaml
 metrics:
-  correctness:
+  binary_correctness:
     enabled: true
-    implementation: "binary"
+    judge_model:
+      provider: "openai"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+      temperature: 0.0                # Any ChatOpenAI parameter
+  atomic_correctness:
+    enabled: false
     judge_model:
       provider: "openai"
       model: "gpt-4o-mini"
