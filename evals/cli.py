@@ -3,7 +3,7 @@
 import argparse
 import asyncio
 from .pipeline import run_evaluation
-from .config import load_config
+from src.utils.config import read_config
 
 
 def parse_args():
@@ -31,11 +31,16 @@ def parse_args():
 
 def main():
     args = parse_args()
-    config = load_config(args.config)
+    config = read_config(args.config)
+    
+    # Apply defaults (previously in load_config)
+    config.setdefault("outputs", {})
+    config["outputs"].setdefault("types", ["html", "json", "csv"])
+    config.setdefault("run", {})
+    config["run"].setdefault("max_concurrency", 10)
     
     # CLI override for output types
     if args.output_type:
-        config.setdefault("outputs", {})
         config["outputs"]["types"] = [
             s.strip() for s in args.output_type.split(",") if s.strip()
         ]
