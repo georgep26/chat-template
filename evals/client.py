@@ -40,7 +40,6 @@ class LocalRagClient(BaseRagClient):
     
     async def generate(self, sample: dict) -> dict:
         loop = asyncio.get_running_loop()
-        req_tmpl = self.cfg["request_template"]
         
         # Adapt request format: question -> message, add conversation_id and user_id
         event_body = {
@@ -93,7 +92,6 @@ class LambdaRagClient(BaseRagClient):
     
     async def generate(self, sample: dict) -> dict:
         loop = asyncio.get_running_loop()
-        req_tmpl = self.cfg["request_template"]
         
         # Adapt request format: question -> message, add conversation_id and user_id
         payload = {
