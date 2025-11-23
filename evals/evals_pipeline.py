@@ -38,26 +38,34 @@ def build_metrics(config: dict):
             )
         )
     
-    # Correctness metric
-    corr_cfg = mcfg.get("correctness", {})
-    if corr_cfg.get("enabled", False) and corr_cfg["implementation"] == "binary":
-        if "judge_model" not in corr_cfg:
-            raise ValueError("Correctness metric requires a judge_model configuration")
-        judge_llm = create_llm(corr_cfg["judge_model"])
+    # Binary correctness metric
+    binary_corr_cfg = mcfg.get("binary_correctness", {})
+    if binary_corr_cfg.get("enabled", False):
+        if "judge_model" not in binary_corr_cfg:
+            raise ValueError("binary_correctness metric requires a judge_model configuration")
+        judge_llm = create_llm(binary_corr_cfg["judge_model"])
         metrics.append(
             BinaryCorrectnessMetric(judge_model=judge_llm)
         )
     
+    # Atomic correctness metric
+    atomic_corr_cfg = mcfg.get("atomic_correctness", {})
+    if atomic_corr_cfg.get("enabled", False):
+        if "judge_model" not in atomic_corr_cfg:
+            raise ValueError("atomic_correctness metric requires a judge_model configuration")
+        judge_llm = create_llm(atomic_corr_cfg["judge_model"])
+        # TODO: Create AtomicCorrectnessMetric when implemented
+        # from .metrics_custom import AtomicCorrectnessMetric
+        # metrics.append(AtomicCorrectnessMetric(judge_model=judge_llm))
+    
     # Context relevance metric
     ctx_rel_cfg = mcfg.get("context_relevance", {})
-    if ctx_rel_cfg.get("enabled", False) and ctx_rel_cfg["implementation"] == "binary":
+    if ctx_rel_cfg.get("enabled", False):
         if "judge_model" not in ctx_rel_cfg:
-            raise ValueError("Context relevance metric requires a judge_model configuration")
+            raise ValueError("context_relevance metric requires a judge_model configuration")
         judge_llm = create_llm(ctx_rel_cfg["judge_model"])
         # TODO: Create ContextRelevanceMetric when implemented
         # metrics.append(ContextRelevanceMetric(judge_model=judge_llm))
-    
-    # further implementations (atomic, etc.) can be added here
     
     return metrics
 

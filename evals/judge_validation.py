@@ -14,7 +14,10 @@ async def run_judge_validation(config: dict):
     df = load_judge_validation_dataframe(config)
     samples = extract_judge_validation_samples(df, config)
     jcfg = config["judge_validation"]
-    judge_llm_cfg = config["metrics"]["correctness"]["judge_model"]
+    # Use binary_correctness judge_model for judge validation
+    judge_llm_cfg = config["metrics"].get("binary_correctness", {}).get("judge_model")
+    if not judge_llm_cfg:
+        raise ValueError("judge_validation requires binary_correctness.judge_model to be configured")
     llm = create_llm(judge_llm_cfg)
     
     # Get model answers from the dataframe
