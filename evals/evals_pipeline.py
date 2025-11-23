@@ -56,7 +56,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
     
     # 3) Generate outputs
     model_outputs = await client.generate_batch(
-        samples, max_concurrency=run_cfg["max_concurrency"]
+        samples, max_concurrency=run_cfg["max_concurrent_async_tasks"]
     )
     
     # 4) Build metrics & LLMs
