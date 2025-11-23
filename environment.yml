@@ -10,3 +10,4 @@ dependencies:
   - boto3
   - pip:
     - -r src/rag_lambda/requirements.txt
+    - -r evals/requirements.txt

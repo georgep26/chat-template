@@ -1,2 +1,5 @@
-"""Evaluation scripts and utilities for RAG pipeline."""
+"""Evaluation framework for RAG pipeline."""
 
+from .cli import main
+
+__all__ = ["main"]
