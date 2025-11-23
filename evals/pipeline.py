@@ -6,7 +6,7 @@ from collections import defaultdict
 
 from .data import load_eval_dataframe, extract_eval_samples
 from .client import build_rag_client
-from .llm_factory import create_llm
+from src.utils.llm_factory import create_llm
 from .metrics_ragas import RagasMetricCollection
 from .metrics_custom import BinaryCorrectnessMetric
 from .metrics_base import BaseMetric
