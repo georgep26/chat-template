@@ -111,7 +111,7 @@ STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
 TEMPLATE_FILE="infra/cloudformation/light_db_template.yaml"
 SECRET_STACK_NAME="chat-template-db-secret-${ENVIRONMENT}"
 SECRET_TEMPLATE_FILE="infra/cloudformation/db_secret_template.yaml"
-SECRET_NAME="chat-template-db-connection"
+SECRET_NAME="db-connection"
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
