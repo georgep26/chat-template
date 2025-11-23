@@ -24,7 +24,7 @@ conda env update -f environment.yml
 
 ### 2. Create Configuration File
 
-Create an `evals_config.yaml` file in the project root. See `evals_config.yaml` for a complete example.
+Create an `evals_config.yaml` file. See `evals/evals_config.yaml` for a complete example.
 
 Key configuration sections:
 - `run`: Execution mode (local/lambda), concurrency, experiment name
@@ -53,13 +53,13 @@ id,question,reference_answer
 
 ```bash
 # Basic evaluation with all output formats
-python -m evals.cli --config evals_config.yaml --output-type html,json,csv
+python -m evals.cli --config evals/evals_config.yaml --output-type html,json,csv
 
 # Run with judge validation
-python -m evals.cli --config evals_config.yaml --output-type html --run-judge-validation
+python -m evals.cli --config evals/evals_config.yaml --output-type html --run-judge-validation
 
 # Override output types via CLI
-python -m evals.cli --config evals_config.yaml --output-type json
+python -m evals.cli --config evals/evals_config.yaml --output-type json
 ```
 
 ## Configuration Reference
@@ -232,7 +232,7 @@ The framework can be integrated into CI/CD pipelines:
 
 ```bash
 # Run evaluation and check thresholds
-python -m evals.cli --config evals_config.yaml --output-type json
+python -m evals.cli --config evals/evals_config.yaml --output-type json
 # Parse summary.json and fail if metrics below threshold
 ```
 
@@ -250,7 +250,7 @@ python -m evals.cli --config evals_config.yaml --output-type json
 Set environment variables for detailed logging:
 ```bash
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-python -m evals.cli --config evals_config.yaml --output-type json
+python -m evals.cli --config evals/evals_config.yaml --output-type json
 ```
 
 ## Notes
