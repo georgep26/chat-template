@@ -14,7 +14,7 @@ class BaseRagClient:
     def __init__(self, rag_app_cfg: dict):
         self.cfg = rag_app_cfg
     
-    async def generate(self, sample: dict) -> dict:
+    async def generate(self, sample) -> dict:
         raise NotImplementedError
     
     async def generate_batch(self, samples, max_concurrency: int):
@@ -38,19 +38,19 @@ class LocalRagClient(BaseRagClient):
         module = importlib.import_module(module_name)
         return getattr(module, func_name)
     
-    async def generate(self, sample: dict) -> dict:
+    async def generate(self, sample) -> dict:
         loop = asyncio.get_running_loop()
         
-        # Adapt request format: question -> message, add conversation_id and user_id
+        # Adapt request format: input -> message, add conversation_id and user_id
         event_body = {
-            "message": sample["question"],
-            "conversation_id": sample.get("metadata", {}).get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
-            "user_id": sample.get("metadata", {}).get("user_id", "eval_user"),
+            "message": sample.input,
+            "conversation_id": sample.metadata.get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
+            "user_id": sample.metadata.get("user_id", "eval_user"),
         }
         
         # Add retrieval_filters if present in metadata
-        if "retrieval_filters" in sample.get("metadata", {}):
-            event_body["retrieval_filters"] = sample["metadata"]["retrieval_filters"]
+        if "retrieval_filters" in sample.metadata:
+            event_body["retrieval_filters"] = sample.metadata["retrieval_filters"]
         
         def _call():
             # The main function expects event_body dict and returns a response dict
@@ -90,19 +90,19 @@ class LambdaRagClient(BaseRagClient):
         super().__init__(rag_app_cfg)
         self._lambda = boto3.client("lambda")
     
-    async def generate(self, sample: dict) -> dict:
+    async def generate(self, sample) -> dict:
         loop = asyncio.get_running_loop()
         
-        # Adapt request format: question -> message, add conversation_id and user_id
+        # Adapt request format: input -> message, add conversation_id and user_id
         payload = {
-            "message": sample["question"],
-            "conversation_id": sample.get("metadata", {}).get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
-            "user_id": sample.get("metadata", {}).get("user_id", "eval_user"),
+            "message": sample.input,
+            "conversation_id": sample.metadata.get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
+            "user_id": sample.metadata.get("user_id", "eval_user"),
         }
         
         # Add retrieval_filters if present in metadata
-        if "retrieval_filters" in sample.get("metadata", {}):
-            payload["retrieval_filters"] = sample["metadata"]["retrieval_filters"]
+        if "retrieval_filters" in sample.metadata:
+            payload["retrieval_filters"] = sample.metadata["retrieval_filters"]
         
         def _invoke():
             resp = self._lambda.invoke(
