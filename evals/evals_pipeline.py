@@ -1,4 +1,4 @@
-# evals/pipeline.py
+# evals/evals_pipeline.py
 
 import asyncio
 from pathlib import Path
