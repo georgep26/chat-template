@@ -4,7 +4,7 @@ import json
 import csv
 from pathlib import Path
 from collections import defaultdict
-from .stats_utils import aggregate_metric
+from stats_utils import aggregate_metric
 
 
 def build_aggregate_summary(per_sample_results):

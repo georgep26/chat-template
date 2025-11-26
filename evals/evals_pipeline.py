@@ -4,20 +4,20 @@ import asyncio
 from pathlib import Path
 from collections import defaultdict
 
-from .data import load_eval_dataframe, extract_eval_samples
-from .client import build_rag_client
+from data import load_eval_dataframe, extract_eval_samples
+from client import build_rag_client
 from src.utils.llm_factory import create_llm
 from src.utils.aws_utils import upload_to_s3
-from .metrics_ragas import RagasMetricCollection
-from .metrics_custom import BinaryCorrectnessMetric
-from .metrics_base import BaseMetric
-from .outputs import (
+from metrics_ragas import RagasMetricCollection
+from metrics_custom import BinaryCorrectnessMetric
+from metrics_base import BaseMetric
+from outputs import (
     build_aggregate_summary,
     write_json_summary,
     write_csv_results,
     write_html_report,
 )
-from .judge_validation import run_judge_validation
+from judge_validation import run_judge_validation
 
 
 def build_metrics(config: dict):

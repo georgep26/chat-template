@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from .evals_pipeline import run_evaluation
+from evals_pipeline import run_evaluation
 from src.utils.config import read_config
 
 

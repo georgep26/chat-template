@@ -2,7 +2,7 @@
 
 import json
 import asyncio
-from .metrics_base import BaseMetric
+from metrics_base import BaseMetric
 
 
 class BinaryCorrectnessMetric(BaseMetric):
