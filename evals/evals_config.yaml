@@ -18,7 +18,7 @@ data:
 
 metrics:
   ragas:
-    enabled: true
+    enabled: false
     metric_names: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
     judge_model:
       provider: "bedrock" # E.g. "openai" or "bedrock"
@@ -27,7 +27,7 @@ metrics:
   binary_correctness:
     enabled: true
     judge_model:
-      provider: "bedrock"          # "openai" or "bedrock"
+      provider: "bedrock"  # E.g. "openai" or "bedrock"
       model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"  
       region_name: "us-east-1"
   atomic_correctness:
@@ -52,7 +52,7 @@ llm:
 outputs:
   types: ["html", "json", "csv"]  # CLI can override
   local:
-    base_dir: "eval_outputs"
+    base_dir: "evals/eval_outputs"
   s3:
     enabled: false
     s3_uri: "s3://my-eval-bucket/rag-evals/irc/"
