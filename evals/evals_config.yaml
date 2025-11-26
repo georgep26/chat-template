@@ -2,6 +2,7 @@ run: # Configuration for a particular evaluation run
   evaluation_run_name: "baseline_eval"
   mode: "local"                   # "local" or "lambda"
   max_concurrent_async_tasks: 20
+  persist_rag_outputs: true
 
 rag_app:
   local_entrypoint: "src.rag_lambda.main:main"
