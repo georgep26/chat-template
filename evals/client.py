@@ -44,7 +44,7 @@ class LocalRagClient(BaseRagClient):
         # Adapt request format: input -> message, add conversation_id and user_id
         event_body = {
             "message": sample.input,
-            "conversation_id": sample.metadata.get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
+            "conversation_id": sample.metadata.get("conversation_id", str(uuid.uuid4())),
             "user_id": sample.metadata.get("user_id", "eval_user"),
         }
         
@@ -96,7 +96,7 @@ class LambdaRagClient(BaseRagClient):
         # Adapt request format: input -> message, add conversation_id and user_id
         payload = {
             "message": sample.input,
-            "conversation_id": sample.metadata.get("conversation_id", f"eval_{uuid.uuid4().hex[:8]}"),
+            "conversation_id": sample.metadata.get("conversation_id", str(uuid.uuid4())),
             "user_id": sample.metadata.get("user_id", "eval_user"),
         }
         
