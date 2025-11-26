@@ -74,9 +74,8 @@ outputs:
     base_dir: "eval_outputs"
   s3:
     enabled: false
-    bucket: "my-eval-bucket"
-    prefix: "rag-evals/irc/"
-    # Uploads are base_dir/experiment_name/{files} -> s3://bucket/prefix/...
+    s3_uri: "s3://my-eval-bucket/rag-evals/irc/"
+    # Uploads are base_dir/experiment_name/{files} -> s3_uri/experiment_name/...
 
 judge_validation:
   enabled: true

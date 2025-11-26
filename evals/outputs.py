@@ -4,7 +4,6 @@ import json
 import csv
 from pathlib import Path
 from collections import defaultdict
-import boto3
 from .stats_utils import aggregate_metric
 
 
@@ -111,19 +110,3 @@ def write_html_report(summary: dict, base_dir: Path, experiment_name: str):
     
     path.write_text(html, encoding="utf-8")
     return path
-
-
-def upload_to_s3(config: dict, local_paths):
-    s3_cfg = config.get("outputs", {}).get("s3", {})
-    if not s3_cfg.get("enabled", False):
-        return
-    
-    bucket = s3_cfg["bucket"]
-    prefix = s3_cfg.get("prefix", "")
-    s3 = boto3.client("s3")
-    
-    for path in local_paths:
-        rel = path.relative_to(path.parents[1])  # e.g. base_dir/experiment/file
-        key = f"{prefix.rstrip('/')}/{rel.as_posix()}"
-        s3.upload_file(str(path), bucket, key)
-
