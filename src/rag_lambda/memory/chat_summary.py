@@ -1,10 +1,39 @@
 """Conversation summarization functionality."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
+
+
+def extract_text_content(content: Union[str, List[Dict[str, Any]]]) -> str:
+    """
+    Extract text content from a message content field.
+    
+    Handles both string format and list format (e.g., [{'type': 'text', 'text': '...'}]).
+    
+    Args:
+        content: Message content, either a string or a list of content blocks
+        
+    Returns:
+        Extracted text as a string
+    """
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        # Handle list format like [{'type': 'text', 'text': 'CLEAR'}]
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text" and "text" in block:
+                    text_parts.append(block["text"])
+                elif "text" in block:
+                    text_parts.append(block["text"])
+        return "".join(text_parts)
+    else:
+        # Fallback: convert to string
+        return str(content)
 
 
 chat_summary_prompt = ChatPromptTemplate.from_messages(
@@ -36,9 +65,10 @@ def summarize_messages(messages: List[BaseMessage], summarization_model_config: 
         temperature=model_config.get("temperature", 0),
     )
 
-    text = "\n".join(f"{m.type}: {m.content}" for m in messages)
+    text = "\n".join(f"{m.type}: {extract_text_content(m.content)}" for m in messages)
     resp = (chat_summary_prompt | summ_llm).invoke({"conversation": text})
-    return SystemMessage(name="conversation_summary", content=resp.content)
+    resp_text = extract_text_content(resp.content)
+    return SystemMessage(name="conversation_summary", content=resp_text)
 
 def summarization_check(messages: List[BaseMessage], summarization_threshold: int, summarization_model_config: Dict[str, Any]) -> bool:
     if len(messages) > summarization_threshold:

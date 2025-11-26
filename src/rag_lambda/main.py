@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from graph.nodes import answer_node, clarify_node, rewrite_node, split_node
+from graph.nodes import answer_node, clarify_node, extract_text_content, rewrite_node, split_node
 from graph.state import MessagesState
 from graph.retrieval import retrieve_node
 from memory.factory import create_history_store
@@ -130,7 +130,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
 
     # Extract answer from final state
     ai_msgs = [m for m in final_state["messages"] if m.type == "ai"]
-    answer = ai_msgs[-1].content if ai_msgs else ""
+    answer = extract_text_content(ai_msgs[-1].content) if ai_msgs else ""
 
     # Extract sources from final state
     sources = []
