@@ -7,6 +7,7 @@ from collections import defaultdict
 from .data import load_eval_dataframe, extract_eval_samples
 from .client import build_rag_client
 from src.utils.llm_factory import create_llm
+from src.utils.aws_utils import upload_to_s3
 from .metrics_ragas import RagasMetricCollection
 from .metrics_custom import BinaryCorrectnessMetric
 from .metrics_base import BaseMetric
@@ -15,7 +16,6 @@ from .outputs import (
     write_json_summary,
     write_csv_results,
     write_html_report,
-    upload_to_s3,
 )
 from .judge_validation import run_judge_validation
 
@@ -127,5 +127,10 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         generated_paths.append(p)
     
     # 9) Optional S3 upload
-    upload_to_s3(config, generated_paths)
+    s3_cfg = outputs_cfg.get("s3", {})
+    if s3_cfg.get("enabled", False):
+        base_s3_uri = s3_cfg["s3_uri"].rstrip('/')
+        s3_uri = f"{base_s3_uri}/{evaluation_run_name}/"
+        experiment_dir = base_dir / evaluation_run_name
+        upload_to_s3(s3_uri, experiment_dir)
 
