@@ -260,3 +260,6 @@ creds.yaml
 
 # Scratchpad files
 scratchpad.txt
+
+# Evaluation outputs
+evals/eval_outputs/
