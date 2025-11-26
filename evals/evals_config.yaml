@@ -1,5 +1,5 @@
 run: # Configuration for a particular evaluation run
-  evaluation_run_name: "example_evaluation_1"
+  evaluation_run_name: "baseline_eval"
   mode: "local"                   # "local" or "lambda"
   max_concurrent_async_tasks: 20
 
@@ -9,11 +9,11 @@ rag_app:
 
 
 data:
-  eval_csv_path: "data/validation_questions.csv"
+  eval_csv_path: "data/validation_questions_sample.csv"
   eval_id_column: "validation_question_id"
   eval_question_column: "validation_question"
-  eval_reference_column: "human_reference_answer"
-  eval_citation_column: "human_citation"
+  eval_reference_column: "answer"
+  eval_citation_column: "citation"
   # optional extra columns auto-loaded into metadata
 
 metrics:
@@ -21,52 +21,33 @@ metrics:
     enabled: true
     metric_names: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
     judge_model:
-      provider: "openai"          # "openai" or "bedrock"
-      model: "gpt-4o-mini"
-      # For OpenAI:
-      openai_api_key_env: "OPENAI_API_KEY"
-      # For Bedrock (uncomment and use instead of OpenAI):
-      # region_name: "us-east-1"
-      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
+      provider: "bedrock" # E.g. "openai" or "bedrock"
+      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"  
+      region_name: "us-east-1"
   binary_correctness:
     enabled: true
     judge_model:
-      provider: "openai"          # "openai" or "bedrock"
-      model: "gpt-4o-mini"
-      # For OpenAI:
-      openai_api_key_env: "OPENAI_API_KEY"
-      # For Bedrock (uncomment and use instead of OpenAI):
-      # region_name: "us-east-1"
-      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
+      provider: "bedrock"          # "openai" or "bedrock"
+      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"  
+      region_name: "us-east-1"
   atomic_correctness:
     enabled: false
     judge_model:
-      provider: "openai"
-      model: "gpt-4o-mini"
-      openai_api_key_env: "OPENAI_API_KEY"
-      # For Bedrock:
-      # region_name: "us-east-1"
-      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
+      provider: "bedrock"
+      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      region_name: "us-east-1"
   context_relevance:
-    enabled: true
+    enabled: false
     judge_model:
-      provider: "openai"
-      model: "gpt-4o-mini"
-      openai_api_key_env: "OPENAI_API_KEY"
-      # For Bedrock:
-      # region_name: "us-east-1"
-      # model: "anthropic.claude-3-sonnet-20240229-v1:0"
+      provider: "bedrock"
+      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      region_name: "us-east-1"
 
 llm:
   default:
-    provider: "openai"            # "openai" or "bedrock"
-    model: "gpt-4o-mini"
-    # For OpenAI:
-    openai_api_key_env: "OPENAI_API_KEY"
-    # For Bedrock (uncomment and use instead of OpenAI):
-    # region_name: "us-east-1"
-    # model: "anthropic.claude-3-sonnet-20240229-v1:0"
-    # Additional LangChain parameters can be added here (e.g., temperature, max_tokens)
+    provider: "bedrock"            # "openai" or "bedrock"
+    model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    region_name: "us-east-1"
 
 outputs:
   types: ["html", "json", "csv"]  # CLI can override
