@@ -8,6 +8,7 @@ from ragas.metrics import (
     context_precision,
     context_recall,
 )
+from ragas.llms import LangchainLLMWrapper
 from metrics_base import BaseMetric
 import asyncio
 
@@ -25,6 +26,10 @@ class RagasMetricCollection(BaseMetric):
             raise ValueError("RagasMetricCollection requires a judge_model (LLM)")
         super().__init__(name="ragas_collection", judge_model=judge_model)
         self.metric_names = metric_names
+        # Wrap LangChain LLM with Ragas wrapper for compatibility
+        # judge_model is a LangChain ChatModel (ChatOpenAI or ChatBedrockConverse)
+        # and needs to be wrapped to work with Ragas
+        self.ragas_llm = LangchainLLMWrapper(judge_model)
     
     async def evaluate(self, samples, outputs):
         data = {
@@ -40,7 +45,9 @@ class RagasMetricCollection(BaseMetric):
         loop = asyncio.get_running_loop()
         
         def _run():
-            return evaluate(ds, metrics=metrics)
+            # Pass the wrapped LLM explicitly to Ragas evaluate
+            # This ensures Ragas uses the correct LLM instead of its default
+            return evaluate(ds, metrics=metrics, llm=self.ragas_llm)
         
         result = await loop.run_in_executor(None, _run)
         df = result.to_pandas()
