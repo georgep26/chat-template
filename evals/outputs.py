@@ -32,20 +32,38 @@ def write_json_summary(summary: dict, base_dir: Path, experiment_name: str):
     return path
 
 
-def write_csv_results(per_sample_results, base_dir: Path, experiment_name: str):
+def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path, experiment_name: str):
     out_dir = base_dir / experiment_name
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     
-    fieldnames = ["id", "metric", "score", "explanation"]
+    # Create mapping from sample_id to question, AI answer, and reference answer
+    sample_data = {}
+    for sample, output in zip(samples, model_outputs):
+        sample_data[sample.sample_id] = {
+            "question": sample.input,
+            "ai_answer": output.get("answer", ""),
+            "reference_answer": sample.human_reference_answer,
+        }
+    
+    fieldnames = ["id", "metric", "question", "ai_answer", "reference_answer", "score", "explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in per_sample_results:
+            sample_id = r["id"]
+            sample_info = sample_data.get(sample_id, {
+                "question": "",
+                "ai_answer": "",
+                "reference_answer": "",
+            })
             writer.writerow({
-                "id": r["id"],
+                "id": sample_id,
                 "metric": r["metric"],
+                "question": sample_info["question"],
+                "ai_answer": sample_info["ai_answer"],
+                "reference_answer": sample_info["reference_answer"],
                 "score": r["score"],
                 "explanation": r.get("extra", {}).get("explanation", ""),
             })
