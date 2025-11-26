@@ -3,7 +3,7 @@
 import json
 import asyncio
 import numpy as np
-from .data import load_judge_validation_dataframe, extract_judge_validation_samples
+from data import load_judge_validation_dataframe, extract_judge_validation_samples
 from src.utils.llm_factory import create_llm
 
 

@@ -8,7 +8,7 @@ from ragas.metrics import (
     context_precision,
     context_recall,
 )
-from .metrics_base import BaseMetric
+from metrics_base import BaseMetric
 import asyncio
 
 RAGAS_METRIC_MAP = {
@@ -35,7 +35,7 @@ class RagasMetricCollection(BaseMetric):
         }
         
         ds = Dataset.from_dict(data)
-        metrics = [RAGAS_METRIC_MAP[m]() for m in self.metric_names]
+        metrics = [RAGAS_METRIC_MAP[m] for m in self.metric_names]
         
         loop = asyncio.get_running_loop()
         
