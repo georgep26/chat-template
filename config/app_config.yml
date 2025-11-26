@@ -19,7 +19,7 @@ rag_chat:
       region: "us-east-1" # Region for the split model
   retrieval: # Retrieval settings for the knowledge base
     region: "us-east-1" # Region for the retrieval model (defaults to the region of the database)
-    knowledge_base_id: "K5WQNHFD0C" # Knowledge base ID to use for retrieval
+    knowledge_base_id: "AK8G5VQRQV" # Knowledge base ID to use for retrieval
     number_of_results: 10 # Number of results to retrieve from the knowledge base
   generation: # Generation settings for the answer
     model: # Model to use for generation
@@ -28,7 +28,7 @@ rag_chat:
       region: "us-east-1" # Region for the generation model (defaults to the region of the database)
   chat_history_store: # History of the conversation settings
     memory_backend_type: "postgres"  # Options: postgres, dynamo, vector, local_sqlite
-    db_connection_secret_name: "chat-template-chat-template-db-connection-dev"  # Secret name for the database connection
+    db_connection_secret_name: "chat-template-db-connection-dev"  # Secret name for the database connection
     table_name: "chat_history"  # Postgres table name for chat history
   summarization: # Summarization settings for when the conversation is too long
     summarization_threshold: 20  # Number of messages before summarization
