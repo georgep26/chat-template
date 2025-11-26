@@ -119,7 +119,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         generated_paths.append(p)
     
     if "csv" in outputs_cfg["types"]:
-        p = write_csv_results(per_sample_results, base_dir, evaluation_run_name)
+        p = write_csv_results(per_sample_results, samples, model_outputs, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
     if "html" in outputs_cfg["types"]:
