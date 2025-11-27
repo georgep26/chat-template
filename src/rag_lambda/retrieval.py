@@ -122,8 +122,8 @@ def docs_to_citations(docs: List[Document]) -> List[Dict]:
         m = d.metadata or {}
         # Include all metadata fields
         citation = dict(m)
-        # Add snippet/context from page_content
-        citation["snippet"] = (d.page_content or "")[:300]
+        # Add chunk/context from page_content (full content)
+        citation["chunk"] = d.page_content or ""
         cites.append(citation)
     return cites
 
