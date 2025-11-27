@@ -32,11 +32,16 @@ class RagasMetricCollection(BaseMetric):
         self.ragas_llm = LangchainLLMWrapper(judge_model)
     
     async def evaluate(self, samples, outputs):
+        # Ragas metrics expect specific column names:
+        # - user_input: the question/query
+        # - response: the generated answer
+        # - retrieved_contexts: list of context strings
+        # - reference: ground truth answer (for context_precision and context_recall)
         data = {
-            "question": [s.input for s in samples],
-            "answer": [o["answer"] for o in outputs],
-            "contexts": [o["contexts"] for o in outputs],
-            "ground_truth": [s.human_reference_answer for s in samples],
+            "user_input": [s.input for s in samples],
+            "response": [o["answer"] for o in outputs],
+            "retrieved_contexts": [o["contexts"] for o in outputs],
+            "reference": [s.human_reference_answer for s in samples],
         }
         
         ds = Dataset.from_dict(data)
