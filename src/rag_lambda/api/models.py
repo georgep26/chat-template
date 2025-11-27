@@ -21,7 +21,7 @@ class Source(BaseModel):
     document_id: str
     source_type: str
     score: float
-    snippet: str
+    chunk: str
 
 
 class ChatResponse(BaseModel):

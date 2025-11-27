@@ -122,7 +122,7 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
             "document_id": doc.metadata.get("id", doc.metadata.get("source", "unknown")),
             "source_type": doc.metadata.get("source_type", "document"),
             "score": doc.metadata.get("score", 0.0),
-            "snippet": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+            "chunk": doc.page_content or "",
         }
         sources.append(source_info)
     state["sources"] = sources

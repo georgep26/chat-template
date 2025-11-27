@@ -71,12 +71,12 @@ class LocalRagClient(BaseRagClient):
         resp = await loop.run_in_executor(_executor, _call)
         
         # Extract answer and contexts from ChatResponse format
-        # Response has: answer (str), sources (List[Source] where Source has snippet)
+        # Response has: answer (str), sources (List[Source] where Source has chunk)
         answer = resp.get("answer", "")
         sources = resp.get("sources", [])
         
         # Convert sources to contexts list
-        contexts = [source.get("snippet", "") for source in sources if isinstance(source, dict)]
+        contexts = [source.get("chunk", "") for source in sources if isinstance(source, dict)]
         
         return {
             "answer": answer,
@@ -128,7 +128,7 @@ class LambdaRagClient(BaseRagClient):
         sources = body.get("sources", [])
         
         # Convert sources to contexts list
-        contexts = [source.get("snippet", "") for source in sources if isinstance(source, dict)]
+        contexts = [source.get("chunk", "") for source in sources if isinstance(source, dict)]
         
         return {
             "answer": answer,

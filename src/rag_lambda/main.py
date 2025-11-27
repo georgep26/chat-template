@@ -141,7 +141,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
                     document_id=source_dict.get("document_id", "unknown"),
                     source_type=source_dict.get("source_type", "document"),
                     score=source_dict.get("score", 0.0),
-                    snippet=source_dict.get("snippet", ""),
+                    chunk=source_dict.get("chunk", ""),
                 )
             )
 

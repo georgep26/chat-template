@@ -63,7 +63,7 @@ SYSTEM = (
     "You are a grounded assistant. Use only the provided CONTEXT.\n"
     "If the answer is not in CONTEXT, say you don't know.\n"
     "Return JSON with fields: {answer: string, citations: "
-    "[{title,type,version,s3_uri,page,snippet}]}"
+    "[{title,type,version,s3_uri,page,chunk}]}"
 )
 
 # Main prompt template
