@@ -73,10 +73,10 @@ def build_metrics(config: dict):
     return metrics
 
 
-def load_rag_results(samples, output_dir: Path) -> Optional[list]:
+def load_rag_results(samples, output_dir: Path) -> Optional[dict]:
     """
     Load RAG results from rag_results.csv if it exists.
-    Returns a list of model_outputs dicts in the same order as samples, or None if file doesn't exist.
+    Returns a dict mapping sample_id to model_outputs dict, or None if file doesn't exist.
     """
     rag_results_path = output_dir / "rag_results.csv"
     
@@ -99,22 +99,13 @@ def load_rag_results(samples, output_dir: Path) -> Optional[list]:
                 "raw": raw,
             }
     
-    # Reconstruct model_outputs in the same order as samples
-    model_outputs = []
-    for sample in samples:
-        sample_id = str(sample.sample_id)
-        if sample_id in results_by_id:
-            model_outputs.append(results_by_id[sample_id])
-        else:
-            # If a sample_id is missing, we can't use cached results
-            return None
-    
-    return model_outputs
+    return results_by_id
 
 
-def save_rag_results(samples, model_outputs, output_dir: Path):
+def save_rag_results(samples, results_by_id: dict, output_dir: Path):
     """
     Save RAG results to rag_results.csv.
+    results_by_id: dict mapping sample_id to model_outputs dict
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     rag_results_path = output_dir / "rag_results.csv"
@@ -125,13 +116,16 @@ def save_rag_results(samples, model_outputs, output_dir: Path):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         
-        for sample, output in zip(samples, model_outputs):
-            writer.writerow({
-                "sample_id": sample.sample_id,
-                "answer": output.get("answer", ""),
-                "contexts": json.dumps(output.get("contexts", [])),
-                "raw": json.dumps(output.get("raw", {})),
-            })
+        for sample in samples:
+            sample_id = str(sample.sample_id)
+            if sample_id in results_by_id:
+                output = results_by_id[sample_id]
+                writer.writerow({
+                    "sample_id": sample.sample_id,
+                    "answer": output.get("answer", ""),
+                    "contexts": json.dumps(output.get("contexts", [])),
+                    "raw": json.dumps(output.get("raw", {})),
+                })
     
     return rag_results_path
 
@@ -149,32 +143,63 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
     # 2) Check for persisted RAG results
     persist_rag_outputs = run_cfg.get("persist_rag_outputs", False)
     output_dir = base_dir / evaluation_run_name
-    model_outputs = None
+    persisted_results = None
     
     if persist_rag_outputs:
-        model_outputs = load_rag_results(samples, output_dir)
+        persisted_results = load_rag_results(samples, output_dir)
     
-    # 3) Generate outputs if not loaded from cache
-    if model_outputs is None:
+    # 3) Identify missing samples and generate outputs for them
+    missing_samples = []
+    
+    if persisted_results is not None:
+        # Find samples that don't have persisted results
+        for sample in samples:
+            sample_id = str(sample.sample_id)
+            if sample_id not in persisted_results:
+                missing_samples.append(sample)
+    else:
+        # No persisted results, need to generate for all samples
+        missing_samples = samples
+    
+    # Generate outputs for missing samples
+    if missing_samples:
         client = build_rag_client(config)
-        model_outputs = await client.generate_batch(
-            samples, max_concurrency=run_cfg["max_concurrent_async_tasks"]
+        new_model_outputs = await client.generate_batch(
+            missing_samples, max_concurrency=run_cfg["max_concurrent_async_tasks"]
         )
         
-        # Save results if persistence is enabled
+        # Merge new results with persisted results
+        if persisted_results is None:
+            persisted_results = {}
+        
+        for sample, output in zip(missing_samples, new_model_outputs):
+            sample_id = str(sample.sample_id)
+            persisted_results[sample_id] = output
+        
+        # Save complete results if persistence is enabled
         if persist_rag_outputs:
-            save_rag_results(samples, model_outputs, output_dir)
+            save_rag_results(samples, persisted_results, output_dir)
     
-    # 4) Build metrics (LLMs are created within build_metrics)
+    # 4) Construct model_outputs list in the same order as samples
+    model_outputs = []
+    for sample in samples:
+        sample_id = str(sample.sample_id)
+        if persisted_results and sample_id in persisted_results:
+            model_outputs.append(persisted_results[sample_id])
+        else:
+            # This shouldn't happen if logic above is correct, but handle gracefully
+            raise RuntimeError(f"Missing RAG result for sample_id: {sample_id}")
+    
+    # 5) Build metrics (LLMs are created within build_metrics)
     metrics = build_metrics(config)
     
-    # 5) Run metrics (per-sample scores)
+    # 6) Run metrics (per-sample scores)
     per_sample_results = []
     for metric in metrics:
         res = await metric.evaluate(samples, model_outputs)
         per_sample_results.extend(res)
     
-    # 6) Aggregate
+    # 7) Aggregate
     summary = build_aggregate_summary(per_sample_results)
     # Add run metadata to summary
     summary["run"] = {
@@ -182,14 +207,14 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         "mode": run_cfg.get("mode", "unknown"),
     }
     
-    # 7) Optional judge validation
+    # 8) Optional judge validation
     judge_val_result = None
     if run_judge_validation:
         judge_val_result = await run_judge_validation(config)
         if judge_val_result:
             summary["judge_validation"] = judge_val_result
     
-    # 8) Outputs
+    # 9) Outputs
     generated_paths = []
     if "json" in outputs_cfg["types"]:
         p = write_json_summary(summary, base_dir, evaluation_run_name)
@@ -203,7 +228,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         p = write_html_report(summary, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
-    # 9) Optional S3 upload
+    # 10) Optional S3 upload
     s3_cfg = outputs_cfg.get("s3", {})
     if s3_cfg.get("enabled", False):
         base_s3_uri = s3_cfg["s3_uri"].rstrip('/')
