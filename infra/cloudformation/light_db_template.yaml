@@ -59,10 +59,22 @@ Parameters:
     Type: String
     Default: ''
     Description: 'Public IP address to allow inbound access from (CIDR format, e.g., 1.2.3.4/32). Leave empty to deny all public access.'
+  
+  AllowedPublicIP2:
+    Type: String
+    Default: ''
+    Description: 'Second public IP address to allow inbound access from (CIDR format, e.g., 1.2.3.4/32). Leave empty if not needed.'
+  
+  AllowedPublicIP3:
+    Type: String
+    Default: ''
+    Description: 'Third public IP address to allow inbound access from (CIDR format, e.g., 1.2.3.4/32). Leave empty if not needed.'
 
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
   HasAllowedIP: !Not [!Equals [!Ref AllowedPublicIP, '']]
+  HasAllowedIP2: !Not [!Equals [!Ref AllowedPublicIP2, '']]
+  HasAllowedIP3: !Not [!Equals [!Ref AllowedPublicIP3, '']]
 
 Resources:
   # Security Group for the database
@@ -93,6 +105,30 @@ Resources:
       ToPort: 5432
       CidrIp: !Ref AllowedPublicIP
       Description: !Sub 'Allow PostgreSQL access from ${AllowedPublicIP}'
+  
+  # Security Group Ingress Rule for second public IP access
+  DBSecurityGroupIngress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasAllowedIP2
+    Properties:
+      GroupId: !Ref DBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: !Ref AllowedPublicIP2
+      Description: !Sub 'Allow PostgreSQL access from ${AllowedPublicIP2}'
+  
+  # Security Group Ingress Rule for third public IP access
+  DBSecurityGroupIngress3:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasAllowedIP3
+    Properties:
+      GroupId: !Ref DBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: !Ref AllowedPublicIP3
+      Description: !Sub 'Allow PostgreSQL access from ${AllowedPublicIP3}'
 
   # DB Subnet Group
   DBSubnetGroup:

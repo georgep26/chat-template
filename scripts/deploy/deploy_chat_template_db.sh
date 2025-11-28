@@ -82,6 +82,8 @@ show_usage() {
     echo "  --max-capacity <acu>          - Maximum ACU (default: 1)"
     echo "  --region <region>             - AWS region (default: us-east-1)"
     echo "  --public-ip <ip>              - Public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Auto-detected if not provided."
+    echo "  --public-ip2 <ip>             - Second public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
+    echo "  --public-ip3 <ip>             - Third public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --master-password mypass123"
@@ -131,6 +133,8 @@ MAX_CAPACITY="1"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
 PUBLIC_IP=""  # Will be auto-detected if not provided
+PUBLIC_IP2=""  # Optional second IP
+PUBLIC_IP3=""  # Optional third IP
 
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
@@ -161,6 +165,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --public-ip)
             PUBLIC_IP="$2"
+            shift 2
+            ;;
+        --public-ip2)
+            PUBLIC_IP2="$2"
+            shift 2
+            ;;
+        --public-ip3)
+            PUBLIC_IP3="$2"
             shift 2
             ;;
         *)
@@ -306,6 +318,40 @@ build_parameters_array() {
     
     print_status "Using public IP: ${public_ip_cidr}"
     params+=("ParameterKey=AllowedPublicIP,ParameterValue=$public_ip_cidr")
+    
+    # Add second IP if provided
+    if [ -n "$PUBLIC_IP2" ]; then
+        local public_ip2_cidr=""
+        if echo "$PUBLIC_IP2" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            if echo "$PUBLIC_IP2" | grep -q '/'; then
+                public_ip2_cidr="$PUBLIC_IP2"
+            else
+                public_ip2_cidr="${PUBLIC_IP2}/32"
+            fi
+            print_status "Using second public IP: ${public_ip2_cidr}"
+            params+=("ParameterKey=AllowedPublicIP2,ParameterValue=$public_ip2_cidr")
+        else
+            print_error "Invalid IP address format for IP2: $PUBLIC_IP2"
+            return 1
+        fi
+    fi
+    
+    # Add third IP if provided
+    if [ -n "$PUBLIC_IP3" ]; then
+        local public_ip3_cidr=""
+        if echo "$PUBLIC_IP3" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            if echo "$PUBLIC_IP3" | grep -q '/'; then
+                public_ip3_cidr="$PUBLIC_IP3"
+            else
+                public_ip3_cidr="${PUBLIC_IP3}/32"
+            fi
+            print_status "Using third public IP: ${public_ip3_cidr}"
+            params+=("ParameterKey=AllowedPublicIP3,ParameterValue=$public_ip3_cidr")
+        else
+            print_error "Invalid IP address format for IP3: $PUBLIC_IP3"
+            return 1
+        fi
+    fi
     
     # Print array elements, one per line (for use with array expansion)
     printf '%s\n' "${params[@]}"
@@ -607,6 +653,38 @@ deploy_stack() {
     
     print_status "Using public IP: ${public_ip_cidr}"
     
+    # Process second IP if provided
+    local public_ip2_cidr=""
+    if [ -n "$PUBLIC_IP2" ]; then
+        if echo "$PUBLIC_IP2" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            if echo "$PUBLIC_IP2" | grep -q '/'; then
+                public_ip2_cidr="$PUBLIC_IP2"
+            else
+                public_ip2_cidr="${PUBLIC_IP2}/32"
+            fi
+            print_status "Using second public IP: ${public_ip2_cidr}"
+        else
+            print_error "Invalid IP address format for IP2: $PUBLIC_IP2"
+            exit 1
+        fi
+    fi
+    
+    # Process third IP if provided
+    local public_ip3_cidr=""
+    if [ -n "$PUBLIC_IP3" ]; then
+        if echo "$PUBLIC_IP3" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            if echo "$PUBLIC_IP3" | grep -q '/'; then
+                public_ip3_cidr="$PUBLIC_IP3"
+            else
+                public_ip3_cidr="${PUBLIC_IP3}/32"
+            fi
+            print_status "Using third public IP: ${public_ip3_cidr}"
+        else
+            print_error "Invalid IP address format for IP3: $PUBLIC_IP3"
+            exit 1
+        fi
+    fi
+    
     # Create a temporary parameters file to avoid issues with comma-separated List values
     local param_file=$(mktemp)
     trap "rm -f $param_file" EXIT
@@ -639,6 +717,14 @@ deploy_stack() {
         printf '  {\n    "ParameterKey": "MaxCapacity",\n    "ParameterValue": "%s"\n  }' "$MAX_CAPACITY"
         echo ","
         printf '  {\n    "ParameterKey": "AllowedPublicIP",\n    "ParameterValue": "%s"\n  }' "$public_ip_cidr"
+        if [ -n "$public_ip2_cidr" ]; then
+            echo ","
+            printf '  {\n    "ParameterKey": "AllowedPublicIP2",\n    "ParameterValue": "%s"\n  }' "$public_ip2_cidr"
+        fi
+        if [ -n "$public_ip3_cidr" ]; then
+            echo ","
+            printf '  {\n    "ParameterKey": "AllowedPublicIP3",\n    "ParameterValue": "%s"\n  }' "$public_ip3_cidr"
+        fi
         echo ""
         echo "]"
     } > "$param_file"
