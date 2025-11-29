@@ -12,6 +12,7 @@ class EvalSample:
     input: str
     human_reference_answer: str
     human_reference_citation: Optional[str]
+    source: Optional[str]  # "human" or "ai" - indicates source of question and reference answer
     metadata: Dict[str, Any]
 
 
@@ -50,6 +51,7 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
     q_col = data_cfg["eval_question_column"]
     ref_col = data_cfg["eval_reference_column"]
     citation_col = data_cfg.get("eval_citation_column")
+    source_col = data_cfg.get("eval_source_column")
     
     samples = []
     for idx, row in df.iterrows():
@@ -57,10 +59,11 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
         input_text = row[q_col]
         reference_answer = row[ref_col]
         citation = row[citation_col] if citation_col and citation_col in df.columns else None
+        source = row[source_col] if source_col and source_col in df.columns else None
         
         # everything else goes into metadata
         metadata = row.to_dict()
-        for key in [id_col, q_col, ref_col, citation_col]:
+        for key in [id_col, q_col, ref_col, citation_col, source_col]:
             if key and key in metadata:
                 metadata.pop(key, None)
         
@@ -69,6 +72,7 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
             input=input_text,
             human_reference_answer=reference_answer,
             human_reference_citation=citation,
+            source=source,
             metadata=metadata,
         ))
     
