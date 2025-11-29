@@ -149,6 +149,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         conversation_id=req.conversation_id,
         answer=answer,
         sources=sources,
+        config=rag_chat_config,
     )
 
     return {
