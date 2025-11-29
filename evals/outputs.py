@@ -37,16 +37,32 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.csv"
     
-    # Create mapping from sample_id to question, AI answer, and reference answer
+    # Create mapping from sample_id to question, AI answer, reference answer, and rag_config
     sample_data = {}
     for sample, output in zip(samples, model_outputs):
+        # Extract config from raw response, serialize to JSON string
+        raw = output.get("raw", {})
+        rag_config = raw.get("config")
+        rag_config_str = json.dumps(rag_config) if rag_config is not None else ""
+        
+        # Extract generation model ID from rag_config
+        generation_model = ""
+        if rag_config and isinstance(rag_config, dict):
+            generation = rag_config.get("generation", {})
+            if isinstance(generation, dict):
+                model = generation.get("model", {})
+                if isinstance(model, dict):
+                    generation_model = model.get("id", "")
+        
         sample_data[sample.sample_id] = {
             "question": sample.input,
+            "rag_config": rag_config_str,
+            "generation_model": generation_model,
             "ai_answer": output.get("answer", ""),
             "reference_answer": sample.human_reference_answer,
         }
     
-    fieldnames = ["id", "metric", "question", "ai_answer", "reference_answer", "score", "explanation"]
+    fieldnames = ["id", "metric", "question", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -55,6 +71,8 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
             sample_id = r["id"]
             sample_info = sample_data.get(sample_id, {
                 "question": "",
+                "rag_config": "",
+                "generation_model": "",
                 "ai_answer": "",
                 "reference_answer": "",
             })
@@ -62,6 +80,8 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "id": sample_id,
                 "metric": r["metric"],
                 "question": sample_info["question"],
+                "rag_config": sample_info["rag_config"],
+                "generation_model": sample_info["generation_model"],
                 "ai_answer": sample_info["ai_answer"],
                 "reference_answer": sample_info["reference_answer"],
                 "score": r["score"],
