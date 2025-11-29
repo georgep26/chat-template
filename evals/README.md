@@ -66,13 +66,13 @@ validation_question_id,source,validation_question,answer,citation
 
 ```bash
 # Basic evaluation with all output formats
-python -m evals.cli --config evals/evals_config.yaml --output-type html,json,csv
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type html,json,csv
 
 # Run with judge validation
-python -m evals.cli --config evals/evals_config.yaml --output-type html --run-judge-validation
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type html --run-judge-validation
 
 # Override output types via CLI
-python -m evals.cli --config evals/evals_config.yaml --output-type json
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
 ```
 
 ## Configuration Reference
@@ -268,13 +268,12 @@ Run with `--run-judge-validation` flag to include judge validation results in th
 
 The framework consists of:
 
-- **cli.py**: Command-line interface and argument parsing
+- **evals_pipeline.py**: Core orchestration logic, command-line interface and argument parsing
 - **data.py**: CSV dataset loading and sample extraction
 - **client.py**: Async RAG clients (local and Lambda)
 - **metrics_base.py**: Abstract base class for metrics
 - **metrics_ragas.py**: RAGAS metric collection wrapper
 - **metrics_custom.py**: Custom correctness metrics
-- **evals_pipeline.py**: Core orchestration logic
 - **judge_validation.py**: Judge vs human comparison
 - **outputs.py**: Output writers (JSON/CSV/HTML/S3)
 - **stats_utils.py**: Statistical aggregation and confidence intervals
@@ -489,7 +488,7 @@ The framework can be integrated into CI/CD pipelines:
 
 ```bash
 # Run evaluation and check thresholds
-python -m evals.cli --config evals/evals_config.yaml --output-type json
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
 # Parse summary.json and fail if metrics below threshold
 ```
 
@@ -507,7 +506,7 @@ python -m evals.cli --config evals/evals_config.yaml --output-type json
 Set environment variables for detailed logging:
 ```bash
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-python -m evals.cli --config evals/evals_config.yaml --output-type json
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
 ```
 
 ## Notes
