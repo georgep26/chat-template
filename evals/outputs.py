@@ -56,13 +56,14 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
         
         sample_data[sample.sample_id] = {
             "input_prompt": sample.input,
+            "source": sample.source or "",
             "rag_config": rag_config_str,
             "generation_model": generation_model,
             "ai_answer": output.get("answer", ""),
             "reference_answer": sample.human_reference_answer,
         }
     
-    fieldnames = ["id", "metric", "input_prompt", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation"]
+    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -71,6 +72,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
             sample_id = r["id"]
             sample_info = sample_data.get(sample_id, {
                 "input_prompt": "",
+                "source": "",
                 "rag_config": "",
                 "generation_model": "",
                 "ai_answer": "",
@@ -80,6 +82,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "id": sample_id,
                 "metric": r["metric"],
                 "input_prompt": sample_info["input_prompt"],
+                "source": sample_info["source"],
                 "rag_config": sample_info["rag_config"],
                 "generation_model": sample_info["generation_model"],
                 "ai_answer": sample_info["ai_answer"],
