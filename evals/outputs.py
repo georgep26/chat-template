@@ -63,7 +63,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
             "reference_answer": sample.human_reference_answer,
         }
     
-    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation"]
+    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation", "human_score", "human_explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -89,6 +89,8 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "reference_answer": sample_info["reference_answer"],
                 "score": r["score"],
                 "explanation": r.get("extra", {}).get("explanation", ""),
+                "human_score": "",
+                "human_explanation": "",
             })
     
     return path
