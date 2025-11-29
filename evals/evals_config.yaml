@@ -1,5 +1,5 @@
 run: # Configuration for a particular evaluation run
-  evaluation_run_name: "baseline_eval"
+  evaluation_run_name: "human_generated_ragas_nova_micro"
   mode: "local"                   # "local" or "lambda"
   max_concurrent_async_tasks: 20
   persist_rag_outputs: true
@@ -10,44 +10,45 @@ rag_app:
 
 
 data:
-  eval_csv_path: "data/validation_questions_sample.csv"
+  eval_csv_path: "data/human_generated_validation_questions.csv"
   eval_id_column: "validation_question_id"
   eval_question_column: "validation_question"
   eval_reference_column: "answer"
   eval_citation_column: "citation"
+  eval_source_column: "source"
   # optional extra columns auto-loaded into metadata
 
 metrics:
   ragas:
-    enabled: false
+    enabled: true
     metric_names: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
     judge_model:
       provider: "bedrock" # E.g. "openai" or "bedrock"
-      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"  
+      model: "amazon.nova-micro-v1:0"  
       region_name: "us-east-1"
   binary_correctness:
     enabled: true
     judge_model:
       provider: "bedrock"  # E.g. "openai" or "bedrock"
-      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"  
+      model: "amazon.nova-micro-v1:0"  
       region_name: "us-east-1"
   atomic_correctness:
     enabled: false
     judge_model:
       provider: "bedrock"
-      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      model: "amazon.nova-micro-v1:0"
       region_name: "us-east-1"
   context_relevance:
     enabled: false
     judge_model:
       provider: "bedrock"
-      model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+      model: "amazon.nova-micro-v1:0"
       region_name: "us-east-1"
 
 llm:
   default:
     provider: "bedrock"            # "openai" or "bedrock"
-    model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    model: "amazon.nova-micro-v1:0"
     region_name: "us-east-1"
 
 outputs:
@@ -58,13 +59,4 @@ outputs:
     enabled: false
     s3_uri: "s3://my-eval-bucket/rag-evals/irc/"
     # Uploads are base_dir/experiment_name/{files} -> s3_uri/experiment_name/...
-
-judge_validation:
-  enabled: true
-  csv_path: "data/judge_validation_samples.csv"
-  id_column: "id"
-  question_column: "question"
-  reference_column: "reference_answer"
-  model_answer_column: "model_answer"
-  human_label_column: "human_label"
 
