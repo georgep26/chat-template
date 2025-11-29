@@ -274,6 +274,168 @@ The framework adapts between evaluation format and RAG Lambda format:
 - Lambda returns `ChatResponse` with `answer` and `sources` (each with `snippet`)
 - Framework extracts `snippet` from each `Source` to build `contexts` list for RAGAS
 
+## Supported Metrics
+
+Below is an outlines of the metrics that are supported by the framework.
+
+### Metric Overview
+
+| Metric | Category | Purpose | Score Range |
+|--------|----------|---------|-------------|
+| **Faithfulness** | RAGAS | Measures if answer claims are supported by context | 0.0 - 1.0 |
+| **Answer Relevancy** | RAGAS | Evaluates how well the answer addresses the question | 0.0 - 1.0 |
+| **Context Precision** | RAGAS | Assesses proportion of relevant retrieved context | 0.0 - 1.0 |
+| **Context Recall** | RAGAS | Measures completeness of retrieved relevant information | 0.0 - 1.0 |
+| **Binary Correctness** | Custom | Binary (0/1) correctness score vs reference answer | 0.0 or 1.0 |
+
+### RAGAS Metrics
+
+RAGAS metrics use LLM-as-a-judge to evaluate RAG systems without requiring ground truth annotations for all aspects. All RAGAS metrics are implemented using the [RAGAS library](https://github.com/explodinggradients/ragas) and require a configured judge model (LLM).
+
+#### Faithfulness
+
+**Purpose**: Measures the factual accuracy and groundedness of the generated answer. This is the primary anti-hallucination metric for RAG systems.
+
+**Calculation**: 
+1. The LLM judge extracts all factual claims from the generated answer
+2. For each claim, the judge determines if it is supported by the retrieved context
+3. The score is calculated as: `(number of supported claims) / (total number of claims)`
+4. If no claims can be extracted or verified, the score defaults based on the judge's assessment
+
+**Inputs Required**:
+- `user_input`: The question/query
+- `response`: The generated answer
+- `retrieved_contexts`: List of context strings retrieved by the RAG system
+
+**Interpretation**:
+- **1.0**: All claims in the answer are fully supported by the context
+- **0.5**: Some claims are supported, others are not
+- **0.0**: No claims are supported by the context (potential hallucination)
+
+**Reference**: [RAGAS Faithfulness Documentation](https://docs.ragas.io/en/stable/references/metrics/#faithfulness)
+
+#### Answer Relevancy
+
+**Purpose**: Evaluates how relevant and on-topic the generated answer is to the user's question.
+
+**Calculation**:
+1. The LLM judge generates a set of questions that the answer should address
+2. The judge evaluates how well the generated answer addresses these questions
+3. The score is based on the semantic alignment between the answer and the expected information needs
+
+**Inputs Required**:
+- `user_input`: The question/query
+- `response`: The generated answer
+
+**Interpretation**:
+- **1.0**: The answer perfectly addresses all aspects of the question
+- **0.5**: The answer partially addresses the question
+- **0.0**: The answer is not relevant to the question
+
+**Reference**: [RAGAS Answer Relevancy Documentation](https://docs.ragas.io/en/stable/references/metrics/#answer-relevancy)
+
+#### Context Precision
+
+**Purpose**: Measures the precision of the retrieval component by assessing what proportion of retrieved context is relevant to the query.
+
+**Calculation**:
+1. The LLM judge evaluates each retrieved context chunk for relevance to the query
+2. The score is calculated as: `(number of relevant chunks) / (total number of retrieved chunks)`
+3. This metric helps identify if the retriever is returning too much irrelevant information
+
+**Inputs Required**:
+- `user_input`: The question/query
+- `retrieved_contexts`: List of context strings retrieved by the RAG system
+- `reference`: Ground truth answer (used to help determine relevance)
+
+**Interpretation**:
+- **1.0**: All retrieved chunks are relevant to the query
+- **0.5**: Half of the retrieved chunks are relevant
+- **0.0**: None of the retrieved chunks are relevant
+
+**Reference**: [RAGAS Context Precision Documentation](https://docs.ragas.io/en/stable/references/metrics/#context-precision)
+
+#### Context Recall
+
+**Purpose**: Measures the completeness of retrieval by assessing whether all necessary information to answer the question was retrieved.
+
+**Calculation**:
+1. The LLM judge identifies all information needed to answer the question (based on the ground truth reference)
+2. The judge determines what proportion of this necessary information is present in the retrieved context
+3. The score reflects how much of the required information was successfully retrieved
+
+**Inputs Required**:
+- `user_input`: The question/query
+- `retrieved_contexts`: List of context strings retrieved by the RAG system
+- `reference`: Ground truth answer (used to determine what information is necessary)
+
+**Interpretation**:
+- **1.0**: All necessary information is present in the retrieved context
+- **0.5**: Some necessary information is missing
+- **0.0**: Critical information is missing from the retrieved context
+
+**Reference**: [RAGAS Context Recall Documentation](https://docs.ragas.io/en/stable/references/metrics/#context-recall)
+
+**Note**: Context Precision and Context Recall require a ground truth reference answer to calculate. They are most useful when you have labeled evaluation data.
+
+### Custom Metrics
+
+#### Binary Correctness
+
+**Purpose**: Provides a simple binary (correct/incorrect) assessment of the generated answer compared to a reference answer.
+
+**Calculation**:
+1. The LLM judge compares the generated answer to the reference answer
+2. The judge evaluates factual correctness and completeness
+3. Returns a binary score: 1 if correct, 0 if incorrect
+4. Includes an explanation of the judgment
+
+**Inputs Required**:
+- Question/query
+- Reference answer (ground truth)
+- Generated answer
+
+**Interpretation**:
+- **1.0**: The answer is factually correct and addresses the question
+- **0.0**: The answer is incorrect, incomplete, or does not address the question
+
+**Configuration**: Requires a `judge_model` configuration in the metrics section. The judge model should be a strong LLM (e.g., GPT-4, Claude) for reliable scoring.
+
+**Example Configuration**:
+```yaml
+metrics:
+  binary_correctness:
+    enabled: true
+    judge_model:
+      provider: "openai"
+      model: "gpt-4o-mini"
+      openai_api_key_env: "OPENAI_API_KEY"
+```
+
+### Metric Selection Guide
+
+**For Retrieval Evaluation**:
+- Use **Context Precision** and **Context Recall** to evaluate retrieval quality
+- These metrics require ground truth reference answers
+
+**For Generation Evaluation**:
+- Use **Faithfulness** to detect hallucinations and ensure groundedness
+- Use **Answer Relevancy** to ensure answers address the question
+- Use **Binary Correctness** for simple pass/fail evaluation against references
+
+**Recommended Metric Sets**:
+- **Full Evaluation**: `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`
+- **No Ground Truth Available**: `faithfulness`, `answer_relevancy`
+- **Simple Correctness Check**: `binary_correctness`
+
+### Additional Resources
+
+- [RAGAS Documentation](https://docs.ragas.io/en/stable/)
+- [RAGAS Metrics Reference](https://docs.ragas.io/en/stable/references/metrics/)
+- [RAGAS GitHub Repository](https://github.com/explodinggradients/ragas)
+- [RAGAS Paper: "RAGAS: Automated Evaluation of Retrieval Augmented Generation"](https://arxiv.org/abs/2309.15217)
+
+
 ## Notes on Evaluation Techniques
 
 ### What to Measure
