@@ -22,7 +22,6 @@ from outputs import (
     write_csv_results,
     write_html_report,
 )
-from judge_validation import run_judge_validation
 
 
 def build_metrics(config: dict):
@@ -132,7 +131,7 @@ def save_rag_results(samples, results_by_id: dict, output_dir: Path):
     return rag_results_path
 
 
-async def run_evaluation(config: dict, run_judge_validation: bool = False):
+async def run_evaluation(config: dict):
     run_cfg = config["run"]
     outputs_cfg = config["outputs"]
     evaluation_run_name = run_cfg.get("evaluation_run_name", "evaluation_run_default")
@@ -209,14 +208,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         "mode": run_cfg.get("mode", "unknown"),
     }
     
-    # 8) Optional judge validation
-    judge_val_result = None
-    if run_judge_validation:
-        judge_val_result = await run_judge_validation(config)
-        if judge_val_result:
-            summary["judge_validation"] = judge_val_result
-    
-    # 9) Outputs
+    # 8) Outputs
     generated_paths = []
     if "json" in outputs_cfg["types"]:
         p = write_json_summary(summary, base_dir, evaluation_run_name)
@@ -230,7 +222,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         p = write_html_report(summary, base_dir, evaluation_run_name)
         generated_paths.append(p)
     
-    # 10) Optional S3 upload
+    # 9) Optional S3 upload
     s3_cfg = outputs_cfg.get("s3", {})
     if s3_cfg.get("enabled", False):
         base_s3_uri = s3_cfg["s3_uri"].rstrip('/')
@@ -239,7 +231,7 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         upload_to_s3(s3_uri, experiment_dir)
 
 
-def main(eval_config: str, output_type: Optional[str], run_judge_validation: bool):
+def main(eval_config: str, output_type: Optional[str]):
     config = read_config(eval_config)
     
     # Apply defaults (previously in load_config)
@@ -254,12 +246,7 @@ def main(eval_config: str, output_type: Optional[str], run_judge_validation: boo
             s.strip() for s in output_type.split(",") if s.strip()
         ]
     
-    asyncio.run(
-        run_evaluation(
-            config=config,
-            run_judge_validation=run_judge_validation,
-        )
-    )
+    asyncio.run(run_evaluation(config=config))
 
 
 if __name__ == "__main__":
@@ -277,11 +264,6 @@ if __name__ == "__main__":
         help="Comma-separated list of outputs to generate (html,json,csv). "
              "Overrides evals_config.outputs.types if provided."
     )
-    parser.add_argument(
-        "--run-judge-validation",
-        action="store_true",
-        help="If set, run judge-validation in addition to main eval."
-    )
     args = parser.parse_args()
-    main(args.config, args.output_type, args.run_judge_validation)
+    main(args.config, args.output_type)
 

@@ -1,0 +1,13 @@
+judge_validation:
+  csv_path: "data/judge_validation_samples.csv"
+  id_column: "id"
+  question_column: "question"
+  reference_column: "reference_answer"
+  model_answer_column: "model_answer"
+  human_label_column: "human_label"
+
+judge_model:
+  provider: "bedrock"  # E.g. "openai" or "bedrock"
+  model: "amazon.nova-micro-v1:0"
+  region_name: "us-east-1"
+

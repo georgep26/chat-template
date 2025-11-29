@@ -1,24 +1,27 @@
 # evals/judge_validation.py
 
+import argparse
 import json
 import asyncio
 import numpy as np
 from data import load_judge_validation_dataframe, extract_judge_validation_samples
 from src.utils.llm_factory import create_llm
+from src.utils.config import read_config
 
 
 async def run_judge_validation(config: dict):
-    if not config.get("judge_validation", {}).get("enabled", False):
-        return None
+    """Run judge validation evaluation."""
+    jcfg = config["judge_validation"]
     
+    # Get judge model configuration
+    judge_llm_cfg = config.get("judge_model")
+    if not judge_llm_cfg:
+        raise ValueError("judge_validation requires judge_model to be configured")
+    llm = create_llm(judge_llm_cfg)
+    
+    # Load data
     df = load_judge_validation_dataframe(config)
     samples = extract_judge_validation_samples(df, config)
-    jcfg = config["judge_validation"]
-    # Use binary_correctness judge_model for judge validation
-    judge_llm_cfg = config["metrics"].get("binary_correctness", {}).get("judge_model")
-    if not judge_llm_cfg:
-        raise ValueError("judge_validation requires binary_correctness.judge_model to be configured")
-    llm = create_llm(judge_llm_cfg)
     
     # Get model answers from the dataframe
     model_answer_col = jcfg["model_answer_column"]
@@ -70,9 +73,48 @@ Return JSON: {{ "score": 0 or 1, "explanation": "short explanation" }}
     else:
         acc = None
     
-    return {
+    result = {
         "judge_model": judge_llm_cfg.get("model", "unknown"),
         "n_samples": int(len(samples)),
         "accuracy_vs_human": acc,
     }
+    
+    # Print results
+    print("\n" + "="*60)
+    print("Judge Validation Results")
+    print("="*60)
+    print(f"Judge Model: {result['judge_model']}")
+    print(f"Number of Samples: {result['n_samples']}")
+    if result['accuracy_vs_human'] is not None:
+        print(f"Accuracy vs Human: {result['accuracy_vs_human']:.4f}")
+    else:
+        print("Accuracy vs Human: N/A (no human scores available)")
+    print("="*60 + "\n")
+    
+    return result
+
+
+def main(config_path: str):
+    """Main entry point for judge validation script."""
+    config = read_config(config_path)
+    
+    # Validate required config sections
+    if "judge_validation" not in config:
+        raise ValueError("Config must contain 'judge_validation' section")
+    if "judge_model" not in config:
+        raise ValueError("Config must contain 'judge_model' section")
+    
+    asyncio.run(run_judge_validation(config))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Judge validation evaluation runner")
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to judge_validation.yaml"
+    )
+    args = parser.parse_args()
+    main(args.config)
 
