@@ -1,5 +1,6 @@
 # evals/evals_pipeline.py
 
+import argparse
 import asyncio
 import json
 import csv
@@ -10,6 +11,7 @@ from collections import defaultdict
 from data import load_eval_dataframe, extract_eval_samples
 from client import build_rag_client
 from src.utils.llm_factory import create_llm
+from src.utils.config import read_config
 from src.utils.aws_utils import upload_to_s3
 from metrics_ragas import RagasMetricCollection
 from metrics_custom import BinaryCorrectnessMetric
@@ -235,4 +237,51 @@ async def run_evaluation(config: dict, run_judge_validation: bool = False):
         s3_uri = f"{base_s3_uri}/{evaluation_run_name}/"
         experiment_dir = base_dir / evaluation_run_name
         upload_to_s3(s3_uri, experiment_dir)
+
+
+def main(eval_config: str, output_type: Optional[str], run_judge_validation: bool):
+    config = read_config(eval_config)
+    
+    # Apply defaults (previously in load_config)
+    config.setdefault("outputs", {})
+    config["outputs"].setdefault("types", ["html", "json", "csv"])
+    config.setdefault("run", {})
+    config["run"].setdefault("max_concurrent_async_tasks", 10)
+
+    # CLI override for output types
+    if output_type:
+        config["outputs"]["types"] = [
+            s.strip() for s in output_type.split(",") if s.strip()
+        ]
+    
+    asyncio.run(
+        run_evaluation(
+            config=config,
+            run_judge_validation=run_judge_validation,
+        )
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="RAG evaluation runner")
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to evals_config.yaml"
+    )
+    parser.add_argument(
+        "--output-type",
+        type=str,
+        default=None,
+        help="Comma-separated list of outputs to generate (html,json,csv). "
+             "Overrides evals_config.outputs.types if provided."
+    )
+    parser.add_argument(
+        "--run-judge-validation",
+        action="store_true",
+        help="If set, run judge-validation in addition to main eval."
+    )
+    args = parser.parse_args()
+    main(args.config, args.output_type, args.run_judge_validation)
 
