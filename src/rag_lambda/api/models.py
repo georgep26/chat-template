@@ -31,4 +31,5 @@ class ChatResponse(BaseModel):
     answer: str
     sources: List[Source] = []
     trace_id: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
 
