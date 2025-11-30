@@ -33,7 +33,7 @@ metrics:
       model: "amazon.nova-micro-v1:0"  
       region_name: "us-east-1"
   atomic_correctness:
-    enabled: false
+    enabled: true
     judge_model:
       provider: "bedrock"
       model: "amazon.nova-micro-v1:0"
