@@ -14,7 +14,7 @@ from src.utils.llm_factory import create_llm
 from src.utils.config import read_config
 from src.utils.aws_utils import upload_to_s3
 from metrics_ragas import RagasMetricCollection
-from metrics_custom import BinaryCorrectnessMetric
+from metrics_custom import BinaryCorrectnessMetric, AtomicCorrectnessMetric
 from metrics_base import BaseMetric
 from outputs import (
     build_aggregate_summary,
@@ -58,9 +58,7 @@ def build_metrics(config: dict):
         if "judge_model" not in atomic_corr_cfg:
             raise ValueError("atomic_correctness metric requires a judge_model configuration")
         judge_llm = create_llm(atomic_corr_cfg["judge_model"])
-        # TODO: Create AtomicCorrectnessMetric when implemented
-        # from .metrics_custom import AtomicCorrectnessMetric
-        # metrics.append(AtomicCorrectnessMetric(judge_model=judge_llm))
+        metrics.append(AtomicCorrectnessMetric(judge_model=judge_llm))
     
     # Context relevance metric
     ctx_rel_cfg = mcfg.get("context_relevance", {})
