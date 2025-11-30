@@ -21,7 +21,7 @@ class BaseMetric(ABC):
         outputs: list of dicts (answer, contexts, raw)
         
         Returns: list of dicts:
-          { "id": sample_id, "metric": self.name, "score": float, "extra": {...} }
+          { "id": sample_id, "metric": self.name, "score": float, "ai_evaluation_explanation": {...} }
         """
         ...
 
