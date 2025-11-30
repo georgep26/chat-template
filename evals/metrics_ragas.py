@@ -66,7 +66,7 @@ class RagasMetricCollection(BaseMetric):
                     "id": sample.sample_id,
                     "metric": metric_name,
                     "score": float(score),
-                    "extra": {},
+                    "ai_evaluation_explanation": {},
                 })
         
         return results

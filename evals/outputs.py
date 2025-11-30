@@ -10,7 +10,7 @@ from stats_utils import aggregate_metric
 def build_aggregate_summary(per_sample_results):
     """
     per_sample_results: list of dicts:
-      { "id", "metric", "score", "extra" }
+      { "id", "metric", "score", "ai_evaluation_explanation" }
     """
     scores_by_metric = defaultdict(list)
     for r in per_sample_results:
@@ -63,7 +63,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
             "reference_answer": sample.human_reference_answer,
         }
     
-    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "score", "explanation", "human_judge_evaluation", "human_judge_evaluation_explanation"]
+    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "ai_evaluation_score", "ai_evaluation_explanation", "human_judge_evaluation_score", "human_judge_evaluation_explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -87,9 +87,9 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "generation_model": sample_info["generation_model"],
                 "ai_answer": sample_info["ai_answer"],
                 "reference_answer": sample_info["reference_answer"],
-                "score": r["score"],
-                "explanation": r.get("extra", {}).get("explanation", ""),
-                "human_judge_evaluation": "",
+                "ai_evaluation_score": r["score"],
+                "ai_evaluation_explanation": json.dumps(r.get("ai_evaluation_explanation", {})),
+                "human_judge_evaluation_score": "",
                 "human_judge_evaluation_explanation": "",
             })
     
