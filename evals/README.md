@@ -47,6 +47,7 @@ Create a CSV file with evaluation questions and reference answers. The framework
 - ID column (configurable via `data.eval_id_column`, default: `validation_question_id`)
 - Citation column (configurable via `data.eval_citation_column`, default: `citation`)
 - Source column (configurable via `data.eval_source_column`, default: `source`)
+- Human Validated column (configurable via `data.eval_human_validated_column`, default: `human_validated`): Boolean column indicating human validation status
 
 **Source Column:**
 The `source` column indicates the origin of the question and reference answer. Common values are:
@@ -55,11 +56,23 @@ The `source` column indicates the origin of the question and reference answer. C
 
 When `source` is `"human"`, it means the entire evaluation sample (question and reference answer) was created by a human evaluator, which is useful for tracking the provenance of evaluation data.
 
+**Human Validated Column:**
+The `human_validated` column is a boolean column that indicates whether a human has validated the accuracy of the evaluation sample. The framework automatically sets `human_validated` to `True` for any sample where `source` is `"human"`, since we assume that human-created questions, answers, and citations are inherently validated by their creator.
+
+For AI-generated samples (`source` is `"ai"`), you can explicitly set `human_validated` to `true` in the CSV to indicate that a human has reviewed and confirmed the accuracy of the AI-generated question and answer. If `human_validated` is not provided or set to `false` for AI-generated samples, the framework will set it to `False`.
+
+**Logic Summary:**
+- If `source` is `"human"`: `human_validated` is automatically set to `True`
+- If `source` is `"ai"` and `human_validated` is `true` in CSV: `human_validated` is `True` (AI-generated but human-confirmed)
+- If `source` is `"ai"` and `human_validated` is missing or `false`: `human_validated` is `False`
+
 Example CSV structure:
 ```csv
-validation_question_id,source,validation_question,answer,citation
-1,human,"Does this code apply to lodging houses?","Yes, the code applies to owner-occupied lodging houses with five or fewer guestrooms.","Section R101.2 explains that..."
-2,human,"I am building a 5 ft tall fence. Do I need a permit?","No, a 5 ft tall fence does not require a permit.","Section R105.2 explains that..."
+validation_question_id,source,human_validated,validation_question,answer,citation
+1,human,true,"Does this code apply to lodging houses?","Yes, the code applies to owner-occupied lodging houses with five or fewer guestrooms.","Section R101.2 explains that..."
+2,human,,"I am building a 5 ft tall fence. Do I need a permit?","No, a 5 ft tall fence does not require a permit.","Section R105.2 explains that..."
+3,ai,true,"What is the minimum ceiling height?","The minimum ceiling height is 7 feet.","Section R305.1 specifies..."
+4,ai,false,"What materials are allowed?","Various materials are permitted.","Section R301.2 lists..."
 ```
 
 ### 4. Run Evaluation
@@ -110,6 +123,7 @@ data:
   eval_reference_column: "answer"
   eval_citation_column: "citation"  # Optional
   eval_source_column: "source"      # Optional: "human" or "ai" - indicates source of question and reference answer
+  eval_human_validated_column: "human_validated"  # Optional: column name for human validation status (defaults to "human_validated")
 ```
 
 **Column Descriptions:**
@@ -119,6 +133,7 @@ data:
 - `eval_reference_column`: Column name for the reference/ground truth answers
 - `eval_citation_column`: Column name for citations (optional)
 - `eval_source_column`: Column name for the source indicator (optional). When set to `"human"`, indicates that both the input question and reference answer were created by a human. Other values like `"ai"` indicate AI-generated samples.
+- `eval_human_validated_column`: Column name for boolean human validation status (optional, defaults to `"human_validated"`). If present in the CSV, indicates whether a human has validated the sample. Automatically set to `True` when `source` is `"human"`. For AI-generated samples, can be explicitly set to `true` to indicate human confirmation.
 
 Any additional columns in the CSV will be automatically loaded into the `metadata` field of each sample.
 
