@@ -54,6 +54,13 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 if isinstance(model, dict):
                     generation_model = model.get("id", "")
         
+        # Determine human_validated: True if source is "human", otherwise use value from sample
+        if sample.source and sample.source.lower() == "human":
+            human_validated = True
+        else:
+            # Use value from CSV if provided, otherwise False
+            human_validated = sample.human_validated if sample.human_validated is not None else False
+        
         sample_data[sample.sample_id] = {
             "input_prompt": sample.input,
             "source": sample.source or "",
@@ -61,9 +68,10 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
             "generation_model": generation_model,
             "ai_answer": output.get("answer", ""),
             "reference_answer": sample.human_reference_answer,
+            "human_validated": human_validated,
         }
     
-    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "ai_evaluation_score", "ai_evaluation_explanation", "human_judge_evaluation_score", "human_judge_evaluation_explanation"]
+    fieldnames = ["id", "metric", "input_prompt", "source", "rag_config", "generation_model", "ai_answer", "reference_answer", "human_validated", "ai_evaluation_score", "ai_evaluation_explanation", "human_judge_evaluation_score", "human_judge_evaluation_explanation"]
     
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -77,6 +85,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "generation_model": "",
                 "ai_answer": "",
                 "reference_answer": "",
+                "human_validated": False,
             })
             writer.writerow({
                 "id": sample_id,
@@ -87,6 +96,7 @@ def write_csv_results(per_sample_results, samples, model_outputs, base_dir: Path
                 "generation_model": sample_info["generation_model"],
                 "ai_answer": sample_info["ai_answer"],
                 "reference_answer": sample_info["reference_answer"],
+                "human_validated": sample_info["human_validated"],
                 "ai_evaluation_score": r["score"],
                 "ai_evaluation_explanation": json.dumps(r.get("ai_evaluation_explanation", {})),
                 "human_judge_evaluation_score": "",

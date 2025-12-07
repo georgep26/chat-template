@@ -13,6 +13,7 @@ class EvalSample:
     human_reference_answer: str
     human_reference_citation: Optional[str]
     source: Optional[str]  # "human" or "ai" - indicates source of question and reference answer
+    human_validated: Optional[bool]  # True if human has validated the sample (auto True if source is "human")
     metadata: Dict[str, Any]
 
 
@@ -52,6 +53,7 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
     ref_col = data_cfg["eval_reference_column"]
     citation_col = data_cfg.get("eval_citation_column")
     source_col = data_cfg.get("eval_source_column")
+    human_validated_col = data_cfg.get("eval_human_validated_column", "human_validated")  # Configurable, defaults to "human_validated"
     
     samples = []
     for idx, row in df.iterrows():
@@ -61,9 +63,22 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
         citation = row[citation_col] if citation_col and citation_col in df.columns else None
         source = row[source_col] if source_col and source_col in df.columns else None
         
+        # Extract human_validated if present in CSV
+        human_validated = None
+        if human_validated_col in df.columns:
+            val = row[human_validated_col]
+            if pd.notna(val):
+                # Handle boolean, string "true"/"false", or 1/0
+                if isinstance(val, bool):
+                    human_validated = val
+                elif isinstance(val, str):
+                    human_validated = val.lower() in ("true", "1", "yes")
+                else:
+                    human_validated = bool(val)
+        
         # everything else goes into metadata
         metadata = row.to_dict()
-        for key in [id_col, q_col, ref_col, citation_col, source_col]:
+        for key in [id_col, q_col, ref_col, citation_col, source_col, human_validated_col]:
             if key and key in metadata:
                 metadata.pop(key, None)
         
@@ -73,6 +88,7 @@ def extract_eval_samples(df: pd.DataFrame, config: dict) -> List[EvalSample]:
             human_reference_answer=reference_answer,
             human_reference_citation=citation,
             source=source,
+            human_validated=human_validated,
             metadata=metadata,
         ))
     

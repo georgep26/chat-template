@@ -16,6 +16,7 @@ data:
   eval_reference_column: "answer"
   eval_citation_column: "citation"
   eval_source_column: "source"
+  eval_human_validated_column: "human_validated"
   # optional extra columns auto-loaded into metadata
 
 metrics:
