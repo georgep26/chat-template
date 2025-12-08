@@ -10,6 +10,13 @@ on:
       - 'data/**'
       - 'evals/evals_config.yaml'
       - '.github/workflows/run-evals.yml'
+  workflow_dispatch:
+    inputs:
+      skip_branch_check:
+        description: 'Skip branch check (allow running from any branch)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   run-evals:
@@ -25,14 +32,37 @@ jobs:
       - name: Check if PR is from development branch
         id: check-branch
         run: |
-          PR_BRANCH="${{ github.head_ref }}"
-          if [ "$PR_BRANCH" != "development" ]; then
-            echo "PR is from branch '$PR_BRANCH', not 'development'. Skipping evaluation."
-            echo "skip=true" >> $GITHUB_OUTPUT
-            exit 0
+          # For manual runs, check the skip_branch_check input
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ "${{ inputs.skip_branch_check }}" == "true" ]; then
+              echo "Manual run with branch check skipped. Running evaluation."
+              echo "skip=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # For pull requests, check if PR is from development branch
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_BRANCH="${{ github.head_ref }}"
+            if [ "$PR_BRANCH" != "development" ]; then
+              echo "PR is from branch '$PR_BRANCH', not 'development'. Skipping evaluation."
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "PR is from 'development' branch. Running evaluation."
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "PR is from 'development' branch. Running evaluation."
-            echo "skip=false" >> $GITHUB_OUTPUT
+            # Manual run without skip flag - check current branch
+            CURRENT_BRANCH="${{ github.ref_name }}"
+            if [ "$CURRENT_BRANCH" != "development" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+              echo "Current branch '$CURRENT_BRANCH' is not 'development' or 'main'. Skipping evaluation."
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "Running evaluation on branch '$CURRENT_BRANCH'."
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Set up Miniconda
