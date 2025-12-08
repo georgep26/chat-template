@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy for accessing S3 buckets - Evaluation Results Upload'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  S3BucketName:
+    Type: String
+    Default: ''
+    Description: 'Optional: Specific S3 bucket name for evaluation results. If empty, uses pattern-based access.'
+  
+  S3BucketPattern:
+    Type: String
+    Default: '*eval*'
+    Description: 'Pattern for S3 bucket names (used if S3BucketName is empty)'
+
+Resources:
+  S3EvaluationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-s3-evaluation-policy'
+      Description: 'Policy for uploading evaluation results to S3'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3EvaluationUpload
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:PutObjectAcl
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !If
+                - HasSpecificBucket
+                - !Sub
+                  - 'arn:aws:s3:::${BucketName}/*'
+                  - BucketName: !Ref S3BucketName
+                - !Sub 'arn:aws:s3:::${S3BucketPattern}/*'
+              - !If
+                - HasSpecificBucket
+                - !Sub
+                  - 'arn:aws:s3:::${BucketName}'
+                  - BucketName: !Ref S3BucketName
+                - !Sub 'arn:aws:s3:::${S3BucketPattern}'
+
+Conditions:
+  HasSpecificBucket: !Not [!Equals [!Ref S3BucketName, '']]
+
+Outputs:
+  PolicyArn:
+    Description: 'ARN of the S3 evaluation policy'
+    Value: !Ref S3EvaluationPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-S3EvaluationPolicyArn'
+

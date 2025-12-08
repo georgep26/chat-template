@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy for accessing AWS Bedrock - LLM Inference for Evaluation'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+
+Resources:
+  BedrockEvaluationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-bedrock-evaluation-policy'
+      Description: 'Policy for invoking Bedrock models during evaluation (judge models)'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBedrockInvoke
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              # Allow access to all foundation models in the region
+              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/*'
+          - Sid: AllowKnowledgeBaseRetrieval
+            Effect: Allow
+            Action:
+              - bedrock:Retrieve
+              - bedrock:RetrieveAndGenerate
+            Resource:
+              # Allow access to knowledge bases (if needed for evaluation)
+              - !Sub 'arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*'
+
+Outputs:
+  PolicyArn:
+    Description: 'ARN of the Bedrock evaluation policy'
+    Value: !Ref BedrockEvaluationPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockEvaluationPolicyArn'
+
