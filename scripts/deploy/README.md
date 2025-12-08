@@ -71,6 +71,77 @@ Deploy AWS infrastructure using Terraform configurations.
 ./scripts/deploy/terraform.sh dev destroy
 ```
 
+### GitHub Actions IAM Role Deployment (`deploy_github_action_role.sh`)
+
+Deploy IAM policies and role for GitHub Actions OIDC authentication.
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_github_action_role.sh <environment> [action] [options]
+```
+
+**Environments:** `dev` (default), `staging`, `prod`
+
+**Actions:**
+- `deploy` (default) - Deploy the stacks (policies and role)
+- `update` - Update the stacks
+- `delete` - Delete the stacks
+- `validate` - Validate the templates
+- `status` - Show stack status
+
+**Required Options:**
+- `--aws-account-id <id>` - AWS Account ID (12 digits)
+- `--github-org <org>` - GitHub organization or username
+- `--github-repo <repo>` - GitHub repository name
+
+**Optional Options:**
+- `--github-branch <branch>` - GitHub branch name (default: development)
+- `--region <region>` - AWS region (default: us-east-1)
+- `--include-lambda-policy` - Include Lambda invoke policy (for lambda mode evaluations)
+- `--oidc-provider-arn <arn>` - ARN of existing OIDC provider (creates new if not provided)
+- `--project-name <name>` - Project name (default: chat-template)
+
+**Examples:**
+```bash
+# Deploy to development environment
+./scripts/deploy/deploy_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template
+
+# Deploy to staging with custom branch
+./scripts/deploy/deploy_github_action_role.sh staging deploy \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template \
+  --github-branch main
+
+# Deploy with Lambda policy (for lambda mode)
+./scripts/deploy/deploy_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template \
+  --include-lambda-policy
+
+# Check status
+./scripts/deploy/deploy_github_action_role.sh dev status
+
+# Validate templates
+./scripts/deploy/deploy_github_action_role.sh dev validate \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template
+```
+
+**Note:** This script deploys the following stacks in order:
+1. Secrets Manager Policy
+2. S3 Evaluation Policy
+3. Bedrock Evaluation Policy
+4. Lambda Invoke Policy (optional)
+5. GitHub Actions Role
+
+After deployment, add the role ARN to your GitHub repository secrets as `AWS_ROLE_ARN`.
+
 ## Prerequisites
 
 ### For CloudFormation:
@@ -81,6 +152,12 @@ Deploy AWS infrastructure using Terraform configurations.
 - Terraform installed
 - AWS CLI configured with appropriate credentials
 - AWS account with necessary permissions
+
+### For GitHub Actions Role:
+- AWS CLI installed and configured
+- Appropriate AWS permissions for CloudFormation and IAM operations
+- AWS Account ID
+- GitHub organization/repository information
 
 ## Features
 

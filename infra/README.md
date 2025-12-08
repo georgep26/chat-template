@@ -17,6 +17,16 @@ infra/
 │   ├── parameters.yaml # Parameter values for environments
 │   ├── deploy.sh       # Deployment script
 │   └── README.md       # CloudFormation documentation
+├── policies/           # IAM managed policies
+│   ├── secrets_manager_policy.yaml
+│   ├── s3_policy.yaml
+│   ├── lambda_policy.yaml
+│   ├── bedrock_policy.yaml
+│   └── README.md
+├── roles/              # IAM roles
+│   ├── lambda_execution_role.yaml
+│   ├── github_actions_role.yaml
+│   └── README.md
 └── README.md           # This file
 ```
 
@@ -151,3 +161,52 @@ All deployment scripts are centralized in the `scripts/deploy/` directory:
 - `README.md` - Detailed usage instructions for both scripts
 
 This provides a consistent interface for deploying infrastructure regardless of the chosen tool.
+
+## IAM Roles and Policies
+
+### Policies (`policies/`)
+
+Reusable IAM managed policies for common AWS service access patterns:
+- **Secrets Manager Policy**: Access to database credentials
+- **S3 Policy**: Upload evaluation results to S3
+- **Lambda Policy**: Invoke Lambda functions
+- **Bedrock Policy**: Invoke Bedrock models for evaluation
+
+See `policies/README.md` for detailed documentation.
+
+### Roles (`roles/`)
+
+IAM roles for specific use cases:
+- **Lambda Execution Role**: For RAG Lambda functions
+- **GitHub Actions Role**: For CI/CD pipelines using OIDC authentication
+
+See `roles/README.md` for detailed documentation.
+
+### GitHub Actions OIDC Setup
+
+To use OIDC authentication with GitHub Actions:
+
+1. **Deploy the policies** (in order):
+   ```bash
+   # Deploy each policy stack
+   aws cloudformation create-stack --stack-name chat-template-dev-secrets-manager-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-s3-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-bedrock-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-lambda-policy ...  # Optional
+   ```
+
+2. **Deploy the GitHub Actions role**:
+   ```bash
+   aws cloudformation create-stack --stack-name chat-template-dev-github-actions-role \
+     --template-body file://infra/roles/github_actions_role.yaml \
+     --parameters ... \
+     --capabilities CAPABILITY_NAMED_IAM
+   ```
+
+3. **Add the role ARN to GitHub secrets**:
+   - Go to repository Settings → Secrets and variables → Actions
+   - Add secret: `AWS_ROLE_ARN` with the role ARN from the stack output
+
+4. **Update the workflow** (already done in `.github/workflows/run-evals.yml`):
+   - Uses `role-to-assume` instead of access keys
+   - Requires `permissions: id-token: write`
