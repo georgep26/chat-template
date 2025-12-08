@@ -499,6 +499,92 @@ metrics:
 
 ## Integration with CI/CD
 
+The framework can be integrated into CI/CD pipelines using GitHub Actions with OIDC authentication.
+
+### GitHub Actions Setup
+
+The evaluation pipeline can run automatically on pull requests using GitHub Actions with AWS OIDC authentication. This eliminates the need to store AWS access keys as secrets.
+
+#### 1. Deploy the GitHub Actions IAM Role
+
+Deploy the IAM role and policies using the deployment script:
+
+```bash
+# Deploy to development environment
+./scripts/deploy/deploy_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+
+# Deploy with Lambda policy (if running evaluations in lambda mode)
+./scripts/deploy/deploy_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template \
+  --include-lambda-policy
+
+# Deploy to other environments
+./scripts/deploy/deploy_github_action_role.sh staging deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+```
+
+**Required Parameters:**
+- `--aws-account-id`: Your AWS Account ID (12 digits)
+- `--github-org`: Your GitHub organization or username
+- `--github-repo`: Your GitHub repository name
+
+**Optional Parameters:**
+- `--github-source-branch`: Source branch for PRs (default: `development`)
+- `--github-target-branch`: Target branch for PRs (default: `main`)
+- `--include-lambda-policy`: Include Lambda invoke policy (for lambda mode evaluations)
+- `--region`: AWS region (default: `us-east-1`)
+- `--oidc-provider-arn`: ARN of existing OIDC provider (creates new if not provided)
+
+The script will:
+1. Deploy IAM policies (Secrets Manager, S3, Bedrock, and optionally Lambda)
+2. Deploy the GitHub Actions IAM role with OIDC trust relationship
+3. Print the role ARN at the end for use in GitHub secrets
+
+#### 2. Add Role ARN to GitHub Secrets
+
+After deployment, add the role ARN to your GitHub repository secrets:
+
+1. Go to your GitHub repository
+2. Navigate to **Settings** → **Secrets and variables** → **Actions**
+3. Click **New repository secret**
+4. Add a secret with:
+   - **Name**: `AWS_ROLE_ARN`
+   - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-github-actions-role`)
+
+The GitHub Actions workflow (`.github/workflows/run-evals.yml`) is already configured to use this secret for OIDC authentication.
+
+#### 3. Workflow Configuration
+
+The workflow is configured to:
+- Trigger on pull requests from `development` branch targeting `main`
+- Use OIDC authentication (no access keys needed)
+- Run evaluations when PRs are created or updated
+- Upload evaluation results as artifacts
+
+The workflow automatically:
+- Checks if the PR is from the `development` branch
+- Sets up the conda environment
+- Configures AWS credentials using the role ARN
+- Runs the evaluation pipeline
+- Uploads results as GitHub Actions artifacts
+
+#### 4. Verify Deployment
+
+Check the status of deployed stacks:
+
+```bash
+./scripts/deploy/deploy_github_action_role.sh dev status
+```
+
+#### 5. Running Evaluations in CI/CD
+
 The framework can be integrated into CI/CD pipelines:
 
 ```bash
@@ -506,6 +592,8 @@ The framework can be integrated into CI/CD pipelines:
 python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
 # Parse summary.json and fail if metrics below threshold
 ```
+
+**Note**: The GitHub Actions workflow runs evaluations automatically on PRs. You can also add threshold checks to fail the workflow if metrics fall below specified values.
 
 ## Troubleshooting
 
