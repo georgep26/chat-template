@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Role for GitHub Actions OIDC Authentication - Evaluation Pipeline'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  GitHubOrg:
+    Type: String
+    Description: 'GitHub organization or username (e.g., "myorg" or "username")'
+  
+  GitHubRepo:
+    Type: String
+    Description: 'GitHub repository name (e.g., "chat-template")'
+  
+  GitHubSourceBranch:
+    Type: String
+    Default: 'development'
+    Description: 'GitHub source branch name for PRs (e.g., "development")'
+  
+  GitHubTargetBranch:
+    Type: String
+    Default: 'main'
+    Description: 'GitHub target branch for PRs (default: main)'
+  
+  SecretsManagerPolicyArn:
+    Type: String
+    Description: 'ARN of the Secrets Manager managed policy'
+  
+  S3EvaluationPolicyArn:
+    Type: String
+    Description: 'ARN of the S3 evaluation managed policy'
+  
+  LambdaInvokePolicyArn:
+    Type: String
+    Default: ''
+    Description: 'Optional: ARN of the Lambda invoke managed policy (only needed if running in lambda mode)'
+  
+  BedrockEvaluationPolicyArn:
+    Type: String
+    Description: 'ARN of the Bedrock evaluation managed policy'
+  
+  OIDCProviderArn:
+    Type: String
+    Default: ''
+    Description: 'Optional: ARN of existing GitHub OIDC provider. If empty, a new one will be created.'
+
+Resources:
+  # OIDC Provider for GitHub (only create if not provided)
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCIdentityProvider
+    Condition: CreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Name
+          Value: 'GitHubActionsOIDCProvider'
+        - Key: Purpose
+          Value: 'GitHub Actions OIDC'
+
+  # IAM Role for GitHub Actions
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-github-actions-role'
+      Description: 'IAM role for GitHub Actions to run evaluation pipeline via OIDC'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow PRs from source branch targeting the specified target branch
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - HasOIDCProvider
+                - !Ref OIDCProviderArn
+                - !GetAtt GitHubOIDCProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:pull_request'
+                token.actions.githubusercontent.com:head_ref: !Ref GitHubSourceBranch
+                token.actions.githubusercontent.com:base_ref: !Sub 'refs/heads/${GitHubTargetBranch}'
+      ManagedPolicyArns:
+        - !Ref SecretsManagerPolicyArn
+        - !Ref S3EvaluationPolicyArn
+        - !Ref BedrockEvaluationPolicyArn
+        - !If
+          - HasLambdaPolicy
+          - !Ref LambdaInvokePolicyArn
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-github-actions-role'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Purpose
+          Value: 'GitHub Actions OIDC'
+        - Key: GitHubRepo
+          Value: !Sub '${GitHubOrg}/${GitHubRepo}'
+
+Conditions:
+  HasLambdaPolicy: !Not [!Equals [!Ref LambdaInvokePolicyArn, '']]
+  HasOIDCProvider: !Not [!Equals [!Ref OIDCProviderArn, '']]
+  CreateOIDCProvider: !Equals [!Ref OIDCProviderArn, '']
+
+Outputs:
+  RoleArn:
+    Description: 'ARN of the GitHub Actions IAM role'
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-GitHubActionsRoleArn'
+  
+  RoleName:
+    Description: 'Name of the GitHub Actions IAM role'
+    Value: !Ref GitHubActionsRole
+    Export:
+      Name: !Sub '${AWS::StackName}-GitHubActionsRoleName'
+  
+  OIDCProviderArn:
+    Description: 'ARN of the GitHub OIDC provider (created or provided)'
+    Value: !If
+      - HasOIDCProvider
+      - !Ref OIDCProviderArn
+      - !GetAtt GitHubOIDCProvider.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-OIDCProviderArn'
+

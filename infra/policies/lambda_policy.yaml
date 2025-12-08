@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy for invoking AWS Lambda functions - RAG Evaluation'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+  
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+  
+  LambdaFunctionName:
+    Type: String
+    Default: ''
+    Description: 'Optional: Specific Lambda function name. If empty, uses pattern-based access.'
+
+Resources:
+  LambdaInvokePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-invoke-policy'
+      Description: 'Policy for invoking Lambda functions during evaluation'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaInvoke
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !If
+                - HasSpecificFunction
+                - !Sub
+                  - 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${FunctionName}'
+                  - FunctionName: !Ref LambdaFunctionName
+                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-*-${Environment}-*'
+              - !If
+                - HasSpecificFunction
+                - !Sub
+                  - 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${FunctionName}:*'
+                  - FunctionName: !Ref LambdaFunctionName
+                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-*-${Environment}-*:*'
+
+Conditions:
+  HasSpecificFunction: !Not [!Equals [!Ref LambdaFunctionName, '']]
+
+Outputs:
+  PolicyArn:
+    Description: 'ARN of the Lambda invoke policy'
+    Value: !Ref LambdaInvokePolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaInvokePolicyArn'
+
