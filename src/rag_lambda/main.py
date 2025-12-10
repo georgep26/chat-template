@@ -8,15 +8,15 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from graph.nodes import answer_node, clarify_node, extract_text_content, rewrite_node, split_node
-from graph.state import MessagesState
-from graph.retrieval import retrieve_node
-from memory.factory import create_history_store
-from memory.chat_summary import summarization_check
-from api.models import ChatRequest, ChatResponse, Source
-from utils.aws_utils import get_db_credentials_from_secret
-from utils.config import read_config
-from utils.logger import get_logger
+from .graph.nodes import answer_node, clarify_node, extract_text_content, rewrite_node, split_node
+from .graph.state import MessagesState
+from .graph.retrieval import retrieve_node
+from .memory.factory import create_history_store
+from .memory.chat_summary import summarization_check
+from .api.models import ChatRequest, ChatResponse, Source
+from ..utils.aws_utils import get_db_credentials_from_secret
+from ..utils.config import read_config
+from ..utils.logger import get_logger
 
 log = get_logger(__name__)
 
