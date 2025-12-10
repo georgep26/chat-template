@@ -1,5 +1,5 @@
 run: # Configuration for a particular evaluation run
-  evaluation_run_name: "human_generated_ragas_nova_micro"
+  evaluation_run_name: "nova_micro_pr_eval"
   mode: "local"                   # "local" or "lambda"
   max_concurrent_async_tasks: 20
   persist_rag_outputs: true
@@ -10,7 +10,7 @@ rag_app:
 
 
 data:
-  eval_csv_path: "data/human_generated_validation_questions.csv"
+  eval_csv_path: "evals/validation_data/human_generated_validation_questions.csv"
   eval_id_column: "validation_question_id"
   eval_question_column: "validation_question"
   eval_reference_column: "answer"
