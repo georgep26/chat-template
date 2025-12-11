@@ -12,6 +12,10 @@ from langchain_postgres import PostgresChatMessageHistory
 
 from .base import ChatHistoryStore
 
+from ...utils.logger import get_logger
+
+log = get_logger(__name__)
+
 
 class PostgresHistoryStore(ChatHistoryStore):
     """Postgres-based chat history storage."""
@@ -61,11 +65,14 @@ class PostgresHistoryStore(ChatHistoryStore):
         retry_delay = self._initial_retry_delay
         last_exception = None
         
+        log.info(f"Attempting to connect to database with table name: {self._table_name}")
         for attempt in range(self._max_retries):
             try:
                 conn = psycopg.connect(**self._db_creds)
+                log.info(f"Connected to database with table name: {self._table_name}")
                 return conn
             except (OperationalError, InterfaceError) as e:
+                log.error(f"Failed to connect to database with table name: {self._table_name} - Error: {e}")
                 last_exception = e
                 error_msg = str(e).lower()
                 
