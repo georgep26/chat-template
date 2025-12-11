@@ -50,15 +50,18 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Load configuration
     config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
+    log.info(f"Loading configuration from: {config_path}")
     
     config = read_config(config_path)
     rag_chat_config = config.get("rag_chat", {})
     chat_history_config = rag_chat_config.get("chat_history_store", {})
     summarization_config = rag_chat_config.get("summarization", {})
     retrieval_config = rag_chat_config.get("retrieval", {})
+    log.info("Configuration loaded successfully")
 
     # Create request model
     req = ChatRequest(**event_body)
+    log.info(f"Processing chat request for conversation_id: {req.conversation_id}, user_id: {req.user_id}")
 
     # Extract database credentials from AWS Secrets Manager
     db_creds = None
@@ -78,20 +81,25 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         "db_creds": db_creds,
         "table_name": chat_history_config.get("table_name", "chat_history"),
     }
+    log.info(f"Creating memory store with backend type: {memory_backend_type}")
     memory_store = create_history_store(
         memory_backend_type=memory_backend_type,
         **memory_store_arguments
     )
 
     # Load prior messages
+    log.info(f"Loading prior messages for conversation_id: {req.conversation_id}")
     prior_messages: List[BaseMessage] = memory_store.get_messages(req.conversation_id)
+    log.info(f"Loaded {len(prior_messages)} prior messages from conversation history")
 
     # Check if summarization is needed for long conversations
+    log.info(f"Checking if summarization is needed (threshold: {summarization_config.get('summarization_threshold')})")
     prior_messages = summarization_check(
         messages=prior_messages,
         summarization_threshold=summarization_config.get("summarization_threshold"),
         summarization_model_config=summarization_config.get("model"),
     )
+    log.info(f"After summarization check: {len(prior_messages)} messages in conversation history")
 
     # Initial state with prior messages and new user message
     state = {
@@ -102,8 +110,10 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Add retrieval filters to state if provided
     if req.retrieval_filters:
         state["retrieval_filters"] = req.retrieval_filters
+        log.info(f"Retrieval filters applied: {req.retrieval_filters}")
 
     # Build graph
+    log.info("Building RAG graph")
     graph = build_rag_graph()
 
     # Prepare config for graph invocation (LangGraph expects config in "configurable" key)
@@ -114,7 +124,9 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # Invoke graph with config
+    log.info("Invoking RAG graph (includes query rewrite, clarification, splitting, retrieval, and answer generation)")
     final_state = graph.invoke(state, config=graph_config)
+    log.info("RAG graph execution completed")
 
     # Extract new messages (everything after prior_messages + user message)
     new_messages = final_state["messages"][len(prior_messages) + 1 :]
@@ -131,6 +143,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Extract answer from final state
     ai_msgs = [m for m in final_state["messages"] if m.type == "ai"]
     answer = extract_text_content(ai_msgs[-1].content) if ai_msgs else ""
+    log.info(f"Extracted answer (length: {len(answer)} characters)")
 
     # Extract sources from final state
     sources = []
@@ -144,6 +157,9 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
                     chunk=source_dict.get("chunk", ""),
                 )
             )
+        log.info(f"Retrieved {len(sources)} sources from knowledge base")
+    else:
+        log.info("No sources found in final state")
 
     resp = ChatResponse(
         conversation_id=req.conversation_id,
@@ -152,6 +168,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         config=rag_chat_config,
     )
 
+    log.info(f"Response completed for conversation_id: {req.conversation_id} with {len(sources)} sources")
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
