@@ -13,6 +13,9 @@
 #   # Deploy to production with custom ECR repository
 #   ./scripts/deploy/deploy_rag_lambda.sh prod deploy --ecr-repo my-rag-lambda
 #
+#   # Deploy without VPC (omit VPC parameters for aurora_data_api backend)
+#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy
+#
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_rag_lambda.sh dev validate
 #
@@ -93,13 +96,17 @@ show_usage() {
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
+    echo "Note: If VPC ID is not provided, Lambda will be deployed without VPC (suitable for aurora_data_api backend)"
+    echo ""
     echo "Examples:"
-    echo "  $0 dev deploy"
+    echo "  $0 dev deploy  # Deploy without VPC (for aurora_data_api backend)"
+    echo "  $0 dev deploy --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (for postgres backend)"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
     echo ""
     echo "Note: The script will automatically detect VPC, DB, and KB stack outputs if available."
+    echo "      If VPC parameters are not provided, Lambda will be deployed without VPC."
 }
 
 # Check if environment is provided
@@ -529,6 +536,7 @@ deploy_stack() {
         image_uri=$(build_and_push_image)
     fi
     
+    # Handle VPC configuration (optional - only needed for postgres backend)
     # Auto-detect parameters if not provided
     if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
         print_status "Auto-detecting VPC and subnet IDs..."
@@ -542,41 +550,43 @@ deploy_stack() {
     fi
     
     if [ -z "$VPC_ID" ]; then
-        print_error "VPC ID is required. Provide --vpc-id or deploy VPC stack first."
+        print_status "VPC ID not provided. Deploying Lambda without VPC (suitable for aurora_data_api backend)."
+        print_status "To deploy with VPC (for postgres backend), provide --vpc-id, --subnet-ids, and --security-group-ids."
+        VPC_ID=""
+        SUBNET_IDS=""
+        SECURITY_GROUP_IDS=""
+    elif [ -z "$SUBNET_IDS" ]; then
+        print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
         exit 1
-    fi
-    
-    if [ -z "$SUBNET_IDS" ]; then
-        print_error "Subnet IDs are required. Provide --subnet-ids or deploy VPC stack first."
-        exit 1
-    fi
-    
-    # Convert subnet IDs to CloudFormation list format
-    local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
-        # Try to get security group from RDS stack
-        print_status "Auto-detecting security group IDs..."
-        if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            local sg_id=$(aws cloudformation describe-stacks \
-                --stack-name "$DB_STACK_NAME" \
-                --region "$AWS_REGION" \
-                --query 'Stacks[0].Outputs[?OutputKey==`RDSSecurityGroupId`].OutputValue' \
-                --output text 2>/dev/null)
-            if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
-                SECURITY_GROUP_IDS="$sg_id"
-                print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+    else
+        # Convert subnet IDs to CloudFormation list format
+        local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
+        
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
+            # Try to get security group from RDS stack
+            print_status "Auto-detecting security group IDs..."
+            if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+                local sg_id=$(aws cloudformation describe-stacks \
+                    --stack-name "$DB_STACK_NAME" \
+                    --region "$AWS_REGION" \
+                    --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
+                    --output text 2>/dev/null)
+                if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
+                    SECURITY_GROUP_IDS="$sg_id"
+                    print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+                fi
             fi
         fi
+        
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
+            print_error "Security Group IDs are required when VPC is configured. Provide --security-group-ids or ensure DB stack has security group output."
+            exit 1
+        fi
+        
+        # Convert security group IDs to CloudFormation list format
+        local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
+        print_status "Deploying Lambda with VPC configuration (for postgres backend)."
     fi
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
-        print_error "Security Group IDs are required. Provide --security-group-ids or ensure RDS stack has security group output."
-        exit 1
-    fi
-    
-    # Convert security group IDs to CloudFormation list format
-    local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
     
     if [ -z "$DB_SECRET_ARN" ]; then
         print_status "Auto-detecting DB secret ARN..."
@@ -587,9 +597,10 @@ deploy_stack() {
         fi
     fi
     
+    # DB Secret ARN is optional for aurora_data_api backend (secret ARN is in config file)
     if [ -z "$DB_SECRET_ARN" ]; then
-        print_error "DB Secret ARN is required. Provide --db-secret-arn or deploy DB stack first."
-        exit 1
+        print_warning "DB Secret ARN not provided. This is OK for aurora_data_api backend (secret ARN should be in config file)."
+        print_warning "If using postgres backend, provide --db-secret-arn or deploy DB stack first."
     fi
     
     if [ -z "$KNOWLEDGE_BASE_ID" ]; then
@@ -635,13 +646,13 @@ deploy_stack() {
         echo ","
         printf '  {\n    "ParameterKey": "LambdaTimeout",\n    "ParameterValue": "%s"\n  }' "$LAMBDA_TIMEOUT"
         echo ","
-        printf '  {\n    "ParameterKey": "VpcId",\n    "ParameterValue": "%s"\n  }' "$VPC_ID"
+        printf '  {\n    "ParameterKey": "VpcId",\n    "ParameterValue": "%s"\n  }' "${VPC_ID:-}"
         echo ","
-        printf '  {\n    "ParameterKey": "SubnetIds",\n    "ParameterValue": "%s"\n  }' "$SUBNET_IDS"
+        printf '  {\n    "ParameterKey": "SubnetIds",\n    "ParameterValue": "%s"\n  }' "${SUBNET_IDS:-}"
         echo ","
-        printf '  {\n    "ParameterKey": "SecurityGroupIds",\n    "ParameterValue": "%s"\n  }' "$SECURITY_GROUP_IDS"
+        printf '  {\n    "ParameterKey": "SecurityGroupIds",\n    "ParameterValue": "%s"\n  }' "${SECURITY_GROUP_IDS:-}"
         echo ","
-        printf '  {\n    "ParameterKey": "DBSecretArn",\n    "ParameterValue": "%s"\n  }' "$DB_SECRET_ARN"
+        printf '  {\n    "ParameterKey": "DBSecretArn",\n    "ParameterValue": "%s"\n  }' "${DB_SECRET_ARN:-}"
         echo ","
         printf '  {\n    "ParameterKey": "KnowledgeBaseId",\n    "ParameterValue": "%s"\n  }' "$KNOWLEDGE_BASE_ID"
         echo ","

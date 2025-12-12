@@ -37,20 +37,24 @@ Parameters:
     MaxValue: 900
   
   VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: 'VPC ID where the Lambda will be deployed (required for RDS access)'
+    Type: String
+    Default: ''
+    Description: 'VPC ID where the Lambda will be deployed (optional, required only for postgres backend with direct RDS access)'
   
   SubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: 'List of subnet IDs for Lambda (at least 2 subnets in different AZs)'
+    Type: String
+    Default: ''
+    Description: 'Comma-delimited list of subnet IDs for Lambda (optional, required only when VpcId is provided)'
   
   SecurityGroupIds:
-    Type: List<AWS::EC2::SecurityGroup::Id>
-    Description: 'Security group IDs for Lambda (should allow outbound to RDS)'
+    Type: String
+    Default: ''
+    Description: 'Comma-delimited list of security group IDs for Lambda (optional, required only when VpcId is provided)'
   
   DBSecretArn:
     Type: String
-    Description: 'ARN of the Secrets Manager secret containing database credentials'
+    Default: ''
+    Description: 'ARN of the Secrets Manager secret containing database credentials (optional, required only for postgres backend)'
   
   KnowledgeBaseId:
     Type: String
@@ -76,6 +80,10 @@ Conditions:
   HasConfigS3: !And
     - !Not [!Equals [!Ref ConfigS3Bucket, '']]
     - !Not [!Equals [!Ref ConfigS3Key, '']]
+  HasVpcConfig: !And
+    - !Not [!Equals [!Ref VpcId, '']]
+    - !Not [!Equals [!Ref SubnetIds, '']]
+    - !Not [!Equals [!Ref SecurityGroupIds, '']]
 
 Resources:
   # CloudWatch Log Group
@@ -111,9 +119,11 @@ Resources:
             - 'config/app_config.yml'
           AWS_REGION: !Ref AWSRegion
           ENVIRONMENT: !Ref Environment
-      VpcConfig:
-        SubnetIds: !Ref SubnetIds
-        SecurityGroupIds: !Ref SecurityGroupIds
+      VpcConfig: !If
+        - HasVpcConfig
+        - SubnetIds: !Split [',', !Ref SubnetIds]
+          SecurityGroupIds: !Split [',', !Ref SecurityGroupIds]
+        - !Ref 'AWS::NoValue'
       LoggingConfig:
         LogFormat: JSON
         LogGroup: !Ref LambdaLogGroup
