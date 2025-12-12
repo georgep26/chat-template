@@ -13,9 +13,11 @@ infra/
 │   ├── variables.tf    # Variable definitions
 │   └── outputs.tf      # Output definitions
 ├── cloudformation/     # CloudFormation templates
-│   ├── template.yaml   # Main CloudFormation template
-│   ├── parameters.yaml # Parameter values for environments
-│   ├── deploy.sh       # Deployment script
+│   ├── db_secret_template.yaml
+│   ├── knowledge_base_template.yaml
+│   ├── lambda_template.yaml
+│   ├── light_db_template.yaml
+│   ├── s3_bucket_template.yaml
 │   └── README.md       # CloudFormation documentation
 ├── policies/           # IAM managed policies
 │   ├── secrets_manager_policy.yaml
@@ -99,21 +101,31 @@ The CloudFormation template creates the following AWS resources:
 
 #### Usage
 
-Deploy using the centralized deployment script:
+Deploy using the individual deployment scripts for each component:
 
-1. Deploy to development environment:
+1. **Database**:
    ```bash
-   ./scripts/deploy/cloudformation.sh dev
+   ./scripts/deploy/deploy_chat_template_db.sh dev deploy --master-password <password>
    ```
 
-2. Deploy to other environments:
+2. **S3 Bucket**:
    ```bash
-   ./scripts/deploy/cloudformation.sh staging
-   ./scripts/deploy/cloudformation.sh prod
+   ./scripts/deploy/deploy_s3_bucket.sh dev deploy
+   ```
+
+3. **Knowledge Base**:
+   ```bash
+   ./scripts/deploy/deploy_knowledge_base.sh dev deploy --s3-bucket <bucket-name>
+   ```
+
+4. **Lambda Function**:
+   ```bash
+   ./scripts/deploy/deploy_rag_lambda.sh dev deploy
    ```
 
 #### Available Actions
 
+Each deployment script supports:
 - `deploy` (default): Deploy or update the stack
 - `update`: Update an existing stack
 - `delete`: Delete the stack
@@ -156,11 +168,14 @@ Before using these templates for a new project:
 
 All deployment scripts are centralized in the `scripts/deploy/` directory:
 
-- `cloudformation.sh` - CloudFormation deployment script
-- `terraform.sh` - Terraform deployment script
-- `README.md` - Detailed usage instructions for both scripts
+- `deploy_chat_template_db.sh` - Database deployment
+- `deploy_s3_bucket.sh` - S3 bucket deployment
+- `deploy_knowledge_base.sh` - Knowledge base deployment
+- `deploy_rag_lambda.sh` - Lambda function deployment
+- `deploy_github_action_role.sh` - GitHub Actions IAM role deployment
+- `README.md` - Detailed usage instructions
 
-This provides a consistent interface for deploying infrastructure regardless of the chosen tool.
+Each script provides a consistent interface for deploying specific infrastructure components.
 
 ## IAM Roles and Policies
 
