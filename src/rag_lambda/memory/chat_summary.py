@@ -58,11 +58,10 @@ def summarize_messages(messages: List[BaseMessage], summarization_model_config: 
         SystemMessage containing the summary
     """
     # Initialize the summarization model
-    model_config = summarization_model_config.get("model")
     summ_llm = ChatBedrockConverse(
-        model=model_config.get("id", "us.anthropic.claude-3-7-sonnet-20250219-v1:0"),
-        region_name=model_config.get("region", "us-east-1"),
-        temperature=model_config.get("temperature", 0),
+        model=summarization_model_config.get("id", "us.anthropic.claude-3-7-sonnet-20250219-v1:0"),
+        region_name=summarization_model_config.get("region", "us-east-1"),
+        temperature=summarization_model_config.get("temperature", 0),
     )
 
     text = "\n".join(f"{m.type}: {extract_text_content(m.content)}" for m in messages)
