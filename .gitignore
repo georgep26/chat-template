@@ -263,3 +263,6 @@ scratchpad.txt
 
 # Evaluation outputs
 evals/eval_outputs/
+
+# Working notes
+docs/working_notes.md
