@@ -11,17 +11,18 @@ COPY src/rag_lambda/requirements.txt ${LAMBDA_TASK_ROOT}/
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code (including __init__.py files)
-COPY src/rag_lambda/api ${LAMBDA_TASK_ROOT}/api
-COPY src/rag_lambda/graph ${LAMBDA_TASK_ROOT}/graph
-COPY src/rag_lambda/memory ${LAMBDA_TASK_ROOT}/memory
-COPY src/rag_lambda/__init__.py ${LAMBDA_TASK_ROOT}/
-COPY src/rag_lambda/main.py ${LAMBDA_TASK_ROOT}/
+# Copy application code maintaining package structure
+# The code uses relative imports, so we maintain the rag_lambda package structure
+COPY src/rag_lambda ${LAMBDA_TASK_ROOT}/rag_lambda
+
+# Copy utils directory (needed for imports like ..utils.aws_utils)
+# The code uses relative imports from ..utils, so copy to same level as rag_lambda
+COPY src/utils ${LAMBDA_TASK_ROOT}/utils
 
 # Copy config directory (needed for app configuration)
 # The code expects config at ../config relative to rag_lambda modules
-COPY config ${LAMBDA_TASK_ROOT}/../config
+COPY config ${LAMBDA_TASK_ROOT}/config
 
-# Set the CMD to your handler
-CMD [ "main.lambda_handler" ]
+# Set the CMD to your handler (using package path)
+CMD [ "rag_lambda.main.lambda_handler" ]
 
