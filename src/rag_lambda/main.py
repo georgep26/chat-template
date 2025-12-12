@@ -63,28 +63,34 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     req = ChatRequest(**event_body)
     log.info(f"Processing chat request for conversation_id: {req.conversation_id}, user_id: {req.user_id}")
 
-    # Extract database credentials from AWS Secrets Manager
-    db_creds = None
-    memory_backend_type = chat_history_config.get("memory_backend_type")
+    # Extract memory backend type and prepare configuration
+    # All other keys in chat_history_config will be passed directly to the factory
+    memory_backend_type = chat_history_config.pop("memory_backend_type")
+    
+    # Get region from retrieval config for postgres backend (if needed)
+    region = retrieval_config.get("region", "us-east-1")
+    
+    # For postgres backend, we need to fetch credentials from Secrets Manager
     if memory_backend_type == "postgres":
         db_connection_secret_name = chat_history_config.get("db_connection_secret_name")
         if not db_connection_secret_name:
             raise ValueError("db_connection_secret_name is required for postgres backend")
         
-        # Get region from config or default to us-east-1
-        region = retrieval_config.get("region", "us-east-1")
         db_creds = get_db_credentials_from_secret(db_connection_secret_name, region=region)
         log.info(f"Retrieved database credentials from secret: {db_connection_secret_name}")
-
-    # Create memory store
-    memory_store_arguments = {
-        "db_creds": db_creds,
-        "table_name": chat_history_config.get("table_name", "chat_history"),
-    }
+        chat_history_config["db_creds"] = db_creds
+    
+    # For aurora_data_api backend, add region if not already specified
+    elif memory_backend_type == "aurora_data_api":
+        if "region" not in chat_history_config:
+            chat_history_config["region"] = region
+        log.info(f"Using Aurora Data API with cluster ARN: {chat_history_config.get('db_cluster_arn')}")
+    
+    # Create memory store - pass all remaining config keys directly
     log.info(f"Creating memory store with backend type: {memory_backend_type}")
     memory_store = create_history_store(
         memory_backend_type=memory_backend_type,
-        **memory_store_arguments
+        **chat_history_config
     )
 
     # Load prior messages
