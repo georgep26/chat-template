@@ -27,7 +27,8 @@
 #   # Delete stack (with confirmation prompt)
 #   ./scripts/deploy/deploy_chat_template_db.sh dev delete
 #
-# Note: VPC ID and subnet IDs are hardcoded in the script.
+# Note: VPC ID and subnet IDs can be provided via --vpc-id and --subnet-ids flags,
+#       auto-detected from a VPC stack, or set via VPC_ID and SUBNET_IDS environment variables.
 #       The script will automatically create a Secrets Manager secret if it doesn't exist.
 
 set -e
@@ -81,12 +82,15 @@ show_usage() {
     echo "  --min-capacity <acu>          - Minimum ACU (default: 0 for scale-to-zero)"
     echo "  --max-capacity <acu>          - Maximum ACU (default: 1)"
     echo "  --region <region>             - AWS region (default: us-east-1)"
+    echo "  --vpc-id <vpc-id>             - VPC ID (auto-detected from VPC stack if not provided)"
+    echo "  --subnet-ids <id1,id2,...>    - Subnet IDs (auto-detected from VPC stack if not provided)"
     echo "  --public-ip <ip>              - Public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Auto-detected if not provided."
     echo "  --public-ip2 <ip>             - Second public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
     echo "  --public-ip3 <ip>             - Third public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --master-password mypass123"
+    echo "  $0 dev deploy --master-password mypass123 --vpc-id vpc-12345 --subnet-ids subnet-1,subnet-2"
     echo "  $0 staging validate"
     echo "  $0 prod status"
     echo ""
@@ -114,6 +118,7 @@ TEMPLATE_FILE="infra/cloudformation/light_db_template.yaml"
 SECRET_STACK_NAME="chat-template-db-secret-${ENVIRONMENT}"
 SECRET_TEMPLATE_FILE="infra/cloudformation/db_secret_template.yaml"
 SECRET_NAME="db-connection"
+VPC_STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -123,8 +128,12 @@ PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 cd "$PROJECT_ROOT"
 
 # Parse additional arguments
-VPC_ID="vpc-0b861444c1836203c"  # Hardcoded VPC ID
-SUBNET_IDS="subnet-08625da8598758097,subnet-06b3a20eaed18c74b,subnet-0766239ba33841e09,subnet-07bb1e0f18d632d99,subnet-06f6bccd8afb0a296,subnet-036d51a3f336fdc5d"  # Hardcoded subnet IDs
+# VPC ID and subnet IDs can be provided via:
+# 1. Command-line arguments (--vpc-id, --subnet-ids)
+# 2. Environment variables (VPC_ID, SUBNET_IDS)
+# 3. Auto-detected from VPC stack
+VPC_ID="${VPC_ID:-}"  # Use environment variable if set, otherwise empty
+SUBNET_IDS="${SUBNET_IDS:-}"  # Use environment variable if set, otherwise empty
 MASTER_PASSWORD=""
 MASTER_USERNAME=""
 DATABASE_NAME="chat_template_db"
@@ -173,6 +182,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --public-ip3)
             PUBLIC_IP3="$2"
+            shift 2
+            ;;
+        --vpc-id)
+            VPC_ID="$2"
+            shift 2
+            ;;
+        --subnet-ids)
+            SUBNET_IDS="$2"
             shift 2
             ;;
         *)
@@ -355,6 +372,35 @@ build_parameters_array() {
     
     # Print array elements, one per line (for use with array expansion)
     printf '%s\n' "${params[@]}"
+}
+
+# Function to get VPC stack outputs
+get_vpc_stack_outputs() {
+    print_status "Retrieving VPC stack outputs from: $VPC_STACK_NAME" >&2
+    
+    if ! aws cloudformation describe-stacks --stack-name "$VPC_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_warning "VPC stack $VPC_STACK_NAME does not exist in region $AWS_REGION" >&2
+        return 1
+    fi
+    
+    local vpc_id=$(aws cloudformation describe-stacks \
+        --stack-name "$VPC_STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    local subnet_ids=$(aws cloudformation describe-stacks \
+        --stack-name "$VPC_STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnetIds` || OutputKey==`SubnetIds`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$vpc_id" ] || [ "$vpc_id" == "None" ]; then
+        print_warning "Could not retrieve VPC ID from stack $VPC_STACK_NAME" >&2
+        return 1
+    fi
+    
+    echo "$vpc_id|$subnet_ids"
 }
 
 # Function to validate template
@@ -617,6 +663,29 @@ deploy_secret() {
 # Function to deploy stack
 deploy_stack() {
     # Credentials should already be provided at this point (checked before validation)
+    
+    # Auto-detect VPC and subnet IDs if not provided
+    if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
+        print_status "Auto-detecting VPC and subnet IDs..."
+        local vpc_outputs=$(get_vpc_stack_outputs)
+        if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
+            VPC_ID=$(echo "$vpc_outputs" | cut -d'|' -f1)
+            SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
+            print_status "Auto-detected VPC ID: $VPC_ID"
+            print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
+        fi
+    fi
+    
+    # Validate that VPC ID and subnet IDs are provided
+    if [ -z "$VPC_ID" ]; then
+        print_error "VPC ID is required. Provide --vpc-id, set VPC_ID environment variable, or deploy VPC stack first."
+        exit 1
+    fi
+    
+    if [ -z "$SUBNET_IDS" ]; then
+        print_error "Subnet IDs are required. Provide --subnet-ids, set SUBNET_IDS environment variable, or deploy VPC stack first."
+        exit 1
+    fi
     
     # Validate subnet count (need at least 2 for Aurora)
     local subnet_count=$(echo "$SUBNET_IDS" | tr ',' '\n' | wc -l | tr -d ' ')
