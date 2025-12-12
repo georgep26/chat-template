@@ -2,8 +2,8 @@
 # Build from project root: docker build -f src/rag_lambda/Dockerfile -t rag-lambda .
 FROM public.ecr.aws/lambda/python:3.11
 
-# Install libpq for psycopg if needed
-RUN yum -y install postgresql15-libs && yum clean all
+# Install libpq for psycopg and build tools for compiling packages like numpy
+RUN yum -y install postgresql-devel gcc gcc-c++ make && yum clean all
 
 # Copy requirements file
 COPY src/rag_lambda/requirements.txt ${LAMBDA_TASK_ROOT}/
