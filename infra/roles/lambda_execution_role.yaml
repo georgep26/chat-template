@@ -24,7 +24,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub '${ProjectName}-${Environment}-lambda-execution-role'
-      Description: 'IAM role for RAG Lambda function with Bedrock, Secrets Manager, and VPC access'
+      Description: 'IAM role for RAG Lambda function with Bedrock, Secrets Manager, RDS Data API, and VPC access'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -90,6 +90,25 @@ Resources:
                   - s3:ListBucket
                 Resource:
                   - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-config'
+        
+        # RDS Data API permissions for Aurora Data API access (allows Lambda outside VPC)
+        - PolicyName: RDSDataApiAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowRDSDataApiExecute
+                Effect: Allow
+                Action:
+                  - rds-data:ExecuteStatement
+                  - rds-data:BatchExecuteStatement
+                Resource:
+                  - !Sub 'arn:aws:rds:${AWSRegion}:${AWS::AccountId}:cluster:${ProjectName}-light-db-cluster-${Environment}'
+              - Sid: AllowRDSDataApiDescribe
+                Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                Resource:
+                  - !Sub 'arn:aws:rds:${AWSRegion}:${AWS::AccountId}:cluster:${ProjectName}-light-db-cluster-${Environment}'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-lambda-execution-role'
