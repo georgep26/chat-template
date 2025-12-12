@@ -18,7 +18,7 @@ when generating commit messages:
   - Example:  
     `feature: adding new lambda function for metadata extraction`
   - Use all lowercase for the entire commit message.
-  - Keep the full commit message under 40 characters.
+  - Keep the commit message to under 15 words.
   - Do not include punctuation at the end of the line (no periods).
   - Avoid unnecessary adjectives; focus on what changed, not why.
   - If the change introduces an incompatible or breaking modification,
