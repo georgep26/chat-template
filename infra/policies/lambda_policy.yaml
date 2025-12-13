@@ -42,12 +42,21 @@ Resources:
                 - !Sub
                   - 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${FunctionName}'
                   - FunctionName: !Ref LambdaFunctionName
-                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-*-${Environment}-*'
+                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
               - !If
                 - HasSpecificFunction
                 - !Sub
                   - 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${FunctionName}:*'
                   - FunctionName: !Ref LambdaFunctionName
+                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*:*'
+              # Also support pattern with wildcard between project and environment (e.g., chat-template-*-dev-*)
+              - !If
+                - HasSpecificFunction
+                - !Ref AWS::NoValue
+                - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-*-${Environment}-*'
+              - !If
+                - HasSpecificFunction
+                - !Ref AWS::NoValue
                 - !Sub 'arn:aws:lambda:${AWSRegion}:${AWS::AccountId}:function:${ProjectName}-*-${Environment}-*:*'
 
 Conditions:
