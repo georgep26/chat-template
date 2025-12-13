@@ -12,7 +12,7 @@ from langchain_postgres import PostgresChatMessageHistory
 
 from .base import ChatHistoryStore
 
-from ...utils.logger import get_logger
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

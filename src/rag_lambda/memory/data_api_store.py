@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 
 from .base import ChatHistoryStore
-from ...utils.logger import get_logger
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
