@@ -27,8 +27,8 @@ conda env update -f environment.yml
 Create an `evals_config.yaml` file. See `evals/evals_config.yaml` for a complete example.
 
 Key configuration sections:
-- `run`: Execution mode (local/lambda), concurrency, experiment name
-- `rag_app`: RAG client configuration (entrypoint, request/response mappings)
+- `run`: Concurrency settings, experiment name
+- `rag_app`: RAG client configuration (local_entrypoint or lambda_function_name, request/response mappings)
 - `data`: CSV file paths and column mappings
 - `metrics`: Enable/configure RAGAS and correctness metrics
 - `llm`: Default and judge model configurations
@@ -94,17 +94,23 @@ python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type js
 
 ```yaml
 run:
-  mode: "local"              # "local" or "lambda"
   max_concurrent_async_tasks: 20        # Maximum number of concurrent asyncio tasks
   evaluation_run_name: "irc_rag_v2"  # Output directory name
 ```
 
 ### RAG App Configuration
 
+The client type (local or lambda) is automatically determined based on which configuration is provided:
+
 ```yaml
 rag_app:
+  # For local execution, provide local_entrypoint:
   local_entrypoint: "src.rag_lambda.main:main"  # Module:function for local mode
+  
+  # OR for lambda execution, provide lambda_function_name:
   lambda_function_name: "my-rag-lambda-prod"    # Lambda function name (lambda mode)
+  
+  # Note: Either local_entrypoint OR lambda_function_name must be provided, not both
   request_template:
     question_key: "question"
     metadata_key: "metadata"
