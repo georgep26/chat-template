@@ -14,9 +14,9 @@ from .graph.retrieval import retrieve_node
 from .memory.factory import create_history_store
 from .memory.chat_summary import summarization_check
 from .api.models import ChatRequest, ChatResponse, Source
-from ..utils.aws_utils import get_db_credentials_from_secret
-from ..utils.config import read_config
-from ..utils.logger import get_logger
+from utils.aws_utils import get_db_credentials_from_secret
+from utils.config import read_config
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -194,8 +194,13 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         HTTP response with status code, headers, and body
     """
     # Parse request body
+    # Handle both direct invocation (test console) and API Gateway format
     body = event.get("body")
-    if isinstance(body, str):
+    if body is None:
+        # Direct invocation from test console - event itself is the body
+        body = event
+    elif isinstance(body, str):
+        # API Gateway passes body as JSON string
         body = json.loads(body)
 
     # Call main function
