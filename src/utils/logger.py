@@ -155,7 +155,7 @@ def get_logger(name: Optional[str] = None, log_file_path: Optional[str] = None) 
         
         # Create formatter
         formatter = logging.Formatter(
-            '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            '%(asctime)s [%(levelname)s]: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         console_handler.setFormatter(formatter)
