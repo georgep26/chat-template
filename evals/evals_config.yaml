@@ -26,6 +26,14 @@ metrics:
       provider: "bedrock" # E.g. "openai" or "bedrock"
       model: "amazon.nova-micro-v1:0"  
       region_name: "us-east-1"
+    # embedding_model: Optional. If not provided, defaults to OpenAI embeddings.
+    # This should be explicitly configured to match your judge_model provider.
+    embedding_model:
+      provider: "bedrock"  # "bedrock" or "openai". If omitted, defaults to "openai"
+      model: "amazon.titan-embed-text-v2:0"  # For Bedrock: "amazon.titan-embed-text-v2:0" or "amazon.titan-embed-text-v1:0"
+      region_name: "us-east-1"  # Required for Bedrock
+      # For OpenAI, you can optionally specify:
+      # openai_api_key_env: "OPENAI_API_KEY"  # Environment variable name for API key
   binary_correctness:
     enabled: true
     judge_model:

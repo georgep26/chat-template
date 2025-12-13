@@ -38,10 +38,13 @@ def build_metrics(config: dict):
         if "judge_model" not in ragas_cfg:
             raise ValueError("RAGAS metrics require a judge_model configuration")
         judge_llm = create_llm(ragas_cfg["judge_model"])
+        # Get embedding_model config if provided, otherwise defaults to OpenAI
+        embedding_model_cfg = ragas_cfg.get("embedding_model")
         metrics.append(
             RagasMetricCollection(
                 metric_names=ragas_cfg["metric_names"],
-                judge_model=judge_llm
+                judge_model=judge_llm,
+                embedding_model_cfg=embedding_model_cfg
             )
         )
     
