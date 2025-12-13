@@ -13,6 +13,9 @@ from client import build_rag_client
 from src.utils.llm_factory import create_llm
 from src.utils.config import read_config
 from src.utils.aws_utils import upload_to_s3
+from src.utils.logger import get_logger
+
+log = get_logger(__name__)
 from metrics_ragas import RagasMetricCollection
 from metrics_custom import BinaryCorrectnessMetric, AtomicCorrectnessMetric
 from metrics_base import BaseMetric
@@ -135,9 +138,12 @@ async def run_evaluation(config: dict):
     evaluation_run_name = run_cfg.get("evaluation_run_name", "evaluation_run_default")
     base_dir = Path(outputs_cfg.get("local", {}).get("base_dir", "eval_outputs"))
     
+    log.info(f"Starting evaluation: {evaluation_run_name}")
+    
     # 1) Load data
     df = load_eval_dataframe(config)
     samples = extract_eval_samples(df, config)
+    log.info(f"Loaded {len(samples)} samples")
     
     # 2) Check for persisted RAG results
     persist_rag_outputs = run_cfg.get("persist_rag_outputs", False)
@@ -162,6 +168,7 @@ async def run_evaluation(config: dict):
     
     # Generate outputs for missing samples
     if missing_samples:
+        log.info(f"Generating outputs for {len(missing_samples)} samples")
         client = build_rag_client(config)
         new_model_outputs = await client.generate_batch(
             missing_samples, max_concurrency=run_cfg["max_concurrent_async_tasks"]
@@ -191,6 +198,7 @@ async def run_evaluation(config: dict):
     
     # 5) Build metrics (LLMs are created within build_metrics)
     metrics = build_metrics(config)
+    log.info(f"Running {len(metrics)} metrics")
     
     # 6) Run metrics (per-sample scores)
     per_sample_results = []
@@ -201,9 +209,18 @@ async def run_evaluation(config: dict):
     # 7) Aggregate
     summary = build_aggregate_summary(per_sample_results)
     # Add run metadata to summary
+    # Determine mode from rag_app configuration
+    rag_cfg = config.get("rag_app", {})
+    if "local_entrypoint" in rag_cfg and rag_cfg["local_entrypoint"]:
+        mode = "local"
+    elif "lambda_function_name" in rag_cfg and rag_cfg["lambda_function_name"]:
+        mode = "lambda"
+    else:
+        mode = "unknown"
+    
     summary["run"] = {
         "evaluation_run_name": evaluation_run_name,
-        "mode": run_cfg.get("mode", "unknown"),
+        "mode": mode,
     }
     
     # 8) Outputs
@@ -227,6 +244,8 @@ async def run_evaluation(config: dict):
         s3_uri = f"{base_s3_uri}/{evaluation_run_name}/"
         experiment_dir = base_dir / evaluation_run_name
         upload_to_s3(s3_uri, experiment_dir)
+    
+    log.info(f"Evaluation completed: {evaluation_run_name}")
 
 
 def main(eval_config: str, output_type: Optional[str]):
