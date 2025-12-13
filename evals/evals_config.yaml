@@ -1,12 +1,11 @@
 run: # Configuration for a particular evaluation run
   evaluation_run_name: "nova_micro_pr_eval"
-  mode: "local"                   # "local" or "lambda"
   max_concurrent_async_tasks: 20
   persist_rag_outputs: true
 
 rag_app:
-  local_entrypoint: "src.rag_lambda.main:main"
-  # lambda_function_name: "my-rag-lambda-prod" # uncomment this if you want to run the evaluation on a lambda function
+  # local_entrypoint: "src.rag_lambda.main:main"
+  lambda_function_name: "chat-template-dev-rag-chat" # uncomment this if you want to run the evaluation on a lambda function
 
 
 data:
