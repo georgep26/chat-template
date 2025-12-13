@@ -1,8 +1,16 @@
 """LLM factory for creating LangChain LLM instances."""
 
 import os
-from langchain_openai import ChatOpenAI
 from langchain_aws.chat_models.bedrock_converse import ChatBedrockConverse
+
+# TODO: Remove this after we fix OpenAI support
+# Import OpenAI conditionally since it requires heavy dependencies (tiktoken with Rust)
+# and may not be needed in all Lambda deployments
+try:
+    from langchain_openai import ChatOpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
 
 
 def create_llm(model_cfg: dict):
@@ -42,6 +50,11 @@ def create_llm(model_cfg: dict):
     provider = cfg.pop("provider")
     
     if provider == "openai":
+        if not HAS_OPENAI:
+            raise RuntimeError(
+                "langchain-openai is not installed. "
+                "Install it with: pip install langchain-openai"
+            )
         # Handle OpenAI-specific: openai_api_key_env -> api_key (environment variable lookup)
         env_var = cfg.pop("openai_api_key_env", "OPENAI_API_KEY")
         api_key = os.environ.get(env_var)
