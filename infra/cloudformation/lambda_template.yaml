@@ -61,15 +61,15 @@ Parameters:
     Default: ''
     Description: 'AWS Bedrock Knowledge Base ID for retrieval'
   
+  AppConfigPath:
+    Type: String
+    Default: 'config/app_config.yml'
+    Description: 'Path to app config file (local path or S3 URI like s3://bucket/key)'
+  
   ConfigS3Bucket:
     Type: String
     Default: ''
-    Description: 'S3 bucket name for config file (optional, leave empty for local config)'
-  
-  ConfigS3Key:
-    Type: String
-    Default: ''
-    Description: 'S3 key for config file (optional, leave empty for local config)'
+    Description: 'S3 bucket name for config file (optional, extracted from AppConfigPath if S3 URI)'
   
   LambdaExecutionRoleArn:
     Type: String
@@ -77,13 +77,11 @@ Parameters:
 
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
-  HasConfigS3: !And
-    - !Not [!Equals [!Ref ConfigS3Bucket, '']]
-    - !Not [!Equals [!Ref ConfigS3Key, '']]
   HasVpcConfig: !And
     - !Not [!Equals [!Ref VpcId, '']]
     - !Not [!Equals [!Ref SubnetIds, '']]
     - !Not [!Equals [!Ref SecurityGroupIds, '']]
+  HasConfigS3Bucket: !Not [!Equals [!Ref ConfigS3Bucket, '']]
 
 Resources:
   # CloudWatch Log Group
@@ -107,17 +105,14 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${Environment}-rag-chat'
       Description: 'RAG Chat Lambda function with LangGraph orchestration'
       PackageType: Image
-      ImageUri: !Ref LambdaImageUri
+      Code:
+        ImageUri: !Ref LambdaImageUri
       Role: !Ref LambdaExecutionRoleArn
       MemorySize: !Ref LambdaMemorySize
       Timeout: !Ref LambdaTimeout
       Environment:
         Variables:
-          APP_CONFIG_PATH: !If
-            - HasConfigS3
-            - !Sub 's3://${ConfigS3Bucket}/${ConfigS3Key}'
-            - 'config/app_config.yml'
-          AWS_REGION: !Ref AWSRegion
+          APP_CONFIG_PATH: !Ref AppConfigPath
           ENVIRONMENT: !Ref Environment
       VpcConfig: !If
         - HasVpcConfig
@@ -134,6 +129,33 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
+
+  # Inline policy to grant S3 access for config bucket
+  # Extract role name from ARN (format: arn:aws:iam::account:role/role-name)
+  LambdaConfigS3Policy:
+    Type: AWS::IAM::Policy
+    Condition: HasConfigS3Bucket
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${Environment}-lambda-config-s3-policy'
+      Roles:
+        - !Select 
+          - 1
+          - !Split 
+            - '/'
+            - !Ref LambdaExecutionRoleArn
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3ConfigRead
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${ConfigS3Bucket}/*'
+          - Sid: AllowS3BucketList
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${ConfigS3Bucket}'
 
 Outputs:
   LambdaFunctionName:
