@@ -9,7 +9,6 @@ from ragas.metrics import (
     context_recall,
 )
 from ragas.llms import LangchainLLMWrapper
-from ragas.embeddings import LangchainEmbeddingsWrapper
 from metrics_base import BaseMetric
 import asyncio
 
@@ -50,11 +49,14 @@ def create_embeddings(embedding_model_cfg=None):
                             }
     
     Returns:
-        LangchainEmbeddingsWrapper instance for use with Ragas
+        Langchain Embeddings instance (BedrockEmbeddings or OpenAIEmbeddings).
+        Ragas will automatically wrap it with LangchainEmbeddingsWrapper.
     
     Note:
         If embedding_model_cfg is None or not provided, this function defaults to OpenAI embeddings.
         This default behavior should be explicitly configured in evals_config.yaml to avoid confusion.
+        We return the raw Langchain embeddings instance and let ragas wrap it, rather than
+        wrapping it ourselves, to ensure proper integration with ragas's internal handling.
     """
     # Default to OpenAI if no embedding_model config is provided
     if embedding_model_cfg is None:
@@ -65,8 +67,8 @@ def create_embeddings(embedding_model_cfg=None):
                 "pip install langchain-openai"
             )
         # Default to OpenAI embeddings when no config is provided
-        openai_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        return LangchainEmbeddingsWrapper(openai_embeddings)
+        # Return raw Langchain embeddings - ragas will wrap it
+        return OpenAIEmbeddings(model="text-embedding-3-small")
     
     # Get provider from config
     provider = embedding_model_cfg.get("provider")
@@ -83,11 +85,11 @@ def create_embeddings(embedding_model_cfg=None):
         model_id = embedding_model_cfg.get("model", "amazon.titan-embed-text-v2:0")
         region_name = embedding_model_cfg.get("region_name", "us-east-1")
         
-        bedrock_embeddings = BedrockEmbeddings(
+        # Return raw Langchain embeddings - ragas will wrap it
+        return BedrockEmbeddings(
             model_id=model_id,
             region_name=region_name,
         )
-        return LangchainEmbeddingsWrapper(bedrock_embeddings)
     
     elif provider == "openai" or provider is None:
         # Use OpenAI embeddings (default if provider not specified)
@@ -109,8 +111,8 @@ def create_embeddings(embedding_model_cfg=None):
             if not api_key:
                 raise RuntimeError(f"Missing OpenAI API key in env var {env_var}")
         
-        openai_embeddings = OpenAIEmbeddings(model=model, api_key=api_key)
-        return LangchainEmbeddingsWrapper(openai_embeddings)
+        # Return raw Langchain embeddings - ragas will wrap it
+        return OpenAIEmbeddings(model=model, api_key=api_key)
     
     else:
         raise ValueError(f"Unsupported embedding provider: {provider}. Expected 'bedrock' or 'openai'.")
