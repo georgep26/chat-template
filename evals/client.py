@@ -7,6 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 import boto3
 import uuid
 
+from src.utils.logger import get_logger
+
+log = get_logger(__name__)
+
 _executor = ThreadPoolExecutor(max_workers=32)
 
 
@@ -94,15 +98,21 @@ class LambdaRagClient(BaseRagClient):
         loop = asyncio.get_running_loop()
         
         # Adapt request format: input -> message, add conversation_id and user_id
+        conversation_id = sample.metadata.get("conversation_id", str(uuid.uuid4()))
+        user_id = sample.metadata.get("user_id", "eval_user")
+        
         payload = {
             "message": sample.input,
-            "conversation_id": sample.metadata.get("conversation_id", str(uuid.uuid4())),
-            "user_id": sample.metadata.get("user_id", "eval_user"),
+            "conversation_id": conversation_id,
+            "user_id": user_id,
         }
         
         # Add retrieval_filters if present in metadata
         if "retrieval_filters" in sample.metadata:
             payload["retrieval_filters"] = sample.metadata["retrieval_filters"]
+        
+        # Log invocation details
+        log.info(f"Invoking Lambda: user_id={user_id}, conversation_id={conversation_id}")
         
         def _invoke():
             resp = self._lambda.invoke(
@@ -118,10 +128,15 @@ class LambdaRagClient(BaseRagClient):
         # Handle Lambda response format (may have statusCode/body or be direct)
         if isinstance(resp, dict) and "statusCode" in resp:
             if resp["statusCode"] != 200:
-                raise RuntimeError(f"Lambda error: {resp.get('body', 'Unknown error')}")
+                error_msg = resp.get('body', 'Unknown error')
+                log.error(f"Lambda failed: user_id={user_id}, conversation_id={conversation_id}, error={error_msg}")
+                raise RuntimeError(f"Lambda error: {error_msg}")
             body = json.loads(resp["body"]) if isinstance(resp.get("body"), str) else resp.get("body", {})
         else:
             body = resp
+        
+        # Log successful completion
+        log.info(f"Lambda completed: user_id={user_id}, conversation_id={conversation_id}")
         
         # Extract answer and contexts from ChatResponse format
         answer = body.get("answer", "")
@@ -138,13 +153,17 @@ class LambdaRagClient(BaseRagClient):
 
 
 def build_rag_client(config: dict) -> BaseRagClient:
-    mode = config["run"]["mode"]
     rag_cfg = config["rag_app"]
     
-    if mode == "local":
+    # Determine client type based on rag_app configuration
+    if "local_entrypoint" in rag_cfg and rag_cfg["local_entrypoint"]:
         return LocalRagClient(rag_cfg)
-    elif mode == "lambda":
+    elif "lambda_function_name" in rag_cfg and rag_cfg["lambda_function_name"]:
         return LambdaRagClient(rag_cfg)
     else:
-        raise ValueError(f"Unknown run.mode: {mode}")
+        raise ValueError(
+            "Either 'local_entrypoint' or 'lambda_function_name' must be provided "
+            "under 'rag_app' configuration. "
+            f"Current rag_app config: {rag_cfg}"
+        )
 
