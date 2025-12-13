@@ -71,7 +71,7 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource:
-                  - !Sub 'arn:aws:secretsmanager:${AWSRegion}:${AWS::AccountId}:secret:${ProjectName}-rag-chat-db-connection-${Environment}-*'
+                  - !Sub 'arn:aws:secretsmanager:${AWSRegion}:${AWS::AccountId}:secret:${ProjectName}-*db-connection-${Environment}-*'
         
         # Optional: S3 permissions if config files are in S3
         - PolicyName: S3ConfigAccessPolicy
