@@ -2,6 +2,9 @@
 langchain>=0.2.0
 langgraph>=0.2.0
 langchain-aws>=1.0.0
+# Note: langchain-openai is optional and requires additional build tools (Rust for tiktoken)
+# Uncomment if you need OpenAI models:
+# langchain-openai>=0.1.0
 # Note: langchain-postgres and psycopg are only needed for "postgres" backend
 # For "aurora_data_api" backend, only boto3 is required
 langchain-postgres>=0.0.10
