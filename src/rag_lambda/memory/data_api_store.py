@@ -69,6 +69,7 @@ class DataApiHistoryStore(ChatHistoryStore):
         """
         retry_delay = self._initial_retry_delay
         last_exception = None
+        db_resuming_logged = False
         
         for attempt in range(self._max_retries):
             try:
@@ -83,13 +84,36 @@ class DataApiHistoryStore(ChatHistoryStore):
                     request_params['parameters'] = parameters
                 
                 response = self._rds_data.execute_statement(**request_params)
+                
+                # If we were waiting for DB to resume, log that it's ready
+                if db_resuming_logged:
+                    log.info("Database is ready")
+                
                 return response
                 
             except ClientError as e:
                 error_code = e.response.get('Error', {}).get('Code', '')
                 error_msg = str(e).lower()
                 
-                # Check if this is a retryable error
+                # Check for DatabaseResumingException - handle specially
+                is_db_resuming = 'databaseresumingexception' in error_msg or error_code == 'DatabaseResumingException'
+                
+                if is_db_resuming:
+                    # Log initial warning once
+                    if not db_resuming_logged:
+                        log.warning("Database is resuming after being auto-paused. Waiting for it to become ready...")
+                        db_resuming_logged = True
+                    else:
+                        log.info("DB resuming...")
+                    
+                    if attempt < self._max_retries - 1:
+                        time.sleep(5)  # Wait 5 seconds for DB to resume
+                        continue
+                    else:
+                        log.error(f"Database failed to resume after {self._max_retries} attempts")
+                        raise
+                
+                # Check if this is another retryable error
                 is_retryable = any(keyword in error_msg for keyword in [
                     'badrequestexception',
                     'forbiddenexception',
