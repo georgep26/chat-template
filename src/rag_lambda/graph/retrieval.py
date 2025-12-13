@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import yaml
-from langchain_community.retrievers.bedrock import AmazonKnowledgeBasesRetriever
+from langchain_aws import AmazonKnowledgeBasesRetriever
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
