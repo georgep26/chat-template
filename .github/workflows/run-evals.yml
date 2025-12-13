@@ -95,7 +95,7 @@ jobs:
         if: steps.check-branch.outputs.skip != 'true'
         shell: bash -l {0}
         run: |
-          echo "PYTHONPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${{ github.workspace }}:${{ github.workspace }}/src/rag_lambda:${{ github.workspace }}/src" >> $GITHUB_ENV
 
       - name: Run evaluation pipeline
         if: steps.check-branch.outputs.skip != 'true'
