@@ -32,8 +32,9 @@
 #       1. Docker to be installed and running
 #       2. AWS CLI configured with appropriate credentials
 #       3. The database stack to be deployed (for DB secret ARN)
-#       4. The Lambda execution role to be deployed (via infra/roles/lambda_execution_role.yaml)
-#       5. VPC, subnets, and security groups to be available
+#       4. VPC, subnets, and security groups to be available (optional, only for postgres backend)
+#
+#       The Lambda execution role will be automatically deployed if it doesn't exist.
 
 set -e
 
@@ -91,8 +92,7 @@ show_usage() {
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected from DB stack if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected from KB stack if not provided)"
     echo "  --lambda-role-arn <arn>            - Lambda execution role ARN (auto-detected from role stack if not provided)"
-    echo "  --config-s3-bucket <bucket>         - S3 bucket for config file (optional)"
-    echo "  --config-s3-key <key>              - S3 key for config file (optional, requires --config-s3-bucket)"
+    echo "  --app-config-s3-uri <uri>          - S3 URI for config file (e.g., s3://bucket/key) (optional)"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
@@ -101,12 +101,14 @@ show_usage() {
     echo "Examples:"
     echo "  $0 dev deploy  # Deploy without VPC (for aurora_data_api backend)"
     echo "  $0 dev deploy --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (for postgres backend)"
+    echo "  $0 dev deploy --app-config-s3-uri s3://my-bucket/config/app_config.yml  # Use S3 config file"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
     echo ""
     echo "Note: The script will automatically detect VPC, DB, and KB stack outputs if available."
     echo "      If VPC parameters are not provided, Lambda will be deployed without VPC."
+    echo "      The Lambda execution role will be automatically deployed if it doesn't exist."
 }
 
 # Check if environment is provided
@@ -147,8 +149,7 @@ SECURITY_GROUP_IDS=""
 DB_SECRET_ARN=""
 KNOWLEDGE_BASE_ID=""
 LAMBDA_ROLE_ARN=""
-CONFIG_S3_BUCKET=""
-CONFIG_S3_KEY=""
+APP_CONFIG_S3_URI=""
 
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
@@ -193,12 +194,8 @@ while [[ $# -gt 0 ]]; do
             LAMBDA_ROLE_ARN="$2"
             shift 2
             ;;
-        --config-s3-bucket)
-            CONFIG_S3_BUCKET="$2"
-            shift 2
-            ;;
-        --config-s3-key)
-            CONFIG_S3_KEY="$2"
+        --app-config-s3-uri)
+            APP_CONFIG_S3_URI="$2"
             shift 2
             ;;
         --skip-build)
@@ -336,13 +333,84 @@ get_kb_stack_outputs() {
     echo "$kb_id"
 }
 
+# Function to deploy Lambda execution role stack
+deploy_lambda_role_stack() {
+    print_status "Deploying Lambda execution role stack: $ROLE_STACK_NAME"
+    
+    # Check if template file exists
+    if [ ! -f "$ROLE_TEMPLATE_FILE" ]; then
+        print_error "Role template file not found: $ROLE_TEMPLATE_FILE"
+        return 1
+    fi
+    
+    # Check if role stack already exists
+    if aws cloudformation describe-stacks --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_status "Lambda role stack $ROLE_STACK_NAME already exists"
+        return 0
+    fi
+    
+    # Create a temporary parameters file for the role stack
+    local role_param_file=$(mktemp)
+    trap "rm -f $role_param_file" EXIT
+    
+    # Build parameters JSON file for role stack
+    {
+        echo "["
+        printf '  {\n    "ParameterKey": "ProjectName",\n    "ParameterValue": "%s"\n  }' "$PROJECT_NAME"
+        echo ","
+        printf '  {\n    "ParameterKey": "Environment",\n    "ParameterValue": "%s"\n  }' "$ENVIRONMENT"
+        echo ","
+        printf '  {\n    "ParameterKey": "AWSRegion",\n    "ParameterValue": "%s"\n  }' "$AWS_REGION"
+        echo ""
+        echo "]"
+    } > "$role_param_file"
+    
+    # Create the role stack
+    print_status "Creating Lambda execution role stack..."
+    if aws cloudformation create-stack \
+        --stack-name "$ROLE_STACK_NAME" \
+        --template-body file://$ROLE_TEMPLATE_FILE \
+        --parameters file://$role_param_file \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_status "Lambda role stack creation initiated"
+        print_status "Waiting for role stack to be ready..."
+        
+        # Wait for stack to be created
+        aws cloudformation wait stack-create-complete --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" 2>/dev/null
+        local wait_result=$?
+        
+        if [ $wait_result -eq 0 ]; then
+            print_status "Lambda role stack created successfully"
+            return 0
+        else
+            # Check if stack is actually in a good state
+            local stack_status=$(aws cloudformation describe-stacks \
+                --stack-name "$ROLE_STACK_NAME" \
+                --region "$AWS_REGION" \
+                --query 'Stacks[0].StackStatus' \
+                --output text 2>/dev/null)
+            
+            if [ "$stack_status" == "CREATE_COMPLETE" ]; then
+                print_status "Lambda role stack created successfully"
+                return 0
+            else
+                print_error "Lambda role stack creation failed or timed out. Status: $stack_status"
+                return 1
+            fi
+        fi
+    else
+        print_error "Failed to create Lambda role stack"
+        return 1
+    fi
+}
+
 # Function to get Lambda role ARN
 get_lambda_role_arn() {
     print_status "Retrieving Lambda execution role ARN from: $ROLE_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "Lambda role stack $ROLE_STACK_NAME does not exist in region $AWS_REGION" >&2
-        print_warning "You can deploy it using: aws cloudformation create-stack --stack-name $ROLE_STACK_NAME --template-body file://$ROLE_TEMPLATE_FILE --parameters ParameterKey=ProjectName,ParameterValue=$PROJECT_NAME ParameterKey=Environment,ParameterValue=$ENVIRONMENT ParameterKey=AWSRegion,ParameterValue=$AWS_REGION --capabilities CAPABILITY_NAMED_IAM --region $AWS_REGION" >&2
         return 1
     fi
     
@@ -363,71 +431,73 @@ get_lambda_role_arn() {
 # Function to create ECR repository if it doesn't exist
 ensure_ecr_repo() {
     local repo_name=$1
-    print_status "Checking ECR repository: $repo_name"
+    print_status "Checking ECR repository: $repo_name" >&2
     
     if aws ecr describe-repositories --repository-names "$repo_name" --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_status "ECR repository $repo_name already exists"
+        print_status "ECR repository $repo_name already exists" >&2
     else
-        print_status "Creating ECR repository: $repo_name"
+        print_status "Creating ECR repository: $repo_name" >&2
         aws ecr create-repository \
             --repository-name "$repo_name" \
             --region "$AWS_REGION" \
             --image-scanning-configuration scanOnPush=true \
-            --encryption-configuration encryptionType=AES256 >/dev/null
-        print_status "ECR repository created successfully"
+            --encryption-configuration encryptionType=AES256 >/dev/null 2>&1
+        print_status "ECR repository created successfully" >&2
     fi
 }
 
 # Function to build and push Docker image
 build_and_push_image() {
     if [ "$SKIP_BUILD" = true ]; then
-        print_status "Skipping Docker build (--skip-build flag set)"
+        print_status "Skipping Docker build (--skip-build flag set)" >&2
         return 0
     fi
     
     local account_id=$(get_aws_account_id)
     if [ -z "$account_id" ]; then
-        print_error "Failed to get AWS account ID"
+        print_error "Failed to get AWS account ID" >&2
         exit 1
     fi
     
     local ecr_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
     local image_uri="${ecr_uri}:${IMAGE_TAG}"
     
-    print_status "Building Docker image: rag-lambda"
-    print_status "Dockerfile: src/rag_lambda/Dockerfile"
+    print_status "Building Docker image: rag-lambda" >&2
+    print_status "Dockerfile: src/rag_lambda/Dockerfile" >&2
+    print_status "Platform: linux/amd64 (x86_64)" >&2
     
-    # Build the image
-    docker build -f src/rag_lambda/Dockerfile -t rag-lambda:latest .
+    # Build the image for x86_64 architecture (Lambda default)
+    # Use --platform to ensure correct architecture even when building on ARM Macs
+    docker build --platform linux/amd64 -f src/rag_lambda/Dockerfile -t rag-lambda:latest .
     
     if [ $? -ne 0 ]; then
-        print_error "Docker build failed"
+        print_error "Docker build failed" >&2
         exit 1
     fi
     
-    print_status "Docker image built successfully"
+    print_status "Docker image built successfully" >&2
     
     # Ensure ECR repository exists
     ensure_ecr_repo "$ECR_REPO_NAME"
     
     # Login to ECR
-    print_status "Logging in to ECR..."
-    aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ecr_uri"
+    print_status "Logging in to ECR..." >&2
+    aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ecr_uri" >/dev/null 2>&1
     
     # Tag the image
-    print_status "Tagging image: $image_uri"
+    print_status "Tagging image: $image_uri" >&2
     docker tag rag-lambda:latest "$image_uri"
     
-    # Push the image
-    print_status "Pushing image to ECR: $image_uri"
-    docker push "$image_uri"
+    # Push the image (redirect stdout to stderr to prevent it from being captured)
+    print_status "Pushing image to ECR: $image_uri" >&2
+    docker push "$image_uri" 1>&2
     
     if [ $? -ne 0 ]; then
-        print_error "Docker push failed"
+        print_error "Docker push failed" >&2
         exit 1
     fi
     
-    print_status "Image pushed successfully: $image_uri"
+    print_status "Image pushed successfully: $image_uri" >&2
     echo "$image_uri"
 }
 
@@ -559,32 +629,32 @@ deploy_stack() {
         print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
         exit 1
     else
-        # Convert subnet IDs to CloudFormation list format
-        local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
-        
-        if [ -z "$SECURITY_GROUP_IDS" ]; then
-            # Try to get security group from RDS stack
-            print_status "Auto-detecting security group IDs..."
-            if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-                local sg_id=$(aws cloudformation describe-stacks \
-                    --stack-name "$DB_STACK_NAME" \
-                    --region "$AWS_REGION" \
+    # Convert subnet IDs to CloudFormation list format
+    local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
+    
+    if [ -z "$SECURITY_GROUP_IDS" ]; then
+        # Try to get security group from RDS stack
+        print_status "Auto-detecting security group IDs..."
+        if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            local sg_id=$(aws cloudformation describe-stacks \
+                --stack-name "$DB_STACK_NAME" \
+                --region "$AWS_REGION" \
                     --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
-                    --output text 2>/dev/null)
-                if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
-                    SECURITY_GROUP_IDS="$sg_id"
-                    print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
-                fi
+                --output text 2>/dev/null)
+            if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
+                SECURITY_GROUP_IDS="$sg_id"
+                print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
             fi
         fi
-        
-        if [ -z "$SECURITY_GROUP_IDS" ]; then
+    fi
+    
+    if [ -z "$SECURITY_GROUP_IDS" ]; then
             print_error "Security Group IDs are required when VPC is configured. Provide --security-group-ids or ensure DB stack has security group output."
-            exit 1
-        fi
-        
-        # Convert security group IDs to CloudFormation list format
-        local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
+        exit 1
+    fi
+    
+    # Convert security group IDs to CloudFormation list format
+    local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
         print_status "Deploying Lambda with VPC configuration (for postgres backend)."
     fi
     
@@ -622,9 +692,33 @@ deploy_stack() {
     fi
     
     if [ -z "$LAMBDA_ROLE_ARN" ]; then
-        print_error "Lambda execution role ARN is required. Provide --lambda-role-arn or deploy Lambda execution role stack first."
-        print_error "Deploy role stack: aws cloudformation create-stack --stack-name $ROLE_STACK_NAME --template-body file://$ROLE_TEMPLATE_FILE --parameters ParameterKey=ProjectName,ParameterValue=$PROJECT_NAME ParameterKey=Environment,ParameterValue=$ENVIRONMENT ParameterKey=AWSRegion,ParameterValue=$AWS_REGION --capabilities CAPABILITY_NAMED_IAM --region $AWS_REGION"
-        exit 1
+        print_warning "Lambda execution role stack does not exist. Deploying it now..."
+        if ! deploy_lambda_role_stack; then
+            print_error "Failed to deploy Lambda execution role stack. Cannot proceed with Lambda deployment."
+            exit 1
+        fi
+        
+        # Get the role ARN after deployment
+        local role_arn=$(get_lambda_role_arn)
+        if [ $? -eq 0 ] && [ -n "$role_arn" ]; then
+            LAMBDA_ROLE_ARN="$role_arn"
+            print_status "Retrieved Lambda Role ARN: $LAMBDA_ROLE_ARN"
+        else
+            print_error "Failed to retrieve Lambda execution role ARN after deployment."
+            exit 1
+        fi
+    fi
+    
+    # Extract S3 bucket name if AppConfigPath is provided (before JSON generation)
+    local config_bucket=""
+    if [ -n "$APP_CONFIG_S3_URI" ]; then
+        if [[ "$APP_CONFIG_S3_URI" =~ ^s3://([^/]+) ]]; then
+            config_bucket="${BASH_REMATCH[1]}"
+            print_status "Extracted S3 bucket from URI: $config_bucket"
+        else
+            print_warning "Could not extract bucket name from S3 URI: $APP_CONFIG_S3_URI"
+            print_warning "S3 access permissions may not be configured correctly."
+        fi
     fi
     
     # Create a temporary parameters file
@@ -658,18 +752,28 @@ deploy_stack() {
         echo ","
         printf '  {\n    "ParameterKey": "LambdaExecutionRoleArn",\n    "ParameterValue": "%s"\n  }' "$LAMBDA_ROLE_ARN"
         
-        if [ -n "$CONFIG_S3_BUCKET" ]; then
+        # Add AppConfigPath and ConfigS3Bucket parameters if S3 URI is provided
+        if [ -n "$APP_CONFIG_S3_URI" ]; then
             echo ","
-            printf '  {\n    "ParameterKey": "ConfigS3Bucket",\n    "ParameterValue": "%s"\n  }' "$CONFIG_S3_BUCKET"
-            if [ -n "$CONFIG_S3_KEY" ]; then
+            printf '  {\n    "ParameterKey": "AppConfigPath",\n    "ParameterValue": "%s"\n  }' "$APP_CONFIG_S3_URI"
+            
+            # Add ConfigS3Bucket parameter if bucket was extracted
+            if [ -n "$config_bucket" ]; then
                 echo ","
-                printf '  {\n    "ParameterKey": "ConfigS3Key",\n    "ParameterValue": "%s"\n  }' "$CONFIG_S3_KEY"
+                printf '  {\n    "ParameterKey": "ConfigS3Bucket",\n    "ParameterValue": "%s"\n  }' "$config_bucket"
             fi
         fi
         
         echo ""
         echo "]"
     } > "$param_file"
+    
+    # Validate parameters file is valid JSON
+    if ! python3 -m json.tool "$param_file" >/dev/null 2>&1; then
+        print_error "Generated parameters file is not valid JSON. Contents:"
+        cat "$param_file"
+        exit 1
+    fi
     
     # Check if stack exists
     local stack_operation_result=0
@@ -681,6 +785,7 @@ deploy_stack() {
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
             --parameters file://$param_file \
+            --capabilities CAPABILITY_IAM \
             --region $AWS_REGION 2>&1)
         stack_operation_result=$?
         
@@ -694,34 +799,110 @@ deploy_stack() {
                 print_error "Stack update failed:"
                 echo "$update_output"
             fi
+        else
+            print_status "Stack update initiated successfully"
         fi
     else
         print_status "Creating new stack: $STACK_NAME"
-        aws cloudformation create-stack \
+        local create_output=$(aws cloudformation create-stack \
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
             --parameters file://$param_file \
-            --region $AWS_REGION
+            --capabilities CAPABILITY_IAM \
+            --region $AWS_REGION 2>&1)
         stack_operation_result=$?
+        
+        if [ $stack_operation_result -ne 0 ]; then
+            print_error "Stack creation failed:"
+            echo "$create_output"
+        else
+            print_status "Stack creation initiated successfully"
+        fi
     fi
     
     if [ $stack_operation_result -eq 0 ]; then
         if [ "$no_updates" = false ]; then
             print_status "Stack operation initiated successfully"
-            print_status "Waiting for stack to be ready..."
+            print_status "Waiting for stack to be ready (this may take several minutes)..."
             
-            # Wait for stack to be in a stable state
-            print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
+            # Determine which wait command to use
+            local is_update=false
+            local initial_status=$(aws cloudformation describe-stacks \
+                --stack-name $STACK_NAME \
+                --region $AWS_REGION \
+                --query 'Stacks[0].StackStatus' \
+                --output text 2>/dev/null)
             
-            # Try waiting for create first, then update
+            if [[ "$initial_status" == *"UPDATE"* ]]; then
+                is_update=true
+            fi
+            
+            # Show periodic progress updates while waiting
+            local wait_start_time=$(date +%s)
+            local last_status_time=$wait_start_time
+            local status_check_interval=30  # Check status every 30 seconds
+            
+            # Function to show progress in background
+            (
+                while true; do
+                    sleep $status_check_interval
+                    local current_time=$(date +%s)
+                    local elapsed=$((current_time - wait_start_time))
+                    local stack_status=$(aws cloudformation describe-stacks \
+                        --stack-name $STACK_NAME \
+                        --region $AWS_REGION \
+                        --query 'Stacks[0].StackStatus' \
+                        --output text 2>/dev/null)
+                    
+                    if [ -n "$stack_status" ] && [ "$stack_status" != "None" ]; then
+                        print_status "Stack status: $stack_status (elapsed: ${elapsed}s)" >&2
+                    fi
+                done
+            ) &
+            local progress_pid=$!
+            
+            # Set up cleanup trap to ensure background process is killed
+            cleanup_progress() {
+                if [ -n "$progress_pid" ] && kill -0 $progress_pid 2>/dev/null; then
+                    kill -TERM $progress_pid 2>/dev/null
+                    sleep 1
+                    if kill -0 $progress_pid 2>/dev/null; then
+                        kill -9 $progress_pid 2>/dev/null
+                    fi
+                    wait $progress_pid 2>/dev/null || true
+                fi
+            }
+            trap cleanup_progress EXIT INT TERM
+            
+            # Wait for stack operation to complete
             local wait_result=0
-            aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
-            wait_result=$?
-            
-            if [ $wait_result -ne 0 ]; then
-                # If create wait failed, try update wait
-                aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
+            if [ "$is_update" = true ]; then
+                print_status "Waiting for stack update to complete..."
+                aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>&1
                 wait_result=$?
+            else
+                print_status "Waiting for stack creation to complete..."
+                aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>&1
+                wait_result=$?
+            fi
+            
+            # Stop progress monitoring immediately
+            cleanup_progress
+            trap - EXIT INT TERM  # Remove trap after cleanup
+            
+            # If wait failed, check if it's due to rollback
+            if [ $wait_result -ne 0 ]; then
+                local current_status=$(aws cloudformation describe-stacks \
+                    --stack-name $STACK_NAME \
+                    --region $AWS_REGION \
+                    --query 'Stacks[0].StackStatus' \
+                    --output text 2>/dev/null)
+                
+                if [[ "$current_status" == *"ROLLBACK"* ]] || [[ "$current_status" == *"FAILED"* ]]; then
+                    print_error "Stack deployment failed with status: $current_status"
+                    check_stack_status
+                    exit 1
+                fi
             fi
             
             # Check stack status after wait
@@ -733,12 +914,21 @@ deploy_stack() {
             if [ $wait_result -eq 0 ]; then
                 print_status "Stack operation completed successfully"
             else
-                # Wait command timed out or failed, but check if stack is actually in a good state
-                if ! check_stack_status; then
+                # Wait command may have failed, but check if stack is actually in a good state
+                local final_status=$(aws cloudformation describe-stacks \
+                    --stack-name $STACK_NAME \
+                    --region $AWS_REGION \
+                    --query 'Stacks[0].StackStatus' \
+                    --output text 2>/dev/null)
+                
+                if [[ "$final_status" == "CREATE_COMPLETE" ]] || [[ "$final_status" == "UPDATE_COMPLETE" ]]; then
+                    print_status "Stack operation completed successfully (status: $final_status)"
+                elif ! check_stack_status; then
                     print_error "Stack deployment failed. See errors above."
                     exit 1
+                else
+                    print_warning "Stack operation completed with status: $final_status"
                 fi
-                print_warning "Stack operation may still be in progress, but current status is valid."
             fi
         else
             # No updates needed, but verify stack is in good state
@@ -758,6 +948,51 @@ deploy_stack() {
         
         if [ -n "$lambda_name" ] && [ "$lambda_name" != "None" ]; then
             print_status "Lambda Function Name: $lambda_name"
+            
+            # Explicitly update Lambda function to use the latest image
+            # This ensures the function picks up the new image even if the tag hasn't changed
+            print_status "Updating Lambda function to use latest image: $image_uri"
+            if aws lambda update-function-code \
+                --function-name "$lambda_name" \
+                --image-uri "$image_uri" \
+                --region "$AWS_REGION" >/dev/null 2>&1; then
+                print_status "Lambda function code updated successfully"
+                
+                # Wait for the function update to complete
+                print_status "Waiting for Lambda function update to complete..."
+                local update_wait_start=$(date +%s)
+                local max_wait=60  # Wait up to 60 seconds
+                
+                while true; do
+                    local update_status=$(aws lambda get-function \
+                        --function-name "$lambda_name" \
+                        --region "$AWS_REGION" \
+                        --query 'Configuration.LastUpdateStatus' \
+                        --output text 2>/dev/null)
+                    
+                    if [ "$update_status" == "Successful" ]; then
+                        print_status "Lambda function update completed successfully"
+                        break
+                    elif [ "$update_status" == "Failed" ]; then
+                        print_warning "Lambda function update failed. Check Lambda console for details."
+                        break
+                    fi
+                    
+                    local current_time=$(date +%s)
+                    local elapsed=$((current_time - update_wait_start))
+                    if [ $elapsed -ge $max_wait ]; then
+                        print_warning "Lambda function update is taking longer than expected. Status: $update_status"
+                        print_warning "The update may still complete. Check Lambda console for current status."
+                        break
+                    fi
+                    
+                    sleep 5
+                done
+            else
+                print_warning "Failed to update Lambda function code. The function may still be using an older image."
+                print_warning "Try running: aws lambda update-function-code --function-name $lambda_name --image-uri $image_uri --region $AWS_REGION"
+            fi
+            
             print_status "You can invoke the function or set up API Gateway to expose it."
         fi
         
