@@ -5,16 +5,28 @@
 #
 # Usage Examples:
 #   # Deploy to development environment (default region: us-east-1)
-#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy
+#   # (Requires an S3-hosted app config)
+#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
 #
 #   # Deploy to staging with custom memory and timeout
-#   ./scripts/deploy/deploy_rag_lambda.sh staging deploy --memory-size 2048 --timeout 600
+#   ./scripts/deploy/deploy_rag_lambda.sh staging deploy \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --memory-size 2048 --timeout 600
 #
 #   # Deploy to production with custom ECR repository
-#   ./scripts/deploy/deploy_rag_lambda.sh prod deploy --ecr-repo my-rag-lambda
+#   ./scripts/deploy/deploy_rag_lambda.sh prod deploy \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --ecr-repo my-rag-lambda
 #
 #   # Deploy without VPC (omit VPC parameters for aurora_data_api backend)
-#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy
+#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
+#
+#   # Optional: overwrite the S3 config with a local file (useful for CI/CD or local dev)
+#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --local_app_config_path config/app_config.yml
 #
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_rag_lambda.sh dev validate
@@ -23,7 +35,8 @@
 #   ./scripts/deploy/deploy_rag_lambda.sh dev status
 #
 #   # Update existing stack (rebuilds and pushes image)
-#   ./scripts/deploy/deploy_rag_lambda.sh dev update
+#   ./scripts/deploy/deploy_rag_lambda.sh dev update \
+#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
 #
 #   # Delete stack (with confirmation prompt)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev delete
@@ -92,16 +105,18 @@ show_usage() {
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected from DB stack if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected from KB stack if not provided)"
     echo "  --lambda-role-arn <arn>            - Lambda execution role ARN (auto-detected from role stack if not provided)"
-    echo "  --app-config-s3-uri <uri>          - S3 URI for config file (e.g., s3://bucket/key) (optional)"
+    echo "  --s3_app_config_uri <uri>          - S3 URI for app config file (e.g., s3://bucket/key) (required for deploy/update)"
+    echo "  --local_app_config_path <path>     - Local app config file to upload to --s3_app_config_uri (optional)"
+    echo "  --app-config-s3-uri <uri>          - (deprecated) Alias for --s3_app_config_uri"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
     echo "Note: If VPC ID is not provided, Lambda will be deployed without VPC (suitable for aurora_data_api backend)"
     echo ""
     echo "Examples:"
-    echo "  $0 dev deploy  # Deploy without VPC (for aurora_data_api backend)"
-    echo "  $0 dev deploy --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (for postgres backend)"
-    echo "  $0 dev deploy --app-config-s3-uri s3://my-bucket/config/app_config.yml  # Use S3 config file"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml  # Deploy without VPC (aurora_data_api backend)"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (postgres backend)"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --local_app_config_path config/app_config.yml  # Upload local config to S3"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
@@ -150,6 +165,7 @@ DB_SECRET_ARN=""
 KNOWLEDGE_BASE_ID=""
 LAMBDA_ROLE_ARN=""
 APP_CONFIG_S3_URI=""
+LOCAL_APP_CONFIG_PATH=""
 
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
@@ -198,6 +214,14 @@ while [[ $# -gt 0 ]]; do
             APP_CONFIG_S3_URI="$2"
             shift 2
             ;;
+        --s3_app_config_uri)
+            APP_CONFIG_S3_URI="$2"
+            shift 2
+            ;;
+        --local_app_config_path)
+            LOCAL_APP_CONFIG_PATH="$2"
+            shift 2
+            ;;
         --skip-build)
             SKIP_BUILD=true
             shift
@@ -217,6 +241,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 print_header "Starting RAG Lambda deployment for $ENVIRONMENT environment"
+
+# Require an S3 app config URI for deploy/update so Lambda always uses S3 for APP_CONFIG_PATH
+if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
+    if [ -z "$APP_CONFIG_S3_URI" ]; then
+        print_error "--s3_app_config_uri is required for $ACTION"
+        show_usage
+        exit 1
+    fi
+fi
 
 # Validate environment
 case $ENVIRONMENT in
@@ -605,6 +638,22 @@ deploy_stack() {
     else
         image_uri=$(build_and_push_image)
     fi
+
+    # If a local app config path is provided, upload it to the required S3 URI.
+    # This allows CI/CD or local deploys to keep the "real" config out of GitHub.
+    if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
+        if [ ! -f "$LOCAL_APP_CONFIG_PATH" ]; then
+            print_error "Local app config file not found: $LOCAL_APP_CONFIG_PATH"
+            exit 1
+        fi
+        if [[ "$APP_CONFIG_S3_URI" != s3://* ]]; then
+            print_error "Invalid --s3_app_config_uri: $APP_CONFIG_S3_URI (expected s3://bucket/key)"
+            exit 1
+        fi
+        print_status "Uploading local app config to S3 (overwrite): $LOCAL_APP_CONFIG_PATH -> $APP_CONFIG_S3_URI"
+        aws s3 cp "$LOCAL_APP_CONFIG_PATH" "$APP_CONFIG_S3_URI" --region "$AWS_REGION" >/dev/null
+        print_status "Uploaded app config to S3 successfully"
+    fi
     
     # Handle VPC configuration (optional - only needed for postgres backend)
     # Auto-detect parameters if not provided
@@ -709,16 +758,14 @@ deploy_stack() {
         fi
     fi
     
-    # Extract S3 bucket name if AppConfigPath is provided (before JSON generation)
+    # Extract S3 bucket name from the required AppConfigPath (before JSON generation)
     local config_bucket=""
-    if [ -n "$APP_CONFIG_S3_URI" ]; then
-        if [[ "$APP_CONFIG_S3_URI" =~ ^s3://([^/]+) ]]; then
-            config_bucket="${BASH_REMATCH[1]}"
-            print_status "Extracted S3 bucket from URI: $config_bucket"
-        else
-            print_warning "Could not extract bucket name from S3 URI: $APP_CONFIG_S3_URI"
-            print_warning "S3 access permissions may not be configured correctly."
-        fi
+    if [[ "$APP_CONFIG_S3_URI" =~ ^s3://([^/]+) ]]; then
+        config_bucket="${BASH_REMATCH[1]}"
+        print_status "Extracted S3 bucket from URI: $config_bucket"
+    else
+        print_error "Invalid --s3_app_config_uri: $APP_CONFIG_S3_URI (expected s3://bucket/key)"
+        exit 1
     fi
     
     # Create a temporary parameters file
@@ -751,18 +798,10 @@ deploy_stack() {
         printf '  {\n    "ParameterKey": "KnowledgeBaseId",\n    "ParameterValue": "%s"\n  }' "$KNOWLEDGE_BASE_ID"
         echo ","
         printf '  {\n    "ParameterKey": "LambdaExecutionRoleArn",\n    "ParameterValue": "%s"\n  }' "$LAMBDA_ROLE_ARN"
-        
-        # Add AppConfigPath and ConfigS3Bucket parameters if S3 URI is provided
-        if [ -n "$APP_CONFIG_S3_URI" ]; then
-            echo ","
-            printf '  {\n    "ParameterKey": "AppConfigPath",\n    "ParameterValue": "%s"\n  }' "$APP_CONFIG_S3_URI"
-            
-            # Add ConfigS3Bucket parameter if bucket was extracted
-            if [ -n "$config_bucket" ]; then
-                echo ","
-                printf '  {\n    "ParameterKey": "ConfigS3Bucket",\n    "ParameterValue": "%s"\n  }' "$config_bucket"
-            fi
-        fi
+        echo ","
+        printf '  {\n    "ParameterKey": "AppConfigPath",\n    "ParameterValue": "%s"\n  }' "$APP_CONFIG_S3_URI"
+        echo ","
+        printf '  {\n    "ParameterKey": "ConfigS3Bucket",\n    "ParameterValue": "%s"\n  }' "$config_bucket"
         
         echo ""
         echo "]"
