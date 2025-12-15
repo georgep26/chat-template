@@ -250,6 +250,7 @@ docs/build/
 # Local configuration
 config/local.yaml
 config/secrets.yaml
+config/app_config.yml
 
 
 # Notes files
