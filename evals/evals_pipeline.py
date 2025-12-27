@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import csv
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from collections import defaultdict
@@ -224,6 +225,7 @@ async def run_evaluation(config: dict):
     summary["run"] = {
         "evaluation_run_name": evaluation_run_name,
         "mode": mode,
+        "run_timestamp": datetime.now().isoformat(),
     }
     
     # 8) Outputs
