@@ -4,17 +4,25 @@ Aggregate evaluation results from multiple runs and generate visualization plots
 
 This script reads summary.json files from evaluation runs and creates line plots
 showing how metrics change over time. The plots are saved to docs/evaluation_results.md.
+
+Can aggregate from local directories or fetch artifacts from GitHub Actions runs.
 """
 
 import argparse
 import json
+import os
 import sys
+import tempfile
+import zipfile
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import plotly.graph_objects as go
+import requests
+from dotenv import load_dotenv
+from github import Auth, Github
 from plotly.subplots import make_subplots
 
 
@@ -26,6 +34,199 @@ def load_summary_json(summary_path: Path) -> Optional[Dict]:
     except (json.JSONDecodeError, IOError) as e:
         print(f"Warning: Failed to load {summary_path}: {e}", file=sys.stderr)
         return None
+
+
+def load_environment_variables():
+    """Load environment variables from .env file if it exists."""
+    # Try to find .env file in project root (parent of evals directory)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent
+    env_file = project_root / ".env"
+    
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"Loaded environment variables from: {env_file}")
+    else:
+        # Also try current directory
+        load_dotenv()
+    
+    # Verify GITHUB_TOKEN is available if needed
+    github_token = os.getenv("GITHUB_TOKEN")
+    if github_token:
+        print("GITHUB_TOKEN found in environment")
+    else:
+        print("Warning: GITHUB_TOKEN not found in environment (required for GitHub Actions fetching)")
+
+
+def fetch_github_actions_artifacts(owner: str, repo: str, max_runs: int, workflow_name: str = "Run Evaluations") -> Path:
+    """
+    Fetch evaluation artifacts from GitHub Actions workflow runs.
+    
+    Args:
+        owner: GitHub repository owner
+        repo: GitHub repository name
+        max_runs: Maximum number of successful runs to fetch
+        workflow_name: Name of the workflow (default: "Run Evaluations")
+    
+    Returns:
+        Path to temporary directory containing extracted artifacts
+    """
+    github_token = os.getenv("GITHUB_TOKEN")
+    if not github_token:
+        raise ValueError("GITHUB_TOKEN environment variable is required for fetching GitHub Actions artifacts")
+    
+    print(f"Connecting to GitHub repository: {owner}/{repo}")
+    # Use the new auth method to avoid deprecation warning
+    auth = Auth.Token(github_token)
+    g = Github(auth=auth)
+    repository = g.get_repo(f"{owner}/{repo}")
+    
+    # Find the workflow
+    workflows = repository.get_workflows()
+    target_workflow = None
+    for workflow in workflows:
+        if workflow.name == workflow_name:
+            target_workflow = workflow
+            break
+    
+    if not target_workflow:
+        raise ValueError(f"Workflow '{workflow_name}' not found in repository")
+    
+    print(f"Found workflow: {workflow_name} (ID: {target_workflow.id})")
+    
+    # Get successful workflow runs
+    # Fetch more runs than max_runs to account for expired artifacts
+    # GitHub Actions artifacts expire after 90 days by default (or retention_days if set)
+    runs_to_check = max(max_runs * 2, 20)  # Check at least 2x max_runs or 20, whichever is larger
+    runs = list(target_workflow.get_runs(status="success")[:runs_to_check])
+    print(f"Found {len(runs)} successful workflow run(s) to check")
+    print(f"Fetching artifacts from up to {max_runs} successful runs (checking {len(runs)} most recent runs for valid artifacts)...")
+    
+    # Create temporary directory for artifacts
+    temp_dir = Path(tempfile.mkdtemp(prefix="github_artifacts_"))
+    print(f"Downloading artifacts to: {temp_dir}")
+    
+    artifact_count = 0
+    runs_processed = 0
+    for run in runs:
+        if artifact_count >= max_runs:
+            break
+        
+        runs_processed += 1
+        artifact_found = False
+        
+        try:
+            artifacts = run.get_artifacts()
+            for artifact in artifacts:
+                if artifact.name == "eval-results":
+                    artifact_found = True
+                    print(f"  Downloading artifact from run #{run.run_number} (ID: {run.id})...")
+                    
+                    try:
+                        # Download artifact
+                        artifact_path = temp_dir / f"run_{run.run_number}_{run.id}"
+                        artifact_path.mkdir(parents=True, exist_ok=True)
+                        
+                        # Download the artifact zip file using the download URL
+                        # The artifact object has a url property that points to the download endpoint
+                        zip_path = artifact_path / "artifact.zip"
+                        
+                        # Get the download URL - PyGithub provides this via the artifact's url
+                        # We need to use the GitHub API directly with authentication
+                        download_url = f"https://api.github.com/repos/{owner}/{repo}/actions/artifacts/{artifact.id}/zip"
+                        headers = {
+                            "Authorization": f"token {github_token}",
+                            "Accept": "application/vnd.github.v3+json"
+                        }
+                        
+                        # Download the zip file
+                        response = requests.get(download_url, headers=headers, stream=True)
+                        
+                        # Handle expired artifacts (410 Gone) gracefully
+                        if response.status_code == 410:
+                            print(f"    Artifact expired (410 Gone) for run #{run.run_number} - skipping")
+                            # Clean up the directory we created
+                            if artifact_path.exists():
+                                import shutil
+                                shutil.rmtree(artifact_path)
+                            break  # Try next artifact or run
+                        
+                        response.raise_for_status()
+                        
+                        with open(zip_path, "wb") as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        
+                        # Extract the zip file
+                        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                            zip_ref.extractall(artifact_path)
+                        
+                        # Remove the zip file
+                        zip_path.unlink()
+                        
+                        # GitHub Actions artifacts preserve the directory structure from the upload
+                        # The artifact contains evals/eval_outputs/, so we need to find summary.json
+                        # files in the extracted structure. The collect_local_results function
+                        # will handle finding them with the glob pattern */summary.json
+                        
+                        # Add run metadata to summary.json files if they exist
+                        for summary_path in artifact_path.rglob("summary.json"):
+                            try:
+                                with open(summary_path, "r") as f:
+                                    summary = json.load(f)
+                                
+                                # Add GitHub Actions run metadata if not present
+                                if "run" not in summary:
+                                    summary["run"] = {}
+                                
+                                run_info = summary["run"]
+                                if "evaluation_run_name" not in run_info:
+                                    run_info["evaluation_run_name"] = f"github-actions-run-{run.run_number}"
+                                if "run_timestamp" not in run_info:
+                                    # Use workflow run created_at timestamp
+                                    run_info["run_timestamp"] = run.created_at.isoformat()
+                                if "mode" not in run_info:
+                                    run_info["mode"] = "github-actions"
+                                
+                                # Write back the updated summary
+                                with open(summary_path, "w") as f:
+                                    json.dump(summary, f, indent=2)
+                            except (json.JSONDecodeError, IOError) as e:
+                                print(f"    Warning: Failed to update {summary_path}: {e}", file=sys.stderr)
+                        
+                        artifact_count += 1
+                        print(f"    Successfully downloaded artifact from run #{run.run_number}")
+                        break  # Only process first eval-results artifact per run
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 410:
+                            print(f"    Artifact expired (410 Gone) for run #{run.run_number} - skipping")
+                        else:
+                            print(f"    HTTP error downloading artifact from run #{run.run_number}: {e}", file=sys.stderr)
+                        # Clean up the directory we created
+                        if artifact_path.exists():
+                            import shutil
+                            shutil.rmtree(artifact_path)
+                        break  # Try next artifact or run
+                    except Exception as e:
+                        print(f"    Error downloading artifact from run #{run.run_number}: {e}", file=sys.stderr)
+                        # Clean up the directory we created
+                        if artifact_path.exists():
+                            import shutil
+                            shutil.rmtree(artifact_path)
+                        break  # Try next artifact or run
+            
+            if not artifact_found:
+                print(f"  No 'eval-results' artifact found for run #{run.run_number}")
+        except Exception as e:
+            print(f"  Warning: Failed to process run #{run.run_number}: {e}", file=sys.stderr)
+            continue
+    
+    if artifact_count == 0:
+        print("Warning: No artifacts found in successful workflow runs", file=sys.stderr)
+    else:
+        print(f"Successfully downloaded {artifact_count} artifact(s) from {runs_processed} run(s) processed")
+    
+    return temp_dir
 
 
 def collect_local_results(results_dir: Path) -> List[Dict]:
@@ -40,8 +241,8 @@ def collect_local_results(results_dir: Path) -> List[Dict]:
         print(f"Error: Results directory does not exist: {results_dir}", file=sys.stderr)
         return summaries
     
-    # Look for summary.json files in subdirectories
-    for summary_path in results_dir.glob("*/summary.json"):
+    # Look for summary.json files in subdirectories (recursively to handle GitHub Actions artifacts)
+    for summary_path in results_dir.rglob("**/summary.json"):
         summary = load_summary_json(summary_path)
         if summary:
             summary['source_path'] = str(summary_path)
@@ -467,13 +668,15 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Aggregate evaluation results and generate visualization plots"
+        description="Aggregate evaluation results and generate visualization plots. "
+                    "Can aggregate from local directory or fetch from GitHub Actions."
     )
     parser.add_argument(
         "--eval-results-dir",
         type=str,
-        required=True,
-        help="Path to directory containing all evaluation results to be aggregated (subdirectories with summary.json files)"
+        default=None,
+        help="Path to directory containing all evaluation results to be aggregated "
+             "(subdirectories with summary.json files). If not provided, will fetch from GitHub Actions."
     )
     parser.add_argument(
         "--output-dir",
@@ -482,27 +685,74 @@ def main():
         help="Output directory for the aggregation script (default: ../docs relative to script location)"
     )
     parser.add_argument(
-        "--github-action",
-        action="store_true",
-        help="Enable GitHub Actions mode (not yet implemented)"
+        "--owner",
+        type=str,
+        default=None,
+        help="GitHub repository owner (required when fetching from GitHub Actions)"
+    )
+    parser.add_argument(
+        "--repo",
+        type=str,
+        default=None,
+        help="GitHub repository name (required when fetching from GitHub Actions)"
+    )
+    parser.add_argument(
+        "--max-runs",
+        type=int,
+        default=10,
+        help="Maximum number of previous successful evaluation runs to fetch from GitHub Actions (default: 10)"
+    )
+    parser.add_argument(
+        "--workflow-name",
+        type=str,
+        default="Run Evaluations",
+        help="Name of the GitHub Actions workflow (default: 'Run Evaluations')"
     )
     
     args = parser.parse_args()
     
     # Resolve paths
     script_dir = Path(__file__).parent
-    results_dir = Path(args.eval_results_dir).resolve()
+    
+    # Determine if we're fetching from GitHub Actions or using local directory
+    if args.eval_results_dir:
+        # Use local directory
+        results_dir = Path(args.eval_results_dir).resolve()
+        temp_dir = None
+    else:
+        # Fetch from GitHub Actions - load environment variables first
+        load_environment_variables()
+        
+        if not args.owner or not args.repo:
+            print("Error: --owner and --repo are required when --eval-results-dir is not provided", file=sys.stderr)
+            sys.exit(1)
+        
+        print(f"Fetching evaluation artifacts from GitHub Actions: {args.owner}/{args.repo}")
+        try:
+            temp_dir = fetch_github_actions_artifacts(
+                owner=args.owner,
+                repo=args.repo,
+                max_runs=args.max_runs,
+                workflow_name=args.workflow_name
+            )
+            results_dir = temp_dir
+        except Exception as e:
+            print(f"Error fetching GitHub Actions artifacts: {e}", file=sys.stderr)
+            sys.exit(1)
     
     if args.output_dir:
         output_dir = Path(args.output_dir).resolve()
     else:
         output_dir = (script_dir.parent / "docs").resolve()
     
-    if args.github_action:
-        print("GitHub Actions mode not yet implemented", file=sys.stderr)
-        sys.exit(1)
-    
-    aggregate_local_results(results_dir, output_dir)
+    try:
+        aggregate_local_results(results_dir, output_dir)
+    finally:
+        # Clean up temporary directory if we fetched from GitHub Actions
+        if temp_dir and temp_dir.exists():
+            import shutil
+            print(f"Cleaning up temporary directory: {temp_dir}")
+            shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":
