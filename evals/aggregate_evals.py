@@ -38,7 +38,23 @@ def load_summary_json(summary_path: Path) -> Optional[Dict]:
 
 
 def load_environment_variables():
-    """Load environment variables from .env file if it exists."""
+    """Load environment variables from .env file if it exists.
+    
+    Skips loading .env file when running in GitHub Actions, as GITHUB_TOKEN
+    is automatically provided by GitHub Actions.
+    """
+    # Check if running in GitHub Actions
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        print("Running in GitHub Actions - skipping .env file load (GITHUB_TOKEN is automatically available)")
+        # Verify GITHUB_TOKEN is available (it should be automatically set by GitHub Actions)
+        github_token = os.getenv("GITHUB_TOKEN")
+        if github_token:
+            print("GITHUB_TOKEN found in environment (provided by GitHub Actions)")
+        else:
+            print("Warning: GITHUB_TOKEN not found in environment")
+        return
+    
+    # Not running in GitHub Actions - load from .env file
     # Try to find .env file in project root (parent of evals directory)
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
