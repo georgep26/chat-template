@@ -268,6 +268,89 @@ Results are written to `{base_dir}/{experiment_name}/`:
 - **results.csv**: Per-sample scores for all metrics
 - **report.html**: Visual HTML report with metric summaries
 
+## Aggregating Evaluation Results
+
+The `aggregate_evals.py` script is a separate utility tool designed to aggregate results from multiple evaluation runs into a single comprehensive report. This script is independent from the main evaluation pipeline and is used for post-processing and visualization of historical evaluation results.
+
+### Purpose
+
+The aggregation script:
+- Collects `summary.json` files from multiple evaluation runs
+- Generates visualizations showing how metrics change over time
+- Creates a markdown report with combined and individual metric plots
+- Orders all results chronologically (oldest to newest)
+
+### Usage
+
+#### Basic Usage
+
+```bash
+# Aggregate results from local evaluation outputs directory
+python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs
+```
+
+This will:
+- Scan `evals/eval_outputs/` for subdirectories containing `summary.json` files
+- Generate plots and tables for all metrics found across runs
+- Create `docs/evaluation_results.md` with the aggregated report
+- Save plot images in the `docs/` directory
+
+#### Custom Output Directory
+
+```bash
+# Specify a custom output directory
+python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs --output-dir docs/evals_results
+```
+
+#### Command Line Arguments
+
+- `--eval-results-dir` (required): Path to directory containing all evaluation results to be aggregated. The script looks for `summary.json` files in subdirectories.
+- `--output-dir` (optional): Output directory for the aggregation script. Defaults to `../docs` relative to the script location.
+- `--github-action` (optional): Enable GitHub Actions mode (not yet implemented).
+
+### Output Structure
+
+The aggregation script generates:
+
+1. **Markdown Report** (`evaluation_results.md`):
+   - **Evaluations Summary** section:
+     - Table of all evaluation runs (name, mode, timestamp)
+     - Combined plot showing all metrics on a single chart
+   - **Evaluation Metric Details** section:
+     - Individual plot for each metric
+     - Table showing metric values for each run
+
+2. **Plot Images** (PNG files):
+   - `eval_all_metrics_combined.png`: All metrics on one chart
+   - `eval_metric_{metric_name}.png`: Individual metric plots
+
+### Timestamp Handling
+
+The script uses timestamps to order evaluation runs chronologically:
+- If `run_timestamp` is present in `summary.json`, it uses that timestamp
+- If `run_timestamp` is missing, it falls back to the file modification time of `summary.json`
+- All tables and plots are ordered from oldest (left/first) to newest (right/last)
+
+### Example Workflow
+
+```bash
+# 1. Run multiple evaluations over time
+python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
+
+# 2. Later, aggregate all results into a report
+python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs
+
+# 3. View the generated report
+open docs/evaluation_results.md
+```
+
+### Notes
+
+- The aggregation script is independent from the main evaluation pipeline
+- It only reads `summary.json` files and does not require access to the original evaluation data
+- All metrics found across different runs will be included in the combined plot
+- Runs are automatically sorted chronologically based on timestamps
+
 ## Judge Validation
 
 Judge validation compares LLM judge scores against human labels to measure judge accuracy:
@@ -289,6 +372,8 @@ Run with `--run-judge-validation` flag to include judge validation results in th
 
 The framework consists of:
 
+### Core Evaluation Pipeline
+
 - **evals_pipeline.py**: Core orchestration logic, command-line interface and argument parsing
 - **data.py**: CSV dataset loading and sample extraction
 - **client.py**: Async RAG clients (local and Lambda)
@@ -298,6 +383,10 @@ The framework consists of:
 - **judge_validation.py**: Judge vs human comparison
 - **outputs.py**: Output writers (JSON/CSV/HTML/S3)
 - **stats_utils.py**: Statistical aggregation and confidence intervals
+
+### Result Aggregation Tool
+
+- **aggregate_evals.py**: Standalone script for aggregating results from multiple evaluation runs into a single report with visualizations. This script is separate from the main evaluation pipeline and is used for post-processing historical results.
 
 Note: Configuration loading uses `src.utils.config.read_config()` and LLM creation uses `src.utils.llm_factory.create_llm()` from the shared utilities.
 
