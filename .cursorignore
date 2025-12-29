@@ -1,2 +1,8 @@
 # Notes files
 feature_ideas.md
+
+# Environment files
+*.env
+
+# Local credentials
+creds.yaml

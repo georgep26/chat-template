@@ -271,3 +271,6 @@ docs/working_notes.rtf
 
 # Local configuration
 config/app_config.yaml
+
+# Environment files
+*.env
