@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import pandas as pd
 import plotly.graph_objects as go
 import requests
 from dotenv import load_dotenv
@@ -253,64 +254,95 @@ def collect_local_results(results_dir: Path) -> List[Dict]:
     return summaries
 
 
-def extract_metric_data(summaries: List[Dict]) -> Tuple[Dict[str, List[tuple]], List[str]]:
+def normalize_datetime(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Normalize a datetime to be offset-naive (remove timezone info).
+    This ensures consistent comparison between datetimes from different sources.
+    Converts timezone-aware datetimes to UTC first, then removes timezone info.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        # Convert to UTC first, then remove timezone info
+        from datetime import timezone
+        # Convert aware datetime to UTC, then make it naive
+        utc_dt = dt.astimezone(timezone.utc)
+        return utc_dt.replace(tzinfo=None)
+    return dt
+
+
+def extract_metric_data(summaries: List[Dict]) -> Tuple[Dict[str, List[tuple]], List[str], Dict[str, str]]:
     """
     Extract metric data from summaries.
     
     Returns:
-        - Dictionary mapping metric_name -> list of (run_name, timestamp, mean_value) tuples
-        - List of all run names in order
+        - Dictionary mapping metric_name -> list of (run_id, timestamp, mean_value) tuples
+        - List of all run IDs in order (run_id is unique identifier)
+        - Dictionary mapping run_id -> display_name (for plots/tables)
     """
     metric_data = defaultdict(list)
-    all_run_names = set()
+    all_run_ids = set()
+    run_id_to_display = {}  # Maps unique run_id to display name
+    run_id_to_timestamp = {}  # Maps run_id to timestamp for sorting
     
     for summary in summaries:
         run_info = summary.get('run', {})
         run_name = run_info.get('evaluation_run_name', 'unknown')
-        all_run_names.add(run_name)
         timestamp_str = run_info.get('run_timestamp', '')
         
         # Try to parse timestamp, fall back to file modification time, then None
+        timestamp = None
         try:
-            if timestamp_str:
-                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            if timestamp_str and timestamp_str != 'N/A':
+                # Parse timestamp string
+                timestamp_str_clean = timestamp_str.replace('Z', '+00:00')
+                timestamp = datetime.fromisoformat(timestamp_str_clean)
             else:
                 # Use file modification time as fallback
                 timestamp = summary.get('file_mtime')
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError):
             # If parsing fails, use file modification time as fallback
             timestamp = summary.get('file_mtime')
+        
+        # Normalize timestamp to offset-naive for consistent comparison
+        timestamp = normalize_datetime(timestamp)
+        
+        # Create unique run identifier: run_name + timestamp (if available)
+        # This ensures runs with same name but different timestamps are treated separately
+        if timestamp:
+            # Format timestamp for display (short format)
+            timestamp_display = timestamp.strftime('%Y-%m-%d %H:%M')
+            run_id = f"{run_name}_{timestamp.isoformat()}"
+            display_name = f"{run_name}\n{timestamp_display}"
+        else:
+            # Fallback: use run_name with index if needed
+            run_id = run_name
+            display_name = run_name
+        
+        all_run_ids.add(run_id)
+        run_id_to_display[run_id] = display_name
+        run_id_to_timestamp[run_id] = timestamp
         
         metrics = summary.get('metrics', {})
         for metric_name, metric_stats in metrics.items():
             mean_value = metric_stats.get('mean')
             if mean_value is not None:
-                metric_data[metric_name].append((run_name, timestamp, mean_value))
+                metric_data[metric_name].append((run_id, timestamp, mean_value))
     
     # Sort each metric's data by timestamp (oldest first)
     for metric_name in metric_data:
         metric_data[metric_name].sort(key=lambda x: (x[1] if x[1] else datetime.min, x[0]))
     
-    # Get ordered list of run names sorted chronologically (oldest first)
-    # Create a mapping of run_name to earliest timestamp across all metrics
-    run_to_timestamp = {}
-    for metric_name in metric_data:
-        for run_name, timestamp, _ in metric_data[metric_name]:
-            if run_name not in run_to_timestamp:
-                run_to_timestamp[run_name] = timestamp
-            elif timestamp and (not run_to_timestamp[run_name] or timestamp < run_to_timestamp[run_name]):
-                run_to_timestamp[run_name] = timestamp
-    
     # Sort runs by timestamp (oldest first), then by name if no timestamp
     ordered_runs = sorted(
-        run_to_timestamp.keys(),
-        key=lambda x: (run_to_timestamp[x] if run_to_timestamp[x] else datetime.min, x)
+        all_run_ids,
+        key=lambda x: (run_id_to_timestamp[x] if run_id_to_timestamp[x] else datetime.min, x)
     )
     
-    return metric_data, ordered_runs
+    return metric_data, ordered_runs, run_id_to_display
 
 
-def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], output_path: Path) -> Path:
+def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], run_id_to_display: Dict[str, str], output_path: Path) -> Path:
     """
     Create a combined line plot with all metrics on the same chart.
     Marker sizes are proportional to the number of validation questions.
@@ -321,8 +353,8 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
     
     fig = go.Figure()
     
-    # Determine x-axis values (use run names as categorical)
-    x_values = ordered_runs
+    # Determine x-axis values (use display names for readability)
+    x_values = [run_id_to_display.get(run_id, run_id) for run_id in ordered_runs]
     
     # Calculate marker sizes based on num_validation_questions
     # Normalize to a reasonable range (min 6, max 20)
@@ -373,7 +405,7 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
             line=dict(width=2, color=color),
             marker=dict(size=marker_sizes, color=color, sizemode='diameter'),
             hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<br>Questions: %{{customdata}}<extra></extra>',
-            customdata=[run_to_num_questions.get(run, 'N/A') for run in ordered_runs]
+            customdata=[run_to_num_questions.get(run_id, 'N/A') for run_id in ordered_runs]
         ))
     
     fig.update_layout(
@@ -408,7 +440,7 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
     return image_path
 
 
-def create_individual_metric_plot(metric_name: str, data_points: List[tuple], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], output_path: Path) -> Optional[Path]:
+def create_individual_metric_plot(metric_name: str, data_points: List[tuple], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], run_id_to_display: Dict[str, str], output_path: Path) -> Optional[Path]:
     """
     Create an individual line plot for a single metric.
     Marker sizes are proportional to the number of validation questions.
@@ -424,8 +456,9 @@ def create_individual_metric_plot(metric_name: str, data_points: List[tuple], or
     run_to_value = {point[0]: point[2] for point in data_points}
     
     # Extract values in the order of ordered_runs
-    x_values = ordered_runs
-    values = [run_to_value.get(run, None) for run in ordered_runs]
+    # Use display names for x-axis
+    x_values = [run_id_to_display.get(run_id, run_id) for run_id in ordered_runs]
+    values = [run_to_value.get(run_id, None) for run_id in ordered_runs]
     
     # Calculate marker sizes based on num_validation_questions
     # Normalize to a reasonable range (min 8, max 24)
@@ -464,7 +497,7 @@ def create_individual_metric_plot(metric_name: str, data_points: List[tuple], or
         textposition='top center',
         textfont=dict(size=10),
         hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<br>Questions: %{{customdata}}<extra></extra>',
-        customdata=[run_to_num_questions.get(run, 'N/A') for run in ordered_runs]
+        customdata=[run_to_num_questions.get(run_id, 'N/A') for run_id in ordered_runs]
     ))
     
     fig.update_layout(
@@ -495,26 +528,40 @@ def create_individual_metric_plot(metric_name: str, data_points: List[tuple], or
     return image_path
 
 
-def create_metric_table(metric_name: str, data_points: List[tuple], ordered_runs: List[str]) -> str:
+def create_metric_table(metric_name: str, data_points: List[tuple], ordered_runs: List[str], run_id_to_display: Dict[str, str]) -> str:
     """
     Create a markdown table showing metric values for each run.
     
     Returns a markdown table string.
     """
-    # Create a mapping from run_name to value
+    # Create mappings from run_id to value and timestamp
     run_to_value = {point[0]: point[2] for point in data_points}
+    run_to_timestamp = {point[0]: point[1] for point in data_points}
     
     # Build table
     table_lines = []
-    table_lines.append(f"| Run Name | {metric_name.replace('_', ' ').title()} |")
-    table_lines.append("|----------|" + "-" * (len(metric_name) + 10) + "|")
+    table_lines.append(f"| Run Name | Timestamp | {metric_name.replace('_', ' ').title()} |")
+    table_lines.append("|----------|-----------|" + "-" * (len(metric_name) + 10) + "|")
     
-    for run in ordered_runs:
-        value = run_to_value.get(run, None)
-        if value is not None:
-            table_lines.append(f"| {run} | {value:.4f} |")
+    for run_id in ordered_runs:
+        value = run_to_value.get(run_id, None)
+        timestamp = run_to_timestamp.get(run_id, None)
+        display_name = run_id_to_display.get(run_id, run_id)
+        
+        # Format timestamp for display
+        if timestamp:
+            # Format as YYYY-MM-DD HH:MM
+            timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M')
         else:
-            table_lines.append(f"| {run} | N/A |")
+            timestamp_str = 'N/A'
+        
+        # Extract just the run name part (before newline if present)
+        run_name_only = display_name.split('\n')[0] if '\n' in display_name else display_name
+        
+        if value is not None:
+            table_lines.append(f"| {run_name_only} | {timestamp_str} | {value:.4f} |")
+        else:
+            table_lines.append(f"| {run_name_only} | {timestamp_str} | N/A |")
     
     return "\n".join(table_lines)
 
@@ -524,18 +571,161 @@ def get_summary_timestamp(summary: Dict) -> datetime:
     run_info = summary.get('run', {})
     timestamp_str = run_info.get('run_timestamp', '')
     
+    timestamp = None
     try:
-        if timestamp_str:
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-    except (ValueError, AttributeError):
+        if timestamp_str and timestamp_str != 'N/A':
+            timestamp_str_clean = timestamp_str.replace('Z', '+00:00')
+            timestamp = datetime.fromisoformat(timestamp_str_clean)
+    except (ValueError, AttributeError, TypeError):
         pass
     
     # Use file modification time as fallback
-    file_mtime = summary.get('file_mtime')
-    if file_mtime:
-        return file_mtime
+    if timestamp is None:
+        file_mtime = summary.get('file_mtime')
+        if file_mtime:
+            timestamp = file_mtime
     
-    return datetime.min
+    # Normalize to offset-naive for consistent comparison
+    timestamp = normalize_datetime(timestamp) if timestamp else datetime.min
+    
+    return timestamp
+
+
+def summaries_to_dataframe(summaries: List[Dict]) -> pd.DataFrame:
+    """
+    Convert a list of summary dictionaries to a pandas DataFrame.
+    
+    Each row represents one evaluation run with all metrics flattened.
+    """
+    rows = []
+    
+    for summary in summaries:
+        run_info = summary.get('run', {})
+        run_name = run_info.get('evaluation_run_name', 'unknown')
+        mode = run_info.get('mode', 'unknown')
+        timestamp_str = run_info.get('run_timestamp', '')
+        if not timestamp_str:
+            # Use file modification time as fallback
+            file_mtime = summary.get('file_mtime')
+            if file_mtime:
+                timestamp_str = file_mtime.isoformat() if isinstance(file_mtime, datetime) else str(file_mtime)
+        
+        num_questions = summary.get('num_validation_questions')
+        
+        # Create base row with run metadata
+        row = {
+            'evaluation_run_name': run_name,
+            'mode': mode,
+            'run_timestamp': timestamp_str if timestamp_str else 'N/A',
+            'num_validation_questions': num_questions if num_questions is not None else None,
+        }
+        
+        # Add all metrics with their statistics
+        metrics = summary.get('metrics', {})
+        for metric_name, metric_stats in metrics.items():
+            for stat_name, stat_value in metric_stats.items():
+                column_name = f"{metric_name}_{stat_name}"
+                row[column_name] = stat_value
+        
+        rows.append(row)
+    
+    return pd.DataFrame(rows)
+
+
+def load_existing_csv(csv_path: Path) -> Optional[pd.DataFrame]:
+    """Load existing CSV file if it exists."""
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(csv_path)
+            print(f"Loaded {len(df)} existing evaluation runs from CSV")
+            return df
+        except Exception as e:
+            print(f"Warning: Failed to load existing CSV: {e}", file=sys.stderr)
+            return None
+    return None
+
+
+def dataframe_to_summaries(df: pd.DataFrame) -> List[Dict]:
+    """
+    Convert a pandas DataFrame back to summary dictionaries format.
+    This allows compatibility with existing plotting and reporting functions.
+    """
+    summaries = []
+    
+    for _, row in df.iterrows():
+        summary = {
+            'run': {
+                'evaluation_run_name': str(row['evaluation_run_name']),
+                'mode': str(row['mode']),
+                'run_timestamp': str(row['run_timestamp']) if pd.notna(row['run_timestamp']) else '',
+            },
+            'num_validation_questions': int(row['num_validation_questions']) if pd.notna(row['num_validation_questions']) else None,
+            'metrics': {}
+        }
+        
+        # Extract metrics from column names (format: metric_name_stat_name)
+        metric_names = set()
+        for col in df.columns:
+            if col not in ['evaluation_run_name', 'mode', 'run_timestamp', 'num_validation_questions']:
+                parts = col.rsplit('_', 1)
+                if len(parts) == 2:
+                    metric_name, stat_name = parts
+                    metric_names.add(metric_name)
+        
+        # Build metrics dictionary
+        for metric_name in metric_names:
+            metric_stats = {}
+            for stat_name in ['mean', 'std', 'median', 'min', 'max', 'ci_lower', 'ci_upper']:
+                col_name = f"{metric_name}_{stat_name}"
+                if col_name in df.columns:
+                    value = row[col_name]
+                    if pd.notna(value):
+                        metric_stats[stat_name] = float(value)
+            
+            if metric_stats:
+                summary['metrics'][metric_name] = metric_stats
+        
+        summaries.append(summary)
+    
+    return summaries
+
+
+def save_evaluation_csv(summaries: List[Dict], csv_path: Path, existing_df: Optional[pd.DataFrame] = None):
+    """
+    Save summaries to CSV, merging with existing data if provided.
+    Avoids duplicates based on evaluation_run_name and run_timestamp.
+    """
+    new_df = summaries_to_dataframe(summaries)
+    
+    if existing_df is not None and len(existing_df) > 0:
+        # Merge with existing data
+        # Use evaluation_run_name and run_timestamp as unique identifiers
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        
+        # Remove duplicates based on evaluation_run_name and run_timestamp
+        # Keep the last occurrence (newer data takes precedence)
+        combined_df = combined_df.drop_duplicates(
+            subset=['evaluation_run_name', 'run_timestamp'],
+            keep='last'
+        )
+        
+        # Sort by timestamp
+        combined_df = combined_df.sort_values('run_timestamp', na_position='last')
+        
+        print(f"Merged {len(new_df)} new runs with {len(existing_df)} existing runs")
+        print(f"Total unique runs in CSV: {len(combined_df)}")
+    else:
+        combined_df = new_df
+        print(f"Saving {len(combined_df)} evaluation runs to CSV")
+    
+    # Ensure output directory exists
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save CSV
+    combined_df.to_csv(csv_path, index=False)
+    print(f"Saved evaluation results CSV: {csv_path}")
+    
+    return combined_df
 
 
 def generate_markdown_report(
@@ -607,18 +797,61 @@ def generate_markdown_report(
 def aggregate_local_results(results_dir: Path, output_dir: Path):
     """
     Aggregate evaluation results from local directory and generate plots.
+    If output_dir already exists with a CSV, merge new results with existing ones.
     """
     print(f"Collecting results from: {results_dir}")
-    summaries = collect_local_results(results_dir)
+    new_summaries = collect_local_results(results_dir)
     
-    if not summaries:
+    if not new_summaries:
         print("No evaluation results found!", file=sys.stderr)
         return
     
-    print(f"Found {len(summaries)} evaluation runs")
+    print(f"Found {len(new_summaries)} new evaluation runs")
     
-    # Extract metric data
-    metric_data, ordered_runs = extract_metric_data(summaries)
+    # Check for existing CSV and load existing summaries
+    csv_path = output_dir / "evaluation_results.csv"
+    existing_df = load_existing_csv(csv_path)
+    
+    if existing_df is not None:
+        # Convert existing CSV data back to summaries format
+        existing_summaries = dataframe_to_summaries(existing_df)
+        print(f"Loaded {len(existing_summaries)} existing evaluation runs from CSV")
+        
+        # Merge new summaries with existing ones
+        # Create a set of existing run identifiers to avoid duplicates
+        existing_run_ids = set()
+        for summary in existing_summaries:
+            run_info = summary.get('run', {})
+            run_name = run_info.get('evaluation_run_name', '')
+            timestamp = run_info.get('run_timestamp', '')
+            existing_run_ids.add((run_name, timestamp))
+        
+        # Filter out new summaries that already exist
+        unique_new_summaries = []
+        for summary in new_summaries:
+            run_info = summary.get('run', {})
+            run_name = run_info.get('evaluation_run_name', 'unknown')
+            timestamp = run_info.get('run_timestamp', '')
+            if not timestamp:
+                file_mtime = summary.get('file_mtime')
+                if file_mtime:
+                    timestamp = file_mtime.isoformat() if isinstance(file_mtime, datetime) else str(file_mtime)
+            
+            if (run_name, timestamp) not in existing_run_ids:
+                unique_new_summaries.append(summary)
+        
+        # Combine existing and new summaries
+        all_summaries = existing_summaries + unique_new_summaries
+        print(f"Using {len(all_summaries)} total evaluation runs ({len(existing_summaries)} existing + {len(unique_new_summaries)} new)")
+    else:
+        all_summaries = new_summaries
+        print(f"Using {len(all_summaries)} evaluation runs (no existing data found)")
+    
+    # Save/update CSV with all summaries
+    save_evaluation_csv(all_summaries, csv_path, existing_df)
+    
+    # Extract metric data from all summaries
+    metric_data, ordered_runs, run_id_to_display = extract_metric_data(all_summaries)
     
     if not metric_data:
         print("No metrics found in evaluation results!", file=sys.stderr)
@@ -626,20 +859,41 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
     
     print(f"Found {len(metric_data)} unique metrics")
     
-    # Extract num_validation_questions for each run
+    # Extract num_validation_questions for each run_id
+    # We need to create run_id from summary to match what extract_metric_data creates
     run_to_num_questions = {}
-    for summary in summaries:
+    for summary in all_summaries:
         run_info = summary.get('run', {})
         run_name = run_info.get('evaluation_run_name', 'unknown')
+        timestamp_str = run_info.get('run_timestamp', '')
         num_questions = summary.get('num_validation_questions')
-        run_to_num_questions[run_name] = num_questions
+        
+        # Create the same run_id that extract_metric_data uses
+        timestamp = None
+        try:
+            if timestamp_str and timestamp_str != 'N/A':
+                timestamp_str_clean = timestamp_str.replace('Z', '+00:00')
+                timestamp = datetime.fromisoformat(timestamp_str_clean)
+            else:
+                timestamp = summary.get('file_mtime')
+        except (ValueError, AttributeError, TypeError):
+            timestamp = summary.get('file_mtime')
+        
+        timestamp = normalize_datetime(timestamp)
+        
+        if timestamp:
+            run_id = f"{run_name}_{timestamp.isoformat()}"
+        else:
+            run_id = run_name
+        
+        run_to_num_questions[run_id] = num_questions
     
     # Create output path
     output_path = output_dir / "evaluation_results.md"
     
     # Create combined plot
     print("Creating combined metrics plot...")
-    combined_plot_path = create_combined_plot(metric_data, ordered_runs, run_to_num_questions, output_path)
+    combined_plot_path = create_combined_plot(metric_data, ordered_runs, run_to_num_questions, run_id_to_display, output_path)
     
     # Create individual plots and tables
     print("Creating individual metric plots and tables...")
@@ -647,18 +901,18 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
     metric_tables = []
     
     for metric_name, data_points in sorted(metric_data.items()):
-        plot_path = create_individual_metric_plot(metric_name, data_points, ordered_runs, run_to_num_questions, output_path)
+        plot_path = create_individual_metric_plot(metric_name, data_points, ordered_runs, run_to_num_questions, run_id_to_display, output_path)
         if plot_path:
             individual_plots.append((metric_name, plot_path))
-            table = create_metric_table(metric_name, data_points, ordered_runs)
+            table = create_metric_table(metric_name, data_points, ordered_runs, run_id_to_display)
             metric_tables.append((metric_name, table))
     
-    # Generate markdown report
+    # Generate markdown report (overwrites existing report)
     generate_markdown_report(
         combined_plot_path,
         individual_plots,
         metric_tables,
-        summaries,
+        all_summaries,
         run_to_num_questions,
         output_path
     )
