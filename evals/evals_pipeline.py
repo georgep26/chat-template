@@ -146,6 +146,7 @@ async def run_evaluation(config: dict):
     
     # 1) Load data
     df = load_eval_dataframe(config)
+    num_validation_questions = len(df)  # Number of validation questions initially read from CSV
     samples = extract_eval_samples(df, config)
     log.info(f"Loaded {len(samples)} samples")
     
@@ -226,6 +227,7 @@ async def run_evaluation(config: dict):
         "evaluation_run_name": evaluation_run_name,
         "mode": mode,
         "run_timestamp": datetime.now().isoformat(),
+        "num_validation_questions": num_validation_questions,
     }
     
     # 8) Outputs
