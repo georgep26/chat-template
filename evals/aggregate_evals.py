@@ -109,9 +109,10 @@ def extract_metric_data(summaries: List[Dict]) -> Tuple[Dict[str, List[tuple]], 
     return metric_data, ordered_runs
 
 
-def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List[str], output_path: Path) -> Path:
+def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], output_path: Path) -> Path:
     """
     Create a combined line plot with all metrics on the same chart.
+    Marker sizes are proportional to the number of validation questions.
     
     Returns the path to the saved image.
     """
@@ -121,6 +122,27 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
     
     # Determine x-axis values (use run names as categorical)
     x_values = ordered_runs
+    
+    # Calculate marker sizes based on num_validation_questions
+    # Normalize to a reasonable range (min 6, max 20)
+    num_questions_list = [run_to_num_questions.get(run) for run in ordered_runs]
+    valid_questions = [n for n in num_questions_list if n is not None]
+    
+    def get_marker_size(num_questions: Optional[int]) -> int:
+        if num_questions is None:
+            return 8  # Default size when not provided
+        if not valid_questions:
+            return 8  # Default size when no valid questions available
+        min_questions = min(valid_questions)
+        max_questions = max(valid_questions)
+        size_range = max_questions - min_questions if max_questions > min_questions else 1
+        if size_range == 0:
+            return 12  # Default if all same size
+        # Scale from 6 to 20 based on number of questions
+        normalized = (num_questions - min_questions) / size_range
+        return int(6 + normalized * 14)
+    
+    marker_sizes = [get_marker_size(run_to_num_questions.get(run)) for run in ordered_runs]
     
     # Add a trace for each metric
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', 
@@ -148,8 +170,9 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
             mode='lines+markers',
             name=display_name,
             line=dict(width=2, color=color),
-            marker=dict(size=8, color=color),
-            hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<extra></extra>'
+            marker=dict(size=marker_sizes, color=color, sizemode='diameter'),
+            hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<br>Questions: %{{customdata}}<extra></extra>',
+            customdata=[run_to_num_questions.get(run, 'N/A') for run in ordered_runs]
         ))
     
     fig.update_layout(
@@ -184,9 +207,10 @@ def create_combined_plot(metric_data: Dict[str, List[tuple]], ordered_runs: List
     return image_path
 
 
-def create_individual_metric_plot(metric_name: str, data_points: List[tuple], ordered_runs: List[str], output_path: Path) -> Optional[Path]:
+def create_individual_metric_plot(metric_name: str, data_points: List[tuple], ordered_runs: List[str], run_to_num_questions: Dict[str, Optional[int]], output_path: Path) -> Optional[Path]:
     """
     Create an individual line plot for a single metric.
+    Marker sizes are proportional to the number of validation questions.
     
     Returns the path to the saved image, or None if no data points.
     """
@@ -202,6 +226,27 @@ def create_individual_metric_plot(metric_name: str, data_points: List[tuple], or
     x_values = ordered_runs
     values = [run_to_value.get(run, None) for run in ordered_runs]
     
+    # Calculate marker sizes based on num_validation_questions
+    # Normalize to a reasonable range (min 8, max 24)
+    num_questions_list = [run_to_num_questions.get(run) for run in ordered_runs]
+    valid_questions = [n for n in num_questions_list if n is not None]
+    
+    def get_marker_size(num_questions: Optional[int]) -> int:
+        if num_questions is None:
+            return 10  # Default size when not provided
+        if not valid_questions:
+            return 10  # Default size when no valid questions available
+        min_questions = min(valid_questions)
+        max_questions = max(valid_questions)
+        size_range = max_questions - min_questions if max_questions > min_questions else 1
+        if size_range == 0:
+            return 14  # Default if all same size
+        # Scale from 8 to 24 based on number of questions
+        normalized = (num_questions - min_questions) / size_range
+        return int(8 + normalized * 16)
+    
+    marker_sizes = [get_marker_size(run_to_num_questions.get(run)) for run in ordered_runs]
+    
     # Format metric name for display
     display_name = metric_name.replace('_', ' ').title()
     
@@ -213,11 +258,12 @@ def create_individual_metric_plot(metric_name: str, data_points: List[tuple], or
         mode='lines+markers+text',
         name=display_name,
         line=dict(width=3, color='#1f77b4'),
-        marker=dict(size=10, color='#1f77b4'),
+        marker=dict(size=marker_sizes, color='#1f77b4', sizemode='diameter'),
         text=[f'{v:.3f}' if v is not None else '' for v in values],
         textposition='top center',
         textfont=dict(size=10),
-        hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<extra></extra>'
+        hovertemplate=f'<b>{display_name}</b><br>Run: %{{x}}<br>Value: %{{y:.3f}}<br>Questions: %{{customdata}}<extra></extra>',
+        customdata=[run_to_num_questions.get(run, 'N/A') for run in ordered_runs]
     ))
     
     fig.update_layout(
@@ -296,6 +342,7 @@ def generate_markdown_report(
     individual_plots: List[Tuple[str, Path]],
     metric_tables: List[Tuple[str, str]],
     summaries: List[Dict],
+    run_to_num_questions: Dict[str, Optional[int]],
     output_path: Path
 ):
     """
@@ -314,8 +361,8 @@ def generate_markdown_report(
         f.write("## Evaluations Summary\n\n")
         
         # Summary table of runs (ordered chronologically, oldest first)
-        f.write("| Run Name | Mode | Timestamp |\n")
-        f.write("|----------|------|-----------|\n")
+        f.write("| Run Name | Mode | Timestamp | Num Questions |\n")
+        f.write("|----------|------|-----------|--------------|\n")
         
         for summary in sorted_summaries:
             run_info = summary.get('run', {})
@@ -331,7 +378,12 @@ def generate_markdown_report(
                     timestamp = file_mtime.isoformat()
                 else:
                     timestamp = 'N/A'
-            f.write(f"| {run_name} | {mode} | {timestamp} |\n")
+            
+            # Get num_validation_questions from summary
+            num_questions = summary.get('num_validation_questions')
+            num_questions_str = str(num_questions) if num_questions is not None else ''
+            
+            f.write(f"| {run_name} | {mode} | {timestamp} | {num_questions_str} |\n")
         
         f.write("\n")
         
@@ -373,12 +425,20 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
     
     print(f"Found {len(metric_data)} unique metrics")
     
+    # Extract num_validation_questions for each run
+    run_to_num_questions = {}
+    for summary in summaries:
+        run_info = summary.get('run', {})
+        run_name = run_info.get('evaluation_run_name', 'unknown')
+        num_questions = summary.get('num_validation_questions')
+        run_to_num_questions[run_name] = num_questions
+    
     # Create output path
     output_path = output_dir / "evaluation_results.md"
     
     # Create combined plot
     print("Creating combined metrics plot...")
-    combined_plot_path = create_combined_plot(metric_data, ordered_runs, output_path)
+    combined_plot_path = create_combined_plot(metric_data, ordered_runs, run_to_num_questions, output_path)
     
     # Create individual plots and tables
     print("Creating individual metric plots and tables...")
@@ -386,7 +446,7 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
     metric_tables = []
     
     for metric_name, data_points in sorted(metric_data.items()):
-        plot_path = create_individual_metric_plot(metric_name, data_points, ordered_runs, output_path)
+        plot_path = create_individual_metric_plot(metric_name, data_points, ordered_runs, run_to_num_questions, output_path)
         if plot_path:
             individual_plots.append((metric_name, plot_path))
             table = create_metric_table(metric_name, data_points, ordered_runs)
@@ -398,6 +458,7 @@ def aggregate_local_results(results_dir: Path, output_dir: Path):
         individual_plots,
         metric_tables,
         summaries,
+        run_to_num_questions,
         output_path
     )
     
