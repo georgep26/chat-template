@@ -627,6 +627,7 @@ def summaries_to_dataframe(summaries: List[Dict]) -> pd.DataFrame:
                 timestamp_str = file_mtime.isoformat() if isinstance(file_mtime, datetime) else str(file_mtime)
         
         num_questions = summary.get('num_validation_questions')
+        notes = run_info.get('notes', '')
         
         # Create base row with run metadata
         row = {
@@ -634,6 +635,7 @@ def summaries_to_dataframe(summaries: List[Dict]) -> pd.DataFrame:
             'mode': mode,
             'run_timestamp': timestamp_str if timestamp_str else 'N/A',
             'num_validation_questions': num_questions if num_questions is not None else None,
+            'notes': notes if notes else '',
         }
         
         # Add all metrics with their statistics
@@ -674,6 +676,7 @@ def dataframe_to_summaries(df: pd.DataFrame) -> List[Dict]:
                 'evaluation_run_name': str(row['evaluation_run_name']),
                 'mode': str(row['mode']),
                 'run_timestamp': str(row['run_timestamp']) if pd.notna(row['run_timestamp']) else '',
+                'notes': str(row['notes']) if 'notes' in df.columns and pd.notna(row.get('notes', '')) else '',
             },
             'num_validation_questions': int(row['num_validation_questions']) if pd.notna(row['num_validation_questions']) else None,
             'metrics': {}
@@ -682,7 +685,7 @@ def dataframe_to_summaries(df: pd.DataFrame) -> List[Dict]:
         # Extract metrics from column names (format: metric_name_stat_name)
         metric_names = set()
         for col in df.columns:
-            if col not in ['evaluation_run_name', 'mode', 'run_timestamp', 'num_validation_questions']:
+            if col not in ['evaluation_run_name', 'mode', 'run_timestamp', 'num_validation_questions', 'notes']:
                 parts = col.rsplit('_', 1)
                 if len(parts) == 2:
                     metric_name, stat_name = parts
@@ -768,8 +771,8 @@ def generate_markdown_report(
         f.write("## Evaluations Summary\n\n")
         
         # Summary table of runs (ordered chronologically, oldest first)
-        f.write("| Run Name | Mode | Timestamp | Num Questions |\n")
-        f.write("|----------|------|-----------|--------------|\n")
+        f.write("| Run Name | Mode | Timestamp | Num Questions | Notes |\n")
+        f.write("|----------|------|-----------|--------------|-------|\n")
         
         for summary in sorted_summaries:
             run_info = summary.get('run', {})
@@ -790,7 +793,11 @@ def generate_markdown_report(
             num_questions = summary.get('num_validation_questions')
             num_questions_str = str(num_questions) if num_questions is not None else ''
             
-            f.write(f"| {run_name} | {mode} | {timestamp} | {num_questions_str} |\n")
+            # Get notes from run_info
+            notes = run_info.get('notes', '')
+            notes_str = notes if notes else ''
+            
+            f.write(f"| {run_name} | {mode} | {timestamp} | {num_questions_str} | {notes_str} |\n")
         
         f.write("\n")
         
