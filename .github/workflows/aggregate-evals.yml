@@ -52,6 +52,7 @@ jobs:
         shell: bash -l {0}
         env:
           MAX_RUNS: ${{ inputs.max_runs || '10' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Extract owner and repo from github.repository (format: owner/repo)
           REPO_OWNER="${{ github.repository_owner }}"
