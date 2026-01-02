@@ -21,7 +21,7 @@ on:
 jobs:
   run-evals:
     runs-on: ubuntu-latest
-    environment: production
+    environment: staging
     permissions:
       id-token: write
       contents: read
