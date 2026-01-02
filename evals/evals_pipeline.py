@@ -1,4 +1,9 @@
 # evals/evals_pipeline.py
+#
+# Example usage:
+#   python evals/evals_pipeline.py --config evals/evals_config.yaml
+#
+#   python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type html,json,csv --notes "Test evaluation run"
 
 import argparse
 import asyncio
@@ -136,7 +141,7 @@ def save_rag_results(samples, results_by_id: dict, output_dir: Path):
     return rag_results_path
 
 
-async def run_evaluation(config: dict):
+async def run_evaluation(config: dict, notes: Optional[str] = None):
     run_cfg = config["run"]
     outputs_cfg = config["outputs"]
     evaluation_run_name = run_cfg.get("evaluation_run_name", "evaluation_run_default")
@@ -230,6 +235,10 @@ async def run_evaluation(config: dict):
         "num_validation_questions": num_validation_questions,
     }
     
+    # Add notes if provided
+    if notes:
+        summary["run"]["notes"] = notes
+    
     # 8) Outputs
     generated_paths = []
     if "json" in outputs_cfg["types"]:
@@ -255,7 +264,7 @@ async def run_evaluation(config: dict):
     log.info(f"Evaluation completed: {evaluation_run_name}")
 
 
-def main(eval_config: str, output_type: Optional[str]):
+def main(eval_config: str, output_type: Optional[str], notes: Optional[str] = None):
     config = read_config(eval_config)
     
     # Apply defaults (previously in load_config)
@@ -270,7 +279,7 @@ def main(eval_config: str, output_type: Optional[str]):
             s.strip() for s in output_type.split(",") if s.strip()
         ]
     
-    asyncio.run(run_evaluation(config=config))
+    asyncio.run(run_evaluation(config=config, notes=notes))
 
 
 if __name__ == "__main__":
@@ -288,6 +297,12 @@ if __name__ == "__main__":
         help="Comma-separated list of outputs to generate (html,json,csv). "
              "Overrides evals_config.outputs.types if provided."
     )
+    parser.add_argument(
+        "--notes",
+        type=str,
+        default=None,
+        help="Notes to include in the evaluation run summary (will appear in summary.json under 'run.notes')"
+    )
     args = parser.parse_args()
-    main(args.config, args.output_type)
+    main(args.config, args.output_type, args.notes)
 
