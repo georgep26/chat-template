@@ -1,6 +1,6 @@
 # RAG Chat Application
 
-A production-ready RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities.
+A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities.
 
 ## Features
 
@@ -8,8 +8,8 @@ A production-ready RAG (Retrieval-Augmented Generation) chat application built w
 - **AWS Bedrock Integration**: Uses Claude models via Bedrock Converse API and Amazon Knowledge Bases for retrieval
 - **Conversation Memory**: Postgres-based chat history with automatic summarization for long conversations
 - **Query Pipeline**: Intelligent query processing with rewrite, clarification, and multi-part query splitting
-- **RAGAS Evaluation**: Offline evaluation framework using RAGAS metrics (answer accuracy, context precision/recall)
-- **Lambda-Ready**: Standardized API interface for deployment as AWS Lambda function
+- **Evaluation Framework**: Evaluation framework with support for standard RAGAS metrics and custom metrics.
+- **Lambda Deployment**: Standardized API interface for deployment as AWS Lambda function
 
 ## Environment Setup
 
@@ -18,8 +18,11 @@ The full environment setup process is handled by the `scripts/setup_env.sh` scri
 - Check if conda is already installed
 - Install Miniconda if it's not installed (with OS-specific installation methods)
 - Create the conda environment from `environment.yml` with all required dependencies
+- Automatically set `PYTHONPATH` to the project root directory when the conda environment is activated
 
 **Note**: The conda environment created from `environment.yml` is intended for **local development and testing**. It contains the same dependencies as the application's Lambda functions, allowing you to test the application locally before deploying to AWS. This ensures that your local development environment matches the production runtime environment.
+
+**Note**: The `setup_env.sh` script automatically configures `PYTHONPATH` to point to the project root directory. This is done via an activation script that runs whenever you activate the conda environment, ensuring that Python can find the project modules without additional configuration.
 
 ### Quick Start
 
@@ -43,123 +46,201 @@ conda activate chat-template-env
 
 The setup script only creates or updates the conda environment; it does not activate it automatically. You need to activate it in your terminal session before running any application commands.
 
+### IDE Setup
+
+To use the conda environment in your IDE, you'll need to configure it to use the Python interpreter from the conda environment.
+
+**VSCode Setup:**
+
+1. Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linux)
+2. Type "Python: Select Interpreter" and select it
+3. Choose the interpreter from the conda environment. It should be located at:
+   - **macOS/Linux**: `~/miniconda3/envs/chat-template-env/bin/python` (or `~/anaconda3/envs/chat-template-env/bin/python` if using Anaconda)
+   - **Windows**: `%USERPROFILE%\miniconda3\envs\chat-template-env\python.exe` (or `%USERPROFILE%\anaconda3\envs\chat-template-env\python.exe` if using Anaconda)
+4. Alternatively, you can create a `.vscode/settings.json` file in the project root with:
+   ```json
+   {
+     "python.defaultInterpreterPath": "${env:CONDA_PREFIX}/bin/python"
+   }
+   ```
+   (Note: This requires activating the environment before opening VSCode, or manually setting the path)
+
+**Note**: For other IDEs (PyCharm, IntelliJ, etc.), the setup process may differ. Please refer to your IDE's documentation for configuring Python interpreters with conda environments.
+
 ## Configuration
-
-### Environment Variables
-
-The application requires the following environment variables:
-
-- `PG_CONN_INFO`: Postgres connection string (e.g., `postgresql://user:password@host:port/dbname`)
 
 ### Application Configuration
 
 Edit `config/app_config.yml` to configure:
 
 - **AWS/Bedrock Settings**: Region, model ID, temperature, knowledge base ID
-- **Memory Settings**: Backend type (postgres/dynamo/vector), summarization threshold
-- **Database Settings**: Postgres connection details
+- **Memory Settings**: Backend type (postgres/aurora_data_api/dynamo/vector), summarization threshold
+- **Database Settings**: Database connection configuration (varies by backend type)
 
 Example configuration:
 
 ```yaml
-bedrock:
-  region: "us-east-1"
-  knowledge_base_id: "your-knowledge-base-id-here"
-  model:
-    id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-    temperature: 0.1
-
-rag:
-  memory:
-    backend: "postgres"
+rag_chat:
+  retrieval:
+    region: "us-east-1"
+    knowledge_base_id: "your-knowledge-base-id-here"
+    number_of_results: 10
+  generation:
+    model:
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0
+      region: "us-east-1"
+  chat_history_store:
+    memory_backend_type: "aurora_data_api"  # Options: postgres, aurora_data_api, dynamo, vector, local_sqlite
+    # For postgres backend (requires VPC):
+    # db_connection_secret_name: "chat-template-db-connection-dev"
+    # table_name: "chat_history"
+    # For aurora_data_api backend (no VPC required):
+    db_cluster_arn: "arn:aws:rds:us-east-1:account-id:cluster:cluster-name"
+    db_credentials_secret_arn: "arn:aws:secretsmanager:us-east-1:account-id:secret:secret-name"
+    database_name: "chat_template_db"
+    table_name: "chat_history"
+  summarization:
     summarization_threshold: 20
+    model:
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0
+      region: "us-east-1"
 ```
 
-### Postgres Database Setup
-
-The application uses Postgres for chat history storage. Ensure Postgres is running and accessible:
-
-1. Create a database:
-   ```sql
-   CREATE DATABASE rag_chat_db;
-   ```
-
-2. Set the `PG_CONN_INFO` environment variable:
-   ```bash
-   export PG_CONN_INFO="postgresql://user:password@localhost:5432/rag_chat_db"
-   ```
-
-The application will automatically create the required tables on first run.
+**Database Configuration Notes**:
+- For `postgres` backend: Configure `db_connection_secret_name` in `app_config.yml`. The application will fetch credentials from AWS Secrets Manager.
+- For `aurora_data_api` backend: Configure `db_cluster_arn`, `db_credentials_secret_arn`, and `database_name` in `app_config.yml`. This backend does not require VPC configuration.
+- The application will automatically create the required tables on first run.
 
 ## Directory Structure
 
 ```
-python-template/
+chat-template/
+├── AGENT.md             # Agent configuration and instructions
+├── CHANGELOG.md         # Project changelog for version tracking
+├── CONTRIBUTING.md      # Contribution guidelines
+├── LICENSE              # Project license
+├── Makefile             # Make commands for common tasks
+├── README.md            # This file
+├── environment.yml      # Conda environment definition
+├── pyproject.toml       # Python project configuration and dependencies
+├── requirements.txt     # Python dependencies
 ├── config/              # Configuration files for the application
-│   └── app_config.yml   # Application configuration (includes app settings and logging)
+│   ├── app_config.template.yaml  # Template configuration file
+│   ├── app_config.yaml  # Application configuration (gitignored, includes app settings and logging)
+│   └── README.md        # Configuration documentation
 ├── docs/                # Documentation files
-│   └── template-outline.md
+│   ├── ai-instructions.md
+│   ├── aurora_data_api_migration.md
+│   ├── code_standards.md
+│   ├── development_process.md
+│   ├── template_outline.md
+│   └── working_notes.md
 ├── infra/               # Infrastructure as Code (IaC) definitions
 │   ├── cloudformation/  # AWS CloudFormation templates
-│   │   ├── parameters.yaml
-│   │   ├── template.yaml
+│   │   ├── db_secret_template.yaml
+│   │   ├── knowledge_base_template.yaml
+│   │   ├── lambda_template.yaml
+│   │   ├── light_db_template.yaml
+│   │   ├── s3_bucket_template.yaml
+│   │   ├── vpc_template.yaml
+│   │   ├── NETWORK_COST_ESTIMATE.md
 │   │   └── README.md
-│   ├── terraform/       # Terraform configuration files
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   └── variables.tf
+│   ├── policies/        # IAM policy templates
+│   │   ├── bedrock_policy.yaml
+│   │   ├── lambda_policy.yaml
+│   │   ├── s3_policy.yaml
+│   │   ├── secrets_manager_policy.yaml
+│   │   └── README.md
+│   ├── roles/           # IAM role templates
+│   │   ├── github_actions_role.yaml
+│   │   ├── lambda_execution_role.yaml
+│   │   └── README.md
 │   └── README.md
 ├── notebooks/           # Jupyter notebooks for exploratory analysis
 │   └── README.md
 ├── scripts/             # Utility and deployment scripts
 │   ├── deploy/          # Deployment automation scripts
-│   │   ├── cloudformation.sh
-│   │   ├── deploy.sh
-│   │   ├── terraform.sh
+│   │   ├── deploy_chat_template_db.sh
+│   │   ├── deploy_github_action_role.sh
+│   │   ├── deploy_knowledge_base.sh
+│   │   ├── deploy_network.sh
+│   │   ├── deploy_rag_lambda.sh
+│   │   ├── deploy_s3_bucket.sh
+│   │   ├── NETWORK_DEPLOYMENT.md
 │   │   └── README.md
 │   └── setup_env.sh     # Environment setup script
 ├── src/                 # Source code for the application
-│   ├── main.py          # Lambda handler entry point
-│   └── rag_app/         # RAG application package
-│       ├── graph/       # LangGraph state, nodes, and graph definition
-│       ├── api/         # API models and chat service
-│       └── memory/      # Chat history storage abstractions
+│   ├── rag_lambda/      # RAG Lambda function package
+│   │   ├── api/         # API models (ChatRequest, ChatResponse)
+│   │   ├── graph/       # LangGraph state, nodes, and graph definition
+│   │   ├── memory/      # Chat history storage abstractions
+│   │   ├── main.py      # Lambda handler entry point
+│   │   ├── Dockerfile   # Docker image for Lambda deployment
+│   │   └── requirements.txt  # Lambda-specific dependencies
+│   └── utils/           # Shared utility modules
+│       ├── aws_utils.py
+│       ├── config.py
+│       ├── llm_factory.py
+│       └── logger.py
 ├── evals/               # RAGAS evaluation pipeline
-├── data/                # Evaluation data (CSV files)
-├── tests/               # Unit and integration tests
-│   ├── test_graph_smoke.py
-│   ├── test_api_lambda.py
-│   ├── test_ragas_pipeline.py
-│   └── test_memory_store.py
-├── CHANGELOG.md         # Project changelog for version tracking
-├── environment.yml      # Conda environment definition
-├── Makefile             # Make commands for common tasks
-├── pyproject.toml       # Python project configuration and dependencies
-└── README.md            # This file
+│   ├── eval_outputs/    # Evaluation results and reports
+│   ├── validation_data/ # Validation datasets
+│   ├── evals_pipeline.py
+│   ├── metrics_base.py
+│   ├── metrics_custom.py
+│   ├── metrics_ragas.py
+│   ├── evals_config.yaml
+│   └── README.md
+├── data/                # Evaluation data and reference documents
+│   ├── irc_chapters_toc/  # IRC chapter text files
+│   └── *.csv            # Evaluation question datasets
+├── sql/                 # SQL scripts for database setup
+│   ├── eda.sql
+│   └── embeddings_table_setup.sql
+└── tests/               # Unit and integration tests
+    ├── test_api_lambda.py
+    ├── test_chat_handler.py
+    ├── test_graph_smoke.py
+    ├── test_main.py
+    ├── test_memory_store.py
+    └── test_ragas_pipeline.py
 ```
 
 ### Folder Descriptions
 
-- **config/**: Contains the application configuration file (`app_config.yml`) which includes application settings, database configuration, API settings, AWS configuration, and logging configuration. This YAML file allows you to configure the application behavior without modifying code.
+- **config/**: Contains the application configuration files. `app_config.yaml` (gitignored) includes application settings, database configuration, API settings, AWS configuration, and logging configuration. `app_config.template.yaml` provides a template for creating your own configuration.
 
-- **docs/**: Documentation files for the project, including guides, API documentation, and project outlines.
+- **docs/**: Documentation files for the project, including guides, API documentation, development processes, code standards, and project outlines.
 
-- **infra/**: Infrastructure as Code (IaC) definitions for deploying the application. Contains both CloudFormation and Terraform configurations for cloud infrastructure provisioning.
+- **infra/**: Infrastructure as Code (IaC) definitions for deploying the application.
+  - `cloudformation/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
+  - `policies/`: IAM policy templates for various AWS services
+  - `roles/`: IAM role templates for Lambda execution and GitHub Actions
 
 - **notebooks/**: Jupyter notebooks for data exploration, prototyping, and analysis. Useful for interactive development and sharing results.
 
-- **scripts/**: Utility scripts for automation, deployment, and environment setup. The `deploy/` subdirectory contains scripts for deploying infrastructure and applications.
+- **scripts/**: Utility scripts for automation, deployment, and environment setup.
+  - `deploy/`: Deployment automation scripts for infrastructure components
+  - `setup_env.sh`: Environment setup script that creates the conda environment
 
 - **src/**: Main source code directory. Contains the core application logic and modules.
-  - `rag_app/graph/`: LangGraph components (state, nodes, graph construction)
-  - `rag_app/api/`: API models (ChatRequest, ChatResponse) and chat service
-  - `rag_app/memory/`: Chat history storage (Postgres implementation, factory, summarization)
+  - `rag_lambda/`: RAG Lambda function package containing the main application code
+    - `graph/`: LangGraph components (state, nodes, graph construction)
+    - `api/`: API models (ChatRequest, ChatResponse) and chat service
+    - `memory/`: Chat history storage (Postgres, Aurora Data API implementations, factory, summarization)
+    - `main.py`: Lambda handler entry point
+    - `Dockerfile`: Docker image for Lambda deployment
+  - `utils/`: Shared utility modules for AWS operations, configuration, logging, and LLM factory
 
-- **evals/**: RAGAS evaluation pipeline scripts and utilities
+- **evals/**: RAGAS evaluation pipeline scripts and utilities. Contains evaluation metrics, pipeline scripts, and evaluation results.
+
+- **sql/**: SQL scripts for database setup, including embeddings table configuration.
 
 - **tests/**: Test files for unit testing, integration testing, and validation of the application code.
 
-- **data/**: Evaluation datasets (CSV files with questions and reference answers)
+- **data/**: Evaluation data and reference documents, including IRC chapter text files and CSV datasets with questions and reference answers.
 
 ## Code Quality Tools (Optional)
 
