@@ -200,6 +200,24 @@ main() {
         conda env create -f "$env_file"
     fi
     
+    # Create activation script to set PYTHONPATH to project root
+    local env_path=$(conda env list | grep "^${env_name}" | awk '{print $NF}')
+    if [[ -n "$env_path" && -d "$env_path" ]]; then
+        local activate_dir="${env_path}/etc/conda/activate.d"
+        mkdir -p "$activate_dir"
+        
+        local activate_script="${activate_dir}/set_pythonpath.sh"
+        cat > "$activate_script" << EOF
+#!/bin/bash
+# Set PYTHONPATH to project root when conda environment is activated
+export PYTHONPATH="${project_root}:\${PYTHONPATH}"
+EOF
+        chmod +x "$activate_script"
+        print_info "Created activation script to set PYTHONPATH to project root"
+    else
+        print_warn "Could not determine environment path. PYTHONPATH will need to be set manually."
+    fi
+    
     print_info "Environment setup complete!"
     print_info "To activate the environment, run: conda activate $env_name"
 }
