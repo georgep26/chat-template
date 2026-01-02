@@ -46,6 +46,27 @@ conda activate chat-template-env
 
 The setup script only creates or updates the conda environment; it does not activate it automatically. You need to activate it in your terminal session before running any application commands.
 
+### IDE Setup
+
+To use the conda environment in your IDE, you'll need to configure it to use the Python interpreter from the conda environment.
+
+**VSCode Setup:**
+
+1. Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linux)
+2. Type "Python: Select Interpreter" and select it
+3. Choose the interpreter from the conda environment. It should be located at:
+   - **macOS/Linux**: `~/miniconda3/envs/chat-template-env/bin/python` (or `~/anaconda3/envs/chat-template-env/bin/python` if using Anaconda)
+   - **Windows**: `%USERPROFILE%\miniconda3\envs\chat-template-env\python.exe` (or `%USERPROFILE%\anaconda3\envs\chat-template-env\python.exe` if using Anaconda)
+4. Alternatively, you can create a `.vscode/settings.json` file in the project root with:
+   ```json
+   {
+     "python.defaultInterpreterPath": "${env:CONDA_PREFIX}/bin/python"
+   }
+   ```
+   (Note: This requires activating the environment before opening VSCode, or manually setting the path)
+
+**Note**: For other IDEs (PyCharm, IntelliJ, etc.), the setup process may differ. Please refer to your IDE's documentation for configuring Python interpreters with conda environments.
+
 ## Configuration
 
 ### Application Configuration

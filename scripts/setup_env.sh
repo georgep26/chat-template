@@ -1,29 +1,12 @@
 #!/bin/bash
 
-# Detect if script is being sourced or executed
-# When sourced, ${BASH_SOURCE[0]} != $0
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    IS_SOURCED=true
-else
-    IS_SOURCED=false
-    set -e  # Exit on error only when executed, not when sourced
-fi
+set -e  # Exit on error
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
-
-# Function to exit or return based on how script is invoked
-script_exit() {
-    local exit_code=${1:-1}
-    if [[ "$IS_SOURCED" == "true" ]]; then
-        return $exit_code
-    else
-        exit $exit_code
-    fi
-}
 
 # Function to print colored messages
 print_info() {
@@ -109,7 +92,7 @@ install_conda_windows() {
     print_error "Windows installation via script is not fully supported."
     print_info "Please install Miniconda manually from: https://docs.conda.io/en/latest/miniconda.html"
     print_info "After installation, restart your terminal and run this script again."
-    script_exit 1
+    exit 1
 }
 
 # Main installation function
@@ -129,7 +112,7 @@ install_conda() {
         *)
             print_error "Unsupported operating system: $OSTYPE"
             print_info "Please install Miniconda manually from: https://docs.conda.io/en/latest/miniconda.html"
-            script_exit 1
+            exit 1
             ;;
     esac
 }
@@ -158,19 +141,19 @@ main() {
                 if ! check_conda; then
                     print_error "Conda installation completed but not found in PATH."
                     print_info "Please restart your terminal and run this script again."
-                    script_exit 1
+                    exit 1
                 fi
                 # Initialize conda for the current shell after installation
                 eval "$(conda shell.bash hook)"
             else
                 print_error "Conda is required. Exiting."
-                script_exit 1
+                exit 1
             fi
         else
             print_error "Conda is required but not installed, and this is a non-interactive session."
             print_info "Please install Miniconda manually from: https://docs.conda.io/en/latest/miniconda.html"
             print_info "Or run this script in an interactive terminal to enable automatic installation."
-            script_exit 1
+            exit 1
         fi
     else
         print_info "Conda is already installed."
@@ -185,7 +168,7 @@ main() {
     
     if [[ ! -f "$env_file" ]]; then
         print_error "environment.yml not found at: $env_file"
-        script_exit 1
+        exit 1
     fi
     
     print_info "Creating conda environment from ${env_file}..."
