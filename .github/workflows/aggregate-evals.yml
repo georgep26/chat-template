@@ -61,7 +61,7 @@ jobs:
             --owner "$REPO_OWNER" \
             --repo "$REPO_NAME" \
             --max-runs "$MAX_RUNS" \
-            --output-dir docs/gh_evals_results
+            --output-dir docs/pr_evals_results
 
       - name: Check for changes
         id: check-changes
