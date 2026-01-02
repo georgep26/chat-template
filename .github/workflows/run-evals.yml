@@ -101,7 +101,7 @@ jobs:
         if: steps.check-branch.outputs.skip != 'true'
         shell: bash -l {0}
         run: |
-          python evals/evals_pipeline.py --config evals/evals_config.yaml
+          python evals/evals_pipeline.py --config evals/evals_config.yaml --notes "PR Evaluation"
 
       - name: Upload evaluation results
         if: steps.check-branch.outputs.skip != 'true'
