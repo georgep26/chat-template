@@ -67,6 +67,52 @@ To use the conda environment in your IDE, you'll need to configure it to use the
 
 **Note**: For other IDEs (PyCharm, IntelliJ, etc.), the setup process may differ. Please refer to your IDE's documentation for configuring Python interpreters with conda environments.
 
+## Branch Protection Setup
+
+**Important**: If you are copying or forking this repository, you need to set up branch protection rules to enforce the development workflow. Pull requests to the `main` branch should come from the `development` branch for standard feature releases. However, pull requests from hotfix branches are also allowed when an immediate change needs to be made to production.
+
+### Quick Setup
+
+The easiest way to set up branch protection is using the Makefile:
+
+```bash
+make branch-protection
+```
+
+Alternatively, you can run the setup script directly:
+
+```bash
+bash scripts/setup_branch_protection.sh
+```
+
+### What It Does
+
+The branch protection setup script will:
+
+1. **Configure branch protection rules** for the `main` branch:
+   - Requires pull requests before merging
+   - Requires 1 approval (2 reviewers recommended for standard releases)
+   - Prevents direct pushes to main
+   - Requires branches to be up to date before merging
+   - Requires conversation resolution
+
+**Note**: The standard process is to submit PRs from the `development` branch, but hotfix branches are allowed for immediate production fixes. See `docs/development_process.md` for details on the hotfix process.
+
+### Prerequisites
+
+- GitHub CLI (`gh`) must be installed and authenticated
+  - Install: `brew install gh` (macOS) or `apt install gh` (Linux)
+  - Authenticate: `gh auth login`
+- Repository must be initialized with a git remote pointing to GitHub
+
+### Manual Setup
+
+If you prefer to set up branch protection manually:
+
+1. Go to your repository on GitHub
+2. Navigate to **Settings** → **Branches**
+3. Add a branch protection rule for `main` with the settings mentioned above
+
 ## Configuration
 
 ### Application Configuration

@@ -4,9 +4,10 @@ Below is an outline of the development process for both humans and AI agents.
 
 ## Branch Structure
 
-- **main** - stable code, this should match what is on production.
+- **main** - stable code, this should match what is on production. Do not push directly to main, always submit PRs (this should be included in the branch protection rules). Standard process is PRs from development branch, but PRs from hotfix branches are allowed for quick bug fixes.
 - **development** - development branch, these includes all the latest features in development. This branch is intended to consolidate all changes for a particular release.
 - **feature_branch** - new features
+- **hotfix_branch** - quick bug fixes that need to be deployed to production immediately (see Hotfix Process below)
 
 ## Pairing with GitHub Project
 Ideally we pair our repos with GitHub Projects to enhance task tracking. Below are some features we want in our Github project.
@@ -49,7 +50,7 @@ Tags: Includes things like "blocked", "good first issue" (for new developers), "
    - Should use PR template
 
 4. **Once all changes are included on the development branch, submit PR from development to main**
-   - Should include two human reviewers and one AI agent review
+   - Should include at least one human reviewer and one AI agent review (two human reviewers recommended for standard releases)
    - Development branch should be deployed to staging AWS environment and QA testing should be performed
    - Evals and tests will automatically run with the PR to main
    - Perform QA testing based on the initially submitted features in GitHub projects (this could be performed by humans and AI agents)
@@ -59,3 +60,44 @@ Tags: Includes things like "blocked", "good first issue" (for new developers), "
    - Update CHANGELOG.md with latest release
    - After merge, main branch should be automatically deployed to production AWS environment
    - Optional: Update the "report-out.qmd" presentation with notes on the latest release
+
+## Hotfix Process
+
+Hotfixes are for critical bugs or issues that need to be fixed and deployed to production immediately, bypassing the standard development → main flow.
+
+### Hotfix Workflow
+
+1. **Create a hotfix branch from main**
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b hotfix/description-of-fix
+   ```
+
+2. **Develop and test the hotfix**
+   - Fix the issue
+   - Add tests for the fix
+   - Test locally or in dev AWS environment
+   - Run tests and evals locally
+
+3. **Submit PR from hotfix branch to main**
+   - Should include at least one human reviewer and one AI agent review (two human reviewers recommended when time permits)
+   - Hotfix should be deployed to staging AWS environment for quick validation
+   - Evals and tests will automatically run with the PR to main
+   - Perform focused QA testing on the specific fix
+
+4. **Merge hotfix PR to main**
+   - Update CHANGELOG.md with the hotfix details
+   - After merge, main branch should be automatically deployed to production AWS environment
+
+5. **Merge main back to development** (CRITICAL STEP)
+   - After the hotfix is merged to main, you MUST merge main back to development
+   - This ensures development includes the hotfix changes
+   - Create a PR from main to development
+   - This PR typically requires minimal review since it's just syncing the hotfix
+   - Merge the PR to keep development in sync with main
+
+**Important Notes:**
+- Hotfixes should be minimal and focused on fixing the specific issue
+- Always merge main back to development after a hotfix to prevent the hotfix from being lost in future development work
+- Hotfixes should be rare - use the standard development → main flow for most changes
