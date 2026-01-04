@@ -159,6 +159,68 @@ rag_chat:
 - For `aurora_data_api` backend: Configure `db_cluster_arn`, `db_credentials_secret_arn`, and `database_name` in `app_config.yml`. This backend does not require VPC configuration.
 - The application will automatically create the required tables on first run.
 
+## AWS Roles
+
+This project uses IAM roles to provide secure access to AWS resources. Each role is designed for a specific purpose and follows the principle of least privilege.
+
+### Evals GitHub Action Role
+
+The **Evals GitHub Action Role** enables GitHub Actions workflows to perform evaluations on AWS resources using OIDC (OpenID Connect) authentication. This role allows CI/CD pipelines to run evaluation tests without requiring long-lived AWS access keys.
+
+**Key Features:**
+- **OIDC Authentication**: Uses GitHub's OIDC provider for secure, temporary credential exchange
+- **Environment-Scoped Permissions**: The role is scoped to a specific environment (dev, staging, or prod)
+- **Automatic Policy Management**: Deploys required IAM policies (Secrets Manager, S3, Bedrock, and optionally Lambda) automatically
+
+**How It Works:**
+1. The role is deployed per environment using the deployment script
+2. GitHub Actions workflows authenticate using OIDC tokens
+3. AWS validates the token and grants temporary credentials
+4. The role's permissions are limited to resources in the specified environment
+
+**Important Security Note:**
+When you deploy this role to an environment, GitHub Actions will **only** have permissions to access resources in that specific environment. For example:
+- Deploying to `staging` allows access only to staging resources (staging Lambda functions, staging S3 buckets, etc.)
+- Deploying to `dev` allows access only to dev resources
+- Deploying to `prod` allows access only to production resources
+
+This ensures that evaluation workflows can only interact with the environment they are intended to test, providing better security and isolation.
+
+**Deployment:**
+```bash
+# Deploy to development environment
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+
+# Deploy to staging environment
+./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+
+# Deploy with Lambda policy (for lambda mode evaluations)
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template \
+  --include-lambda-policy
+```
+
+**After Deployment:**
+1. The script will output the role ARN
+2. Add this ARN to your GitHub repository secrets as `AWS_ROLE_ARN`
+3. The GitHub Actions workflow (`.github/workflows/run-evals.yml`) will automatically use this role for authentication
+
+**Permissions Included:**
+- Secrets Manager: Access to retrieve database credentials and other secrets
+- S3: Upload evaluation results to S3 buckets
+- Bedrock: Invoke Bedrock models for evaluation judge models
+- Lambda (optional): Invoke Lambda functions when running evaluations in lambda mode
+
+For more details, see the [evaluation framework documentation](evals/README.md).
+
 ## Directory Structure
 
 ```
@@ -200,7 +262,7 @@ chat-template/
 │   │   ├── secrets_manager_policy.yaml
 │   │   └── README.md
 │   ├── roles/           # IAM role templates
-│   │   ├── github_actions_role.yaml
+│   │   ├── evals_github_action_role.yaml
 │   │   ├── lambda_execution_role.yaml
 │   │   └── README.md
 │   └── README.md
@@ -209,7 +271,7 @@ chat-template/
 ├── scripts/             # Utility and deployment scripts
 │   ├── deploy/          # Deployment automation scripts
 │   │   ├── deploy_chat_template_db.sh
-│   │   ├── deploy_github_action_role.sh
+│   │   ├── deploy_evals_github_action_role.sh
 │   │   ├── deploy_knowledge_base.sh
 │   │   ├── deploy_network.sh
 │   │   ├── deploy_rag_lambda.sh

@@ -43,7 +43,7 @@ IAM role for RAG Lambda function execution with Bedrock, Secrets Manager, and VP
 **Usage:**
 Attach this role to Lambda functions that need to access Bedrock, Secrets Manager, and RDS.
 
-### GitHub Actions Role (`github_actions_role.yaml`)
+### GitHub Actions Role for Evaluations (`evals_github_action_role.yaml`)
 
 IAM role for GitHub Actions to run the evaluation pipeline using OIDC authentication.
 
@@ -67,7 +67,7 @@ IAM role for GitHub Actions to run the evaluation pipeline using OIDC authentica
 ```bash
 aws cloudformation create-stack \
   --stack-name chat-template-dev-github-actions-role \
-  --template-body file://infra/roles/github_actions_role.yaml \
+  --template-body file://infra/roles/evals_github_action_role.yaml \
   --parameters \
     ParameterKey=ProjectName,ParameterValue=chat-template \
     ParameterKey=Environment,ParameterValue=dev \

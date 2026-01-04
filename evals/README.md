@@ -602,20 +602,20 @@ Deploy the IAM role and policies using the deployment script:
 
 ```bash
 # Deploy to development environment
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template
 
 # Deploy with Lambda policy (if running evaluations in lambda mode)
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template \
   --include-lambda-policy
 
 # Deploy to other environments
-./scripts/deploy/deploy_github_action_role.sh staging deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template
@@ -671,7 +671,7 @@ The workflow automatically:
 Check the status of deployed stacks:
 
 ```bash
-./scripts/deploy/deploy_github_action_role.sh dev status
+./scripts/deploy/deploy_evals_github_action_role.sh dev status
 ```
 
 #### 5. Running Evaluations in CI/CD

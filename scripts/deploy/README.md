@@ -71,13 +71,13 @@ Deploy AWS infrastructure using Terraform configurations.
 ./scripts/deploy/terraform.sh dev destroy
 ```
 
-### GitHub Actions IAM Role Deployment (`deploy_github_action_role.sh`)
+### GitHub Actions IAM Role Deployment for Evaluations (`deploy_evals_github_action_role.sh`)
 
-Deploy IAM policies and role for GitHub Actions OIDC authentication.
+Deploy IAM policies and role for GitHub Actions OIDC authentication to enable evaluation workflows.
 
 **Usage:**
 ```bash
-./scripts/deploy/deploy_github_action_role.sh <environment> [action] [options]
+./scripts/deploy/deploy_evals_github_action_role.sh <environment> [action] [options]
 ```
 
 **Environments:** `dev` (default), `staging`, `prod`
@@ -104,30 +104,30 @@ Deploy IAM policies and role for GitHub Actions OIDC authentication.
 **Examples:**
 ```bash
 # Deploy to development environment
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org myorg \
   --github-repo chat-template
 
 # Deploy to staging with custom branch
-./scripts/deploy/deploy_github_action_role.sh staging deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
   --aws-account-id 123456789012 \
   --github-org myorg \
   --github-repo chat-template \
   --github-branch main
 
 # Deploy with Lambda policy (for lambda mode)
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org myorg \
   --github-repo chat-template \
   --include-lambda-policy
 
 # Check status
-./scripts/deploy/deploy_github_action_role.sh dev status
+./scripts/deploy/deploy_evals_github_action_role.sh dev status
 
 # Validate templates
-./scripts/deploy/deploy_github_action_role.sh dev validate \
+./scripts/deploy/deploy_evals_github_action_role.sh dev validate \
   --aws-account-id 123456789012 \
   --github-org myorg \
   --github-repo chat-template

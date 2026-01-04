@@ -34,7 +34,7 @@ Tags: Includes things like "blocked", "good first issue" (for new developers), "
 
 ## Deployment Process
 
-0. **Initial setup** - setup environment, use "make install"
+0. **Initial setup** - setup environment, use "make dev-env"
 
 1. **Define new features** (ideally in GitHub projects but not required)
     - Optional: If using GitHub projects you should add new feature ideas to the "Backlog" tab. Issues should be categoriezed as "Feature" or "Bug". 

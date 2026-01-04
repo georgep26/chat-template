@@ -150,5 +150,5 @@ Each policy accepts parameters that allow customization:
 
 ## Integration with GitHub Actions
 
-These policies are designed to work with the GitHub Actions IAM role (`infra/roles/github_actions_role.yaml`), which uses OIDC authentication. See the roles README for more information.
+These policies are designed to work with the GitHub Actions IAM role (`infra/roles/evals_github_action_role.yaml`), which uses OIDC authentication. See the roles README for more information.
 

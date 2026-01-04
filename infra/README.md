@@ -27,7 +27,7 @@ infra/
 │   └── README.md
 ├── roles/              # IAM roles
 │   ├── lambda_execution_role.yaml
-│   ├── github_actions_role.yaml
+│   ├── evals_github_action_role.yaml
 │   └── README.md
 └── README.md           # This file
 ```
@@ -172,7 +172,7 @@ All deployment scripts are centralized in the `scripts/deploy/` directory:
 - `deploy_s3_bucket.sh` - S3 bucket deployment
 - `deploy_knowledge_base.sh` - Knowledge base deployment
 - `deploy_rag_lambda.sh` - Lambda function deployment
-- `deploy_github_action_role.sh` - GitHub Actions IAM role deployment
+- `deploy_evals_github_action_role.sh` - GitHub Actions IAM role deployment for evaluations
 - `README.md` - Detailed usage instructions
 
 Each script provides a consistent interface for deploying specific infrastructure components.
@@ -213,7 +213,7 @@ To use OIDC authentication with GitHub Actions:
 2. **Deploy the GitHub Actions role**:
    ```bash
    aws cloudformation create-stack --stack-name chat-template-dev-github-actions-role \
-     --template-body file://infra/roles/github_actions_role.yaml \
+     --template-body file://infra/roles/evals_github_action_role.yaml \
      --parameters ... \
      --capabilities CAPABILITY_NAMED_IAM
    ```
