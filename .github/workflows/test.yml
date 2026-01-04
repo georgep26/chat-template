@@ -67,6 +67,113 @@ jobs:
           check_run_annotations: true
           job_summary: true
 
+      - name: Parse test results and create detailed comment
+        if: always() && github.event_name == 'pull_request'
+        shell: bash -l {0}
+        run: |
+          python << 'EOF'
+          import xml.etree.ElementTree as ET
+          import json
+          
+          # Parse JUnit XML
+          tree = ET.parse('junit/test-results.xml')
+          root = tree.getroot()
+          
+          # Collect all test cases
+          test_cases = []
+          total_tests = 0
+          total_failures = 0
+          total_errors = 0
+          total_time = 0.0
+          
+          for testsuite in root.findall('testsuite'):
+              total_tests += int(testsuite.get('tests', 0))
+              total_failures += int(testsuite.get('failures', 0))
+              total_errors += int(testsuite.get('errors', 0))
+              total_time += float(testsuite.get('time', 0))
+              
+              for testcase in testsuite.findall('testcase'):
+                  name = testcase.get('name', 'Unknown')
+                  classname = testcase.get('classname', '')
+                  time = testcase.get('time', '0')
+                  
+                  status = '✅ Passed'
+                  message = ''
+                  if testcase.find('failure') is not None:
+                      status = '❌ Failed'
+                      failure = testcase.find('failure')
+                      message = failure.get('message', '') or (failure.text[:500] if failure.text else '')
+                  elif testcase.find('error') is not None:
+                      status = '⚠️ Error'
+                      error = testcase.find('error')
+                      message = error.get('message', '') or (error.text[:500] if error.text else '')
+                  elif testcase.find('skipped') is not None:
+                      status = '⏭️ Skipped'
+                  
+                  test_cases.append({
+                      'name': name,
+                      'classname': classname,
+                      'status': status,
+                      'time': time,
+                      'message': message
+                  })
+          
+          # Build markdown comment
+          passed = total_tests - total_failures - total_errors
+          comment = '## 📊 Detailed Test Results\n\n'
+          comment += f'**Total Tests:** {total_tests} | '
+          comment += f'**Passed:** {passed} | '
+          comment += f'**Failed:** {total_failures} | '
+          comment += f'**Errors:** {total_errors} | '
+          comment += f'**Duration:** {total_time:.2f}s\n\n'
+          
+          if test_cases:
+              comment += '| Test Name | Status | Duration |\n'
+              comment += '|-----------|--------|----------|\n'
+              
+              for tc in test_cases:
+                  test_name = tc['name']
+                  if tc['classname']:
+                      test_name = f"{tc['classname']}::{tc['name']}"
+                  comment += f"| `{test_name}` | {tc['status']} | {tc['time']}s |\n"
+              
+              # Add failure details if any
+              failures = [tc for tc in test_cases if '❌' in tc['status'] or '⚠️' in tc['status']]
+              if failures:
+                  comment += '\n### ❌ Failed/Error Details\n\n'
+                  for tc in failures:
+                      test_name = tc['name']
+                      if tc['classname']:
+                          test_name = f"{tc['classname']}::{tc['name']}"
+                      comment += f"**{test_name}**\n"
+                      if tc['message']:
+                          comment += f"```\n{tc['message']}\n```\n\n"
+          else:
+              comment += 'No test cases found in the results.\n'
+          
+          # Write comment to file for next step
+          with open('test-comment.md', 'w') as f:
+              f.write(comment)
+          EOF
+
+      - name: Post detailed test results comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('test-comment.md', 'utf8');
+            
+            const prNumber = context.payload.pull_request?.number;
+            if (prNumber) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: comment
+              });
+            }
+
       - name: Upload test report
         uses: actions/upload-artifact@v4
         if: always()
