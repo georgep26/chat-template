@@ -56,7 +56,7 @@ Parameters:
 Resources:
   # OIDC Provider for GitHub (only create if not provided)
   GitHubOIDCProvider:
-    Type: AWS::IAM::OIDCIdentityProvider
+    Type: AWS::IAM::OIDCProvider
     Condition: CreateOIDCProvider
     Properties:
       Url: https://token.actions.githubusercontent.com
@@ -94,23 +94,8 @@ Resources:
                 token.actions.githubusercontent.com:head_ref: !Ref GitHubSourceBranch
                 token.actions.githubusercontent.com:base_ref: !Ref GitHubTargetBranch
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:pull_request'
-          # Allow PRs from source branch targeting the specified target branch in staging environment
-          - Effect: Allow
-            Principal:
-              Federated: !If
-                - HasOIDCProvider
-                - !Ref OIDCProviderArn
-                - !GetAtt GitHubOIDCProvider.Arn
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:head_ref: !Ref GitHubSourceBranch
-                token.actions.githubusercontent.com:base_ref: !Ref GitHubTargetBranch
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:staging:pull_request'
-          # Allow workflow_dispatch with staging environment
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*pull_request'
+          # Allow workflow_dispatch from environments (staging, production)
           - Effect: Allow
             Principal:
               Federated: !If
@@ -122,8 +107,10 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:staging'
-          # Allow workflow_dispatch with production environment
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:staging*'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:production*'
+          # Allow workflow_dispatch from specific branches (development, main)
           - Effect: Allow
             Principal:
               Federated: !If
@@ -135,33 +122,9 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:production'
-          # Allow workflow_dispatch from development branch
-          - Effect: Allow
-            Principal:
-              Federated: !If
-                - HasOIDCProvider
-                - !Ref OIDCProviderArn
-                - !GetAtt GitHubOIDCProvider.Arn
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/development'
-          # Allow workflow_dispatch from main branch
-          - Effect: Allow
-            Principal:
-              Federated: !If
-                - HasOIDCProvider
-                - !Ref OIDCProviderArn
-                - !GetAtt GitHubOIDCProvider.Arn
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main'
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/development'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main'
       ManagedPolicyArns:
         - !Ref SecretsManagerPolicyArn
         - !Ref S3EvaluationPolicyArn
