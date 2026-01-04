@@ -8,7 +8,7 @@ These policies are designed to be reusable and can be attached to IAM roles as n
 
 ## Available Policies
 
-### 1. Secrets Manager Policy (`secrets_manager_policy.yaml`)
+### 1. Secrets Manager Policy (`evals_secrets_manager_policy.yaml`)
 
 Grants read access to AWS Secrets Manager for retrieving database credentials.
 
@@ -25,7 +25,7 @@ Grants read access to AWS Secrets Manager for retrieving database credentials.
 **Usage:**
 Attach this policy to roles that need to access database credentials stored in Secrets Manager.
 
-### 2. S3 Evaluation Policy (`s3_policy.yaml`)
+### 2. S3 Evaluation Policy (`evals_s3_policy.yaml`)
 
 Grants access to S3 buckets for uploading evaluation results.
 
@@ -42,7 +42,7 @@ Grants access to S3 buckets for uploading evaluation results.
 **Usage:**
 Attach this policy to roles that need to upload evaluation results to S3 (e.g., GitHub Actions).
 
-### 3. Lambda Invoke Policy (`lambda_policy.yaml`)
+### 3. Lambda Invoke Policy (`evals_lambda_policy.yaml`)
 
 Grants permission to invoke AWS Lambda functions.
 
@@ -56,7 +56,7 @@ Grants permission to invoke AWS Lambda functions.
 **Usage:**
 Attach this policy to roles that need to invoke Lambda functions during evaluation (when running in lambda mode).
 
-### 4. Bedrock Evaluation Policy (`bedrock_policy.yaml`)
+### 4. Bedrock Evaluation Policy (`evals_bedrock_policy.yaml`)
 
 Grants access to AWS Bedrock for LLM inference during evaluation.
 
@@ -84,31 +84,31 @@ These policies can be deployed as standalone CloudFormation stacks or referenced
 ```bash
 # Deploy Secrets Manager policy
 aws cloudformation create-stack \
-  --stack-name chat-template-dev-secrets-manager-policy \
-  --template-body file://infra/policies/secrets_manager_policy.yaml \
+  --stack-name chat-template-dev-evals-secrets-manager-policy \
+  --template-body file://infra/policies/evals_secrets_manager_policy.yaml \
   --parameters ParameterKey=ProjectName,ParameterValue=chat-template \
                ParameterKey=Environment,ParameterValue=dev \
                ParameterKey=AWSRegion,ParameterValue=us-east-1
 
 # Deploy S3 policy
 aws cloudformation create-stack \
-  --stack-name chat-template-dev-s3-policy \
-  --template-body file://infra/policies/s3_policy.yaml \
+  --stack-name chat-template-dev-evals-s3-evaluation-policy \
+  --template-body file://infra/policies/evals_s3_policy.yaml \
   --parameters ParameterKey=ProjectName,ParameterValue=chat-template \
                ParameterKey=Environment,ParameterValue=dev
 
 # Deploy Lambda policy
 aws cloudformation create-stack \
-  --stack-name chat-template-dev-lambda-policy \
-  --template-body file://infra/policies/lambda_policy.yaml \
+  --stack-name chat-template-dev-evals-lambda-invoke-policy \
+  --template-body file://infra/policies/evals_lambda_policy.yaml \
   --parameters ParameterKey=ProjectName,ParameterValue=chat-template \
                ParameterKey=Environment,ParameterValue=dev \
                ParameterKey=AWSRegion,ParameterValue=us-east-1
 
 # Deploy Bedrock policy
 aws cloudformation create-stack \
-  --stack-name chat-template-dev-bedrock-policy \
-  --template-body file://infra/policies/bedrock_policy.yaml \
+  --stack-name chat-template-dev-evals-bedrock-evaluation-policy \
+  --template-body file://infra/policies/evals_bedrock_policy.yaml \
   --parameters ParameterKey=ProjectName,ParameterValue=chat-template \
                ParameterKey=Environment,ParameterValue=dev \
                ParameterKey=AWSRegion,ParameterValue=us-east-1

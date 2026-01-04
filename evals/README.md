@@ -647,7 +647,7 @@ After deployment, add the role ARN to your GitHub repository secrets:
 3. Click **New repository secret**
 4. Add a secret with:
    - **Name**: `AWS_ROLE_ARN`
-   - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-github-actions-role`)
+   - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-evals-github-actions-role`)
 
 The GitHub Actions workflow (`.github/workflows/run-evals.yml`) is already configured to use this secret for OIDC authentication.
 

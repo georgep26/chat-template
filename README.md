@@ -256,10 +256,10 @@ chat-template/
 │   │   ├── NETWORK_COST_ESTIMATE.md
 │   │   └── README.md
 │   ├── policies/        # IAM policy templates
-│   │   ├── bedrock_policy.yaml
-│   │   ├── lambda_policy.yaml
-│   │   ├── s3_policy.yaml
-│   │   ├── secrets_manager_policy.yaml
+│   │   ├── evals_bedrock_policy.yaml
+│   │   ├── evals_lambda_policy.yaml
+│   │   ├── evals_s3_policy.yaml
+│   │   ├── evals_secrets_manager_policy.yaml
 │   │   └── README.md
 │   ├── roles/           # IAM role templates
 │   │   ├── evals_github_action_role.yaml

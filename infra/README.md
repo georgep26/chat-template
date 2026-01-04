@@ -20,10 +20,10 @@ infra/
 │   ├── s3_bucket_template.yaml
 │   └── README.md       # CloudFormation documentation
 ├── policies/           # IAM managed policies
-│   ├── secrets_manager_policy.yaml
-│   ├── s3_policy.yaml
-│   ├── lambda_policy.yaml
-│   ├── bedrock_policy.yaml
+│   ├── evals_secrets_manager_policy.yaml
+│   ├── evals_s3_policy.yaml
+│   ├── evals_lambda_policy.yaml
+│   ├── evals_bedrock_policy.yaml
 │   └── README.md
 ├── roles/              # IAM roles
 │   ├── lambda_execution_role.yaml
@@ -204,15 +204,15 @@ To use OIDC authentication with GitHub Actions:
 1. **Deploy the policies** (in order):
    ```bash
    # Deploy each policy stack
-   aws cloudformation create-stack --stack-name chat-template-dev-secrets-manager-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-s3-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-bedrock-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-lambda-policy ...  # Optional
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-secrets-manager-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-s3-evaluation-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-bedrock-evaluation-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-lambda-invoke-policy ...  # Optional
    ```
 
 2. **Deploy the GitHub Actions role**:
    ```bash
-   aws cloudformation create-stack --stack-name chat-template-dev-github-actions-role \
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-github-actions-role \
      --template-body file://infra/roles/evals_github_action_role.yaml \
      --parameters ... \
      --capabilities CAPABILITY_NAMED_IAM
