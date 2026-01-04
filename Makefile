@@ -6,9 +6,6 @@ dev-env:
 branch-protection:
 	@bash scripts/setup_branch_protection.sh
 
-install:
-	conda env create -f environment.yml || conda env update -f environment.yml
-
 lint:
 	ruff .
 	mypy src
