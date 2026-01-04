@@ -1,15 +1,6 @@
 name: Run Evaluations
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'evals/**'
-      - 'src/**'
-      - 'data/**'
-      - 'evals/evals_config.yaml'
-      - '.github/workflows/run-evals.yml'
   workflow_dispatch:
     inputs:
       skip_branch_check:
@@ -17,6 +8,7 @@ on:
         required: false
         default: 'false'
         type: boolean
+  workflow_call:
 
 jobs:
   run-evals:

@@ -1,0 +1,40 @@
+name: Pull Request Workflow
+
+on:
+  pull_request:
+    branches: [main, development]
+
+jobs:
+  run-tests:
+    name: Run Tests
+    uses: ./.github/workflows/test.yml
+    secrets: inherit
+
+  check-eval-paths:
+    name: Check if evaluations needed
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.filter.outputs.evals }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check for relevant file changes
+        id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            evals:
+              - 'evals/**'
+              - 'src/**'
+              - 'data/**'
+              - 'evals/evals_config.yaml'
+              - '.github/workflows/run-evals.yml'
+
+  run-evaluations:
+    name: Run Evaluations
+    needs: [run-tests, check-eval-paths]
+    if: needs.check-eval-paths.outputs.should-run == 'true'
+    uses: ./.github/workflows/run-evals.yml
+    secrets: inherit
+
