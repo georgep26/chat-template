@@ -63,6 +63,9 @@ jobs:
           comment_mode: always
           report_individual_runs: true
           deduplicate_classes_by_file_name: true
+          test_changes_limit: 50
+          check_run_annotations: true
+          job_summary: true
 
       - name: Upload test report
         uses: actions/upload-artifact@v4
