@@ -42,7 +42,7 @@ Parameters:
   LambdaInvokePolicyArn:
     Type: String
     Default: ''
-    Description: 'Optional: ARN of the Lambda invoke managed policy (only needed if running in lambda mode)'
+    Description: 'Optional: ARN of the Lambda invoke managed policy'
   
   BedrockEvaluationPolicyArn:
     Type: String

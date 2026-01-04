@@ -1,45 +1,58 @@
 #!/bin/bash
 
-# GitHub Actions IAM Role Deployment Script
+# GitHub Actions IAM Role Deployment Script for Evaluations
 # This script deploys IAM policies and the GitHub Actions role for OIDC authentication
-# It first deploys the required policies, then the role that uses them
+# to enable GitHub Actions workflows to perform evaluations on AWS resources.
+#
+# IMPORTANT: Environment-Specific Permissions
+# The role deployed by this script is scoped to the environment you specify. GitHub Actions
+# will only have permissions to access resources in that specific environment. For example:
+# - If you deploy to "staging", GitHub Actions can only access staging resources (staging
+#   Lambda functions, staging S3 buckets, staging Bedrock endpoints, etc.)
+# - If you deploy to "dev", GitHub Actions can only access dev resources
+# - If you deploy to "prod", GitHub Actions can only access production resources
+#
+# This ensures that evaluation workflows running in CI/CD can only interact with the
+# environment they are intended to test, providing better security and isolation.
+#
+# It first deploys the required policies, then the role that uses them.
 #
 # Usage Examples:
 #   # Deploy to development environment (default)
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template
 #
 #   # Deploy to staging with custom branch
-#   ./scripts/deploy/deploy_github_action_role.sh staging deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --github-branch main
 #
 #   # Deploy with Lambda policy (for lambda mode evaluations)
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --include-lambda-policy
 #
 #   # Deploy with existing OIDC provider
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
 #
 #   # Validate templates before deployment
-#   ./scripts/deploy/deploy_github_action_role.sh dev validate \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev validate \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template
 #
 #   # Check stack status
-#   ./scripts/deploy/deploy_github_action_role.sh dev status
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev status
 
 set -e
 
@@ -64,7 +77,7 @@ print_error() {
 }
 
 print_header() {
-    echo -e "${BLUE}[GITHUB ACTIONS ROLE]${NC} $1"
+    echo -e "${BLUE}[EVALS GITHUB ACTIONS ROLE]${NC} $1"
 }
 
 # Function to show usage
@@ -183,7 +196,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "Starting GitHub Actions role deployment for $ENVIRONMENT environment"
+print_header "Starting GitHub Actions role deployment for evaluations in $ENVIRONMENT environment"
 
 # Validate environment
 case $ENVIRONMENT in
@@ -236,7 +249,7 @@ SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/secrets_manager_policy.yaml"
 S3_POLICY_TEMPLATE="infra/policies/s3_policy.yaml"
 BEDROCK_POLICY_TEMPLATE="infra/policies/bedrock_policy.yaml"
 LAMBDA_POLICY_TEMPLATE="infra/policies/lambda_policy.yaml"
-ROLE_TEMPLATE="infra/roles/github_actions_role.yaml"
+ROLE_TEMPLATE="infra/roles/evals_github_action_role.yaml"
 
 # Function to validate template
 validate_template() {
@@ -585,7 +598,7 @@ delete_stacks() {
 
 # Function to deploy all stacks
 deploy_all_stacks() {
-    print_header "Deploying GitHub Actions IAM role and policies"
+    print_header "Deploying GitHub Actions IAM role and policies for evaluations"
     
     # Create temporary directory for parameter files
     local temp_dir=$(mktemp -d)
