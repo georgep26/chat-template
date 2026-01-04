@@ -16,11 +16,7 @@ A comprehensive, config-driven evaluation framework for RAG (Retrieval-Augmented
 
 ### 1. Install Dependencies
 
-The evaluation framework dependencies are included in `evals/requirements.txt` and will be installed via `environment.yml`:
-
-```bash
-conda env update -f environment.yml
-```
+The evaluation framework dependencies are included in `evals/requirements.txt` and will be installed via `environment.yml`. See the [README](../README.md) for instructions on setting up the environment (make dev-env or bash scripts/setup_env.sh).
 
 ### 2. Create Configuration File
 

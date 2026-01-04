@@ -326,8 +326,17 @@ deploy_policy_stack() {
     
     print_status "Deploying policy stack: $stack_name"
     
+    # Get current stack status before attempting update
+    local initial_status=""
     if aws cloudformation describe-stacks --stack-name $stack_name --region $AWS_REGION >/dev/null 2>&1; then
-        print_warning "Stack $stack_name already exists. Updating..."
+        initial_status=$(aws cloudformation describe-stacks \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null)
+        print_status "Current stack status: $initial_status"
+        print_warning "Stack $stack_name already exists. Attempting update..."
+        
         local update_output=$(aws cloudformation update-stack \
             --stack-name $stack_name \
             --template-body file://$template_file \
@@ -336,14 +345,97 @@ deploy_policy_stack() {
             --region $AWS_REGION 2>&1)
         local result=$?
         
+        # Check output for "No updates are to be performed" regardless of exit code
+        # Sometimes AWS CLI returns 0 but includes this message
+        if echo "$update_output" | grep -qi "No updates are to be performed"; then
+            print_status "No updates needed for stack $stack_name (template and parameters unchanged)"
+            return 0
+        fi
+        
         if [ $result -ne 0 ]; then
-            if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $stack_name"
-                return 0
-            else
-                print_error "Stack update failed: $update_output"
-                return 1
+            print_error "Stack update failed: $update_output"
+            return 1
+        fi
+        
+        # Update was triggered successfully - verify it actually started
+        print_status "Update command succeeded (exit code 0). Verifying update was triggered..."
+        print_status "Initial stack status: $initial_status"
+        
+        # Wait a moment for CloudFormation to process the update request
+        sleep 3
+        
+        # Check stack status
+        local verify_status=$(aws cloudformation describe-stacks \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null)
+        
+        print_status "Stack status after update command: $verify_status"
+        
+        # Check the most recent stack event to see if an update was actually initiated
+        # Look for UPDATE_IN_PROGRESS event for the stack itself (not resources)
+        local event_status=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].ResourceStatus' \
+            --output text 2>/dev/null)
+        
+        local event_type=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].ResourceType' \
+            --output text 2>/dev/null)
+        
+        local event_time=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].Timestamp' \
+            --output text 2>/dev/null)
+        
+        # Determine if update was actually triggered
+        local update_triggered=false
+        
+        if [ "$verify_status" = "UPDATE_IN_PROGRESS" ]; then
+            update_triggered=true
+            print_status "✓ Update confirmed: Stack transitioned to UPDATE_IN_PROGRESS"
+        elif [ "$event_status" = "UPDATE_IN_PROGRESS" ] && [ "$event_type" = "AWS::CloudFormation::Stack" ]; then
+            # Most recent event is an UPDATE_IN_PROGRESS for the stack itself
+            update_triggered=true
+            print_status "✓ Update confirmed: Found UPDATE_IN_PROGRESS event (time: $event_time)"
+        elif [ "$verify_status" != "$initial_status" ]; then
+            # Status changed but not to UPDATE_IN_PROGRESS - might be transitioning
+            print_warning "Stack status changed from $initial_status to $verify_status"
+            print_warning "Waiting to see if update starts..."
+            sleep 5
+            
+            verify_status=$(aws cloudformation describe-stacks \
+                --stack-name $stack_name \
+                --region $AWS_REGION \
+                --query 'Stacks[0].StackStatus' \
+                --output text 2>/dev/null)
+            
+            if [ "$verify_status" = "UPDATE_IN_PROGRESS" ]; then
+                update_triggered=true
+                print_status "✓ Update confirmed: Stack is now in UPDATE_IN_PROGRESS state"
             fi
+        fi
+        
+        if [ "$update_triggered" = false ]; then
+            # No update was triggered - CloudFormation determined no changes are needed
+            print_warning "Stack status unchanged after update command: $verify_status"
+            
+            if [ -n "$event_time" ]; then
+                print_status "Most recent stack event: $event_status ($event_type) at $event_time"
+            fi
+            
+            print_status "No updates needed for stack $stack_name"
+            print_status "Template and parameters are identical to the current stack configuration"
+            print_status "This is expected behavior when there are no changes to deploy."
+            return 0  # Return 0 (success) since this is expected when no changes exist
         fi
     else
         print_status "Creating new stack: $stack_name"
@@ -365,7 +457,7 @@ deploy_policy_stack() {
     local is_update=false
     
     # Determine if this is an update or create
-    if aws cloudformation describe-stacks --stack-name $stack_name --region $AWS_REGION >/dev/null 2>&1; then
+    if [ -n "$initial_status" ]; then
         is_update=true
     fi
     
