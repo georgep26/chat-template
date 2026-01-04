@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, development]
   pull_request:
-    branches: [main, develop]
+    branches: [main, development]
 
 jobs:
   test:
@@ -30,6 +30,11 @@ jobs:
         run: |
           pip install pytest-html pytest-xdist
 
+      - name: Set PYTHONPATH
+        shell: bash -l {0}
+        run: |
+          echo "PYTHONPATH=${{ github.workspace }}/src:$PYTHONPATH" >> $GITHUB_ENV
+
       - name: Create test results directory
         shell: bash -l {0}
         run: mkdir -p junit
@@ -38,6 +43,8 @@ jobs:
         id: pytest
         continue-on-error: true
         shell: bash -l {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ env.PYTHONPATH }}
         run: |
           pytest tests/ \
             --junitxml=junit/test-results.xml \
@@ -51,7 +58,7 @@ jobs:
         with:
           files: junit/test-results.xml
           check_name: "Test Results"
-          comment_mode: create new
+          comment_mode: always
           report_individual_runs: true
           deduplicate_classes_by_file_name: true
 
