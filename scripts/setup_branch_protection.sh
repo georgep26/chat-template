@@ -156,7 +156,7 @@ setup_branch_protection() {
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": []
+    "contexts": ["Tests"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
@@ -186,6 +186,7 @@ EOF
     print_info "   - Requires 1 approval (2 reviewers recommended for standard releases)"
     print_info "   - Prevents direct pushes to main"
     print_info "   - Requires branches to be up to date"
+    print_info "   - Requires 'Tests' status check to pass"
     print_info "   - Requires conversation resolution"
 }
 
