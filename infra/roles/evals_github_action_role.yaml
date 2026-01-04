@@ -75,7 +75,7 @@ Resources:
   GitHubActionsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-github-actions-role'
+      RoleName: !Sub '${ProjectName}-${Environment}-evals-github-actions-role'
       Description: 'IAM role for GitHub Actions to run evaluation pipeline via OIDC'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -135,7 +135,7 @@ Resources:
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-github-actions-role'
+          Value: !Sub '${ProjectName}-${Environment}-evals-github-actions-role'
         - Key: Environment
           Value: !Ref Environment
         - Key: Project

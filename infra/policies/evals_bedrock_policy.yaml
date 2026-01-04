@@ -22,7 +22,7 @@ Resources:
   BedrockEvaluationPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-bedrock-evaluation-policy'
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-evals-bedrock-evaluation-policy'
       Description: 'Policy for invoking Bedrock models during evaluation (judge models)'
       PolicyDocument:
         Version: '2012-10-17'

@@ -27,7 +27,7 @@ Resources:
   S3EvaluationPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-s3-evaluation-policy'
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-evals-s3-evaluation-policy'
       Description: 'Policy for uploading evaluation results to S3'
       PolicyDocument:
         Version: '2012-10-17'

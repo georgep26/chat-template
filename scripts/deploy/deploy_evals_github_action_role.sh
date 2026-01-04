@@ -238,17 +238,17 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
 fi
 
 # Stack names
-SECRETS_MANAGER_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-secrets-manager-policy"
-S3_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-s3-evaluation-policy"
-BEDROCK_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-bedrock-evaluation-policy"
-LAMBDA_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-lambda-invoke-policy"
-ROLE_STACK="${PROJECT_NAME}-${ENVIRONMENT}-github-actions-role"
+SECRETS_MANAGER_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-secrets-manager-policy"
+S3_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-s3-evaluation-policy"
+BEDROCK_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-bedrock-evaluation-policy"
+LAMBDA_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-lambda-invoke-policy"
+ROLE_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-github-actions-role"
 
 # Template files
-SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/secrets_manager_policy.yaml"
-S3_POLICY_TEMPLATE="infra/policies/s3_policy.yaml"
-BEDROCK_POLICY_TEMPLATE="infra/policies/bedrock_policy.yaml"
-LAMBDA_POLICY_TEMPLATE="infra/policies/lambda_policy.yaml"
+SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/evals_secrets_manager_policy.yaml"
+S3_POLICY_TEMPLATE="infra/policies/evals_s3_policy.yaml"
+BEDROCK_POLICY_TEMPLATE="infra/policies/evals_bedrock_policy.yaml"
+LAMBDA_POLICY_TEMPLATE="infra/policies/evals_lambda_policy.yaml"
 ROLE_TEMPLATE="infra/roles/evals_github_action_role.yaml"
 
 # Function to validate template
