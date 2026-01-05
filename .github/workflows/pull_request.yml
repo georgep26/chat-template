@@ -4,11 +4,21 @@ on:
   pull_request:
     branches: [main, development]
 
+permissions:
+  checks: write
+  pull-requests: write
+  contents: read
+  id-token: write
+
 jobs:
   run-tests:
     name: Run Tests
     uses: ./.github/workflows/test.yml
     secrets: inherit
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
 
   check-eval-paths:
     name: Check if evaluations needed
@@ -37,4 +47,7 @@ jobs:
     if: needs.check-eval-paths.outputs.should-run == 'true'
     uses: ./.github/workflows/run-evals.yml
     secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
 
