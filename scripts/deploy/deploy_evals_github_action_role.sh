@@ -1,45 +1,58 @@
 #!/bin/bash
 
-# GitHub Actions IAM Role Deployment Script
+# GitHub Actions IAM Role Deployment Script for Evaluations
 # This script deploys IAM policies and the GitHub Actions role for OIDC authentication
-# It first deploys the required policies, then the role that uses them
+# to enable GitHub Actions workflows to perform evaluations on AWS resources.
+#
+# IMPORTANT: Environment-Specific Permissions
+# The role deployed by this script is scoped to the environment you specify. GitHub Actions
+# will only have permissions to access resources in that specific environment. For example:
+# - If you deploy to "staging", GitHub Actions can only access staging resources (staging
+#   Lambda functions, staging S3 buckets, staging Bedrock endpoints, etc.)
+# - If you deploy to "dev", GitHub Actions can only access dev resources
+# - If you deploy to "prod", GitHub Actions can only access production resources
+#
+# This ensures that evaluation workflows running in CI/CD can only interact with the
+# environment they are intended to test, providing better security and isolation.
+#
+# It first deploys the required policies, then the role that uses them.
 #
 # Usage Examples:
 #   # Deploy to development environment (default)
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template
 #
 #   # Deploy to staging with custom branch
-#   ./scripts/deploy/deploy_github_action_role.sh staging deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --github-branch main
 #
 #   # Deploy with Lambda policy (for lambda mode evaluations)
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --include-lambda-policy
 #
 #   # Deploy with existing OIDC provider
-#   ./scripts/deploy/deploy_github_action_role.sh dev deploy \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
 #
 #   # Validate templates before deployment
-#   ./scripts/deploy/deploy_github_action_role.sh dev validate \
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev validate \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template
 #
 #   # Check stack status
-#   ./scripts/deploy/deploy_github_action_role.sh dev status
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev status
 
 set -e
 
@@ -64,7 +77,7 @@ print_error() {
 }
 
 print_header() {
-    echo -e "${BLUE}[GITHUB ACTIONS ROLE]${NC} $1"
+    echo -e "${BLUE}[EVALS GITHUB ACTIONS ROLE]${NC} $1"
 }
 
 # Function to show usage
@@ -183,7 +196,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "Starting GitHub Actions role deployment for $ENVIRONMENT environment"
+print_header "Starting GitHub Actions role deployment for evaluations in $ENVIRONMENT environment"
 
 # Validate environment
 case $ENVIRONMENT in
@@ -225,18 +238,18 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
 fi
 
 # Stack names
-SECRETS_MANAGER_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-secrets-manager-policy"
-S3_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-s3-evaluation-policy"
-BEDROCK_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-bedrock-evaluation-policy"
-LAMBDA_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-lambda-invoke-policy"
-ROLE_STACK="${PROJECT_NAME}-${ENVIRONMENT}-github-actions-role"
+SECRETS_MANAGER_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-secrets-manager-policy"
+S3_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-s3-evaluation-policy"
+BEDROCK_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-bedrock-evaluation-policy"
+LAMBDA_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-lambda-invoke-policy"
+ROLE_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-github-actions-role"
 
 # Template files
-SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/secrets_manager_policy.yaml"
-S3_POLICY_TEMPLATE="infra/policies/s3_policy.yaml"
-BEDROCK_POLICY_TEMPLATE="infra/policies/bedrock_policy.yaml"
-LAMBDA_POLICY_TEMPLATE="infra/policies/lambda_policy.yaml"
-ROLE_TEMPLATE="infra/roles/github_actions_role.yaml"
+SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/evals_secrets_manager_policy.yaml"
+S3_POLICY_TEMPLATE="infra/policies/evals_s3_policy.yaml"
+BEDROCK_POLICY_TEMPLATE="infra/policies/evals_bedrock_policy.yaml"
+LAMBDA_POLICY_TEMPLATE="infra/policies/evals_lambda_policy.yaml"
+ROLE_TEMPLATE="infra/roles/evals_github_action_role.yaml"
 
 # Function to validate template
 validate_template() {
@@ -326,8 +339,17 @@ deploy_policy_stack() {
     
     print_status "Deploying policy stack: $stack_name"
     
+    # Get current stack status before attempting update
+    local initial_status=""
     if aws cloudformation describe-stacks --stack-name $stack_name --region $AWS_REGION >/dev/null 2>&1; then
-        print_warning "Stack $stack_name already exists. Updating..."
+        initial_status=$(aws cloudformation describe-stacks \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null)
+        print_status "Current stack status: $initial_status"
+        print_warning "Stack $stack_name already exists. Attempting update..."
+        
         local update_output=$(aws cloudformation update-stack \
             --stack-name $stack_name \
             --template-body file://$template_file \
@@ -336,14 +358,97 @@ deploy_policy_stack() {
             --region $AWS_REGION 2>&1)
         local result=$?
         
+        # Check output for "No updates are to be performed" regardless of exit code
+        # Sometimes AWS CLI returns 0 but includes this message
+        if echo "$update_output" | grep -qi "No updates are to be performed"; then
+            print_status "No updates needed for stack $stack_name (template and parameters unchanged)"
+            return 0
+        fi
+        
         if [ $result -ne 0 ]; then
-            if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $stack_name"
-                return 0
-            else
-                print_error "Stack update failed: $update_output"
-                return 1
+            print_error "Stack update failed: $update_output"
+            return 1
+        fi
+        
+        # Update was triggered successfully - verify it actually started
+        print_status "Update command succeeded (exit code 0). Verifying update was triggered..."
+        print_status "Initial stack status: $initial_status"
+        
+        # Wait a moment for CloudFormation to process the update request
+        sleep 3
+        
+        # Check stack status
+        local verify_status=$(aws cloudformation describe-stacks \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null)
+        
+        print_status "Stack status after update command: $verify_status"
+        
+        # Check the most recent stack event to see if an update was actually initiated
+        # Look for UPDATE_IN_PROGRESS event for the stack itself (not resources)
+        local event_status=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].ResourceStatus' \
+            --output text 2>/dev/null)
+        
+        local event_type=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].ResourceType' \
+            --output text 2>/dev/null)
+        
+        local event_time=$(aws cloudformation describe-stack-events \
+            --stack-name $stack_name \
+            --region $AWS_REGION \
+            --max-items 1 \
+            --query 'StackEvents[0].Timestamp' \
+            --output text 2>/dev/null)
+        
+        # Determine if update was actually triggered
+        local update_triggered=false
+        
+        if [ "$verify_status" = "UPDATE_IN_PROGRESS" ]; then
+            update_triggered=true
+            print_status "✓ Update confirmed: Stack transitioned to UPDATE_IN_PROGRESS"
+        elif [ "$event_status" = "UPDATE_IN_PROGRESS" ] && [ "$event_type" = "AWS::CloudFormation::Stack" ]; then
+            # Most recent event is an UPDATE_IN_PROGRESS for the stack itself
+            update_triggered=true
+            print_status "✓ Update confirmed: Found UPDATE_IN_PROGRESS event (time: $event_time)"
+        elif [ "$verify_status" != "$initial_status" ]; then
+            # Status changed but not to UPDATE_IN_PROGRESS - might be transitioning
+            print_warning "Stack status changed from $initial_status to $verify_status"
+            print_warning "Waiting to see if update starts..."
+            sleep 5
+            
+            verify_status=$(aws cloudformation describe-stacks \
+                --stack-name $stack_name \
+                --region $AWS_REGION \
+                --query 'Stacks[0].StackStatus' \
+                --output text 2>/dev/null)
+            
+            if [ "$verify_status" = "UPDATE_IN_PROGRESS" ]; then
+                update_triggered=true
+                print_status "✓ Update confirmed: Stack is now in UPDATE_IN_PROGRESS state"
             fi
+        fi
+        
+        if [ "$update_triggered" = false ]; then
+            # No update was triggered - CloudFormation determined no changes are needed
+            print_warning "Stack status unchanged after update command: $verify_status"
+            
+            if [ -n "$event_time" ]; then
+                print_status "Most recent stack event: $event_status ($event_type) at $event_time"
+            fi
+            
+            print_status "No updates needed for stack $stack_name"
+            print_status "Template and parameters are identical to the current stack configuration"
+            print_status "This is expected behavior when there are no changes to deploy."
+            return 0  # Return 0 (success) since this is expected when no changes exist
         fi
     else
         print_status "Creating new stack: $stack_name"
@@ -365,7 +470,7 @@ deploy_policy_stack() {
     local is_update=false
     
     # Determine if this is an update or create
-    if aws cloudformation describe-stacks --stack-name $stack_name --region $AWS_REGION >/dev/null 2>&1; then
+    if [ -n "$initial_status" ]; then
         is_update=true
     fi
     
@@ -493,7 +598,7 @@ delete_stacks() {
 
 # Function to deploy all stacks
 deploy_all_stacks() {
-    print_header "Deploying GitHub Actions IAM role and policies"
+    print_header "Deploying GitHub Actions IAM role and policies for evaluations"
     
     # Create temporary directory for parameter files
     local temp_dir=$(mktemp -d)

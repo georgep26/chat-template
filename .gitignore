@@ -225,6 +225,8 @@ secrets.yaml
 
 # pytest
 .pytest_cache/
+junit/
+test-report.html
 
 # Coverage reports
 htmlcov/

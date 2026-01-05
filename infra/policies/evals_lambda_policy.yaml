@@ -27,7 +27,7 @@ Resources:
   LambdaInvokePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-invoke-policy'
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-evals-lambda-invoke-policy'
       Description: 'Policy for invoking Lambda functions during evaluation'
       PolicyDocument:
         Version: '2012-10-17'
