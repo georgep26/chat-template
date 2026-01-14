@@ -114,9 +114,9 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/light_db_template.yaml"
+TEMPLATE_FILE="infra/resources/light_db_template.yaml"
 SECRET_STACK_NAME="chat-template-db-secret-${ENVIRONMENT}"
-SECRET_TEMPLATE_FILE="infra/cloudformation/db_secret_template.yaml"
+SECRET_TEMPLATE_FILE="infra/resources/db_secret_template.yaml"
 SECRET_NAME="db-connection"
 VPC_STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
 

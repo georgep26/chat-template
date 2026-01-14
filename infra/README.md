@@ -12,7 +12,7 @@ infra/
 │   ├── main.tf         # Main Terraform configuration
 │   ├── variables.tf    # Variable definitions
 │   └── outputs.tf      # Output definitions
-├── cloudformation/     # CloudFormation templates
+├── resources/     # CloudFormation templates
 │   ├── db_secret_template.yaml
 │   ├── knowledge_base_template.yaml
 │   ├── lambda_template.yaml

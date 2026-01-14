@@ -136,7 +136,7 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-rag-lambda-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/lambda_template.yaml"
+TEMPLATE_FILE="infra/resources/lambda_template.yaml"
 ROLE_STACK_NAME="chat-template-lambda-execution-role-${ENVIRONMENT}"
 ROLE_TEMPLATE_FILE="infra/roles/lambda_execution_role.yaml"
 DB_STACK_NAME="chat-template-light-db-${ENVIRONMENT}"

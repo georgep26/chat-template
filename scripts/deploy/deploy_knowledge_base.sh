@@ -103,7 +103,7 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-knowledge-base-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/knowledge_base_template.yaml"
+TEMPLATE_FILE="infra/resources/knowledge_base_template.yaml"
 DB_STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region

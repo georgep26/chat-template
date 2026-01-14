@@ -115,7 +115,7 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/vpc_template.yaml"
+TEMPLATE_FILE="infra/resources/vpc_template.yaml"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
 VPC_CIDR="10.0.0.0/16"

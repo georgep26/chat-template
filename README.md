@@ -246,7 +246,7 @@ chat-template/
 │   ├── template_outline.md
 │   └── working_notes.md
 ├── infra/               # Infrastructure as Code (IaC) definitions
-│   ├── cloudformation/  # AWS CloudFormation templates
+│   ├── resources/  # AWS CloudFormation templates
 │   │   ├── db_secret_template.yaml
 │   │   ├── knowledge_base_template.yaml
 │   │   ├── lambda_template.yaml
@@ -323,7 +323,7 @@ chat-template/
 - **docs/**: Documentation files for the project, including guides, API documentation, development processes, code standards, and project outlines.
 
 - **infra/**: Infrastructure as Code (IaC) definitions for deploying the application.
-  - `cloudformation/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
+  - `resources/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
   - `policies/`: IAM policy templates for various AWS services
   - `roles/`: IAM role templates for Lambda execution and GitHub Actions
 
