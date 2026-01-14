@@ -68,8 +68,6 @@ Resources:
       Tags:
         - Key: Name
           Value: 'GitHubActionsOIDCProvider'
-        - Key: Purpose
-          Value: 'GitHub Actions OIDC'
 
   # IAM Role for GitHub Actions
   GitHubActionsRole:
@@ -140,8 +138,6 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
-        - Key: Purpose
-          Value: 'GitHub Actions OIDC'
         - Key: GitHubRepo
           Value: !Sub '${GitHubOrg}/${GitHubRepo}'
 

@@ -100,8 +100,6 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
-        - Key: Purpose
-          Value: 'S3 Bucket for Chat Template'
 
   ########################################
   # Bucket Policy for Bedrock Knowledge Base Access
