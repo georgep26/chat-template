@@ -8,6 +8,8 @@
 #   ./scripts/setup_branch_protection.sh
 #   # Or with explicit repository
 #   ./scripts/setup_branch_protection.sh --repo owner/repo-name
+#   # Solo mode: no reviewer required (for independent work)
+#   ./scripts/setup_branch_protection.sh --solo
 
 set -e
 
@@ -44,11 +46,14 @@ show_usage() {
     echo "Options:"
     echo "  --repo <owner/repo>    - GitHub repository (e.g., owner/repo-name)"
     echo "                          If not provided, will try to detect from git remote"
+    echo "  --solo                 - Solo mode: no reviewer required (for independent work)"
+    echo "                          PRs still required, but you can merge your own PR"
     echo "  --help                 - Show this help message"
     echo ""
     echo "This script sets up branch protection for the 'main' branch:"
     echo "  - Requires pull requests before merging"
     echo "  - Requires 1 approval (2 reviewers recommended for standard releases)"
+    echo "  - Use --solo to require PRs but no approvals (for working independently)"
     echo "  - Prevents direct pushes to main"
     echo "  - Requires branches to be up to date"
     echo ""
@@ -56,6 +61,9 @@ show_usage() {
     echo "      branches are allowed for quick bug fixes. See development_process.md"
     echo "      for details on the hotfix process."
 }
+
+# Solo mode: 1 = no reviewer required, 0 = require 1 approval (default)
+SOLO_MODE=0
 
 # Check if GitHub CLI is installed
 check_gh_cli() {
@@ -86,6 +94,10 @@ get_repository() {
             --repo)
                 repo_arg="$2"
                 shift 2
+                ;;
+            --solo)
+                SOLO_MODE=1
+                shift
                 ;;
             --help|-h)
                 show_usage
@@ -136,6 +148,11 @@ setup_branch_protection() {
     # Check if branch protection already exists
     if gh api "repos/${repo}/branches/main/protection" &> /dev/null; then
         print_warning "Branch protection already exists for 'main' branch."
+        if [[ "$SOLO_MODE" -eq 1 ]]; then
+            print_info "Solo mode is enabled: update will require PRs but no reviewer approval."
+        else
+            print_info "Solo mode is disabled: update will require 1 approval (2 recommended for standard releases)."
+        fi
         read -p "Do you want to update it? (y/n) " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -145,22 +162,32 @@ setup_branch_protection() {
     fi
     
     print_info "Configuring branch protection rules..."
+    if [[ "$SOLO_MODE" -eq 1 ]]; then
+        print_info "Solo mode: PRs required but no reviewer approval needed."
+    fi
+    
+    # Required approving review count: 0 for solo mode, 1 otherwise
+    local required_reviews=$([[ "$SOLO_MODE" -eq 1 ]] && echo "0" || echo "1")
     
     # Set up branch protection
     # Note: This allows PRs from any branch (including hotfix branches)
     # Standard process is PRs from development, but hotfix branches are allowed for quick fixes
-    # Requires 1 approval (2 recommended for standard releases)
+    # Requires 1 approval (2 recommended for standard releases); use --solo for 0 approvals
     
     # Construct JSON payload for branch protection
+    # Required context must match the status check name reported by GitHub Actions.
+    # When using a reusable workflow (pull_request.yml -> test.yml), the reported
+    # check is "Pull Request Workflow / Run Tests / test (3.11)". If you add
+    # more matrix entries in test.yml (e.g. Python 3.12), add those contexts here.
     local protection_json=$(cat <<EOF
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Tests"]
+    "contexts": ["Pull Request Workflow / Run Tests / test (3.11)"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": ${required_reviews},
     "dismiss_stale_reviews": true,
     "require_code_owner_reviews": false
   },
@@ -183,10 +210,14 @@ EOF
     
     print_info "✅ Branch protection rules configured successfully!"
     print_info "   - Requires pull requests before merging"
-    print_info "   - Requires 1 approval (2 reviewers recommended for standard releases)"
+    if [[ "$SOLO_MODE" -eq 1 ]]; then
+        print_info "   - No reviewer approval required (solo mode)"
+    else
+        print_info "   - Requires 1 approval (2 reviewers recommended for standard releases)"
+    fi
     print_info "   - Prevents direct pushes to main"
     print_info "   - Requires branches to be up to date"
-    print_info "   - Requires 'Tests' status check to pass"
+    print_info "   - Requires 'Pull Request Workflow / Run Tests / test (3.11)' status check to pass"
     print_info "   - Requires conversation resolution"
 }
 
@@ -200,10 +231,20 @@ main() {
         exit 0
     fi
     
+    # Set SOLO_MODE in this shell (get_repository runs in a subshell, so set it here)
+    SOLO_MODE=0
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "--solo" ]]; then
+            SOLO_MODE=1
+            break
+        fi
+    done
+    
     # Check GitHub CLI
     check_gh_cli
     
-    # Get repository
+    # Get repository (runs in subshell, so SOLO_MODE must already be set above)
     local repo=$(get_repository "$@")
     print_info "Repository: ${repo}"
     
@@ -214,7 +255,11 @@ main() {
     print_info "Summary:"
     print_info "✅ Branch protection rules are now active on the main branch"
     print_info "   - Direct pushes to main are blocked"
-    print_info "   - PRs require 1 approval (2 reviewers recommended for standard releases)"
+    if [[ "$SOLO_MODE" -eq 1 ]]; then
+        print_info "   - PRs required, no reviewer approval (solo mode)"
+    else
+        print_info "   - PRs require 1 approval (2 reviewers recommended for standard releases)"
+    fi
     print_info "   - Standard process: PRs from development branch"
     print_info "   - Hotfix process: PRs from hotfix branches allowed (see development_process.md)"
 }
