@@ -321,18 +321,20 @@ get_db_stack_outputs() {
             --region "$AWS_REGION" \
             --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
             --output text 2>/dev/null)
-    else
-        # Try to get secret ARN directly from Secrets Manager
-        local secret_name1="${PROJECT_NAME}-chat-template-db-connection-${ENVIRONMENT}"
-        local secret_name2="python-template-chat-template-db-connection-${ENVIRONMENT}"
-        
-        if aws secretsmanager describe-secret --secret-id "$secret_name1" --region "$AWS_REGION" >/dev/null 2>&1; then
-            secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name1" --region "$AWS_REGION" \
-                --query 'ARN' --output text 2>/dev/null)
-        elif aws secretsmanager describe-secret --secret-id "$secret_name2" --region "$AWS_REGION" >/dev/null 2>&1; then
-            secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name2" --region "$AWS_REGION" \
-                --query 'ARN' --output text 2>/dev/null)
-        fi
+    fi
+
+    if [ -z "$secret_arn" ] || [ "$secret_arn" == "None" ]; then
+        local secret_name1="${PROJECT_NAME}-db-connection-${ENVIRONMENT}"
+        local secret_name2="${PROJECT_NAME}-chat-template-db-connection-${ENVIRONMENT}"
+        local secret_name3="python-template-db-connection-${ENVIRONMENT}"
+        local secret_name4="python-template-chat-template-db-connection-${ENVIRONMENT}"
+        for name in "$secret_name1" "$secret_name2" "$secret_name3" "$secret_name4"; do
+            if aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" >/dev/null 2>&1; then
+                secret_arn=$(aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" \
+                    --query 'ARN' --output text 2>/dev/null)
+                break
+            fi
+        done
     fi
     
     if [ -z "$secret_arn" ] || [ "$secret_arn" == "None" ]; then
