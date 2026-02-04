@@ -4,6 +4,11 @@
 # This script deploys IAM policies and the GitHub Actions role for OIDC authentication
 # to enable GitHub Actions workflows to perform evaluations on AWS resources.
 #
+# PREREQUISITE: GitHub OIDC Identity Provider
+# The GitHub OIDC identity provider must be created in your AWS account BEFORE using
+# this script. See docs/oidc_github_identity_provider_setup.md for setup steps.
+# You must pass the provider ARN with --oidc-provider-arn when deploying or updating.
+#
 # IMPORTANT: Environment-Specific Permissions
 # The role deployed by this script is scoped to the environment you specify. GitHub Actions
 # will only have permissions to access resources in that specific environment. For example:
@@ -18,38 +23,39 @@
 # It first deploys the required policies, then the role that uses them.
 #
 # Usage Examples:
-#   # Deploy to development environment (default)
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template
-#
-#   # Deploy to staging with custom branch
-#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --github-branch main
-#
-#   # Deploy with Lambda policy (for lambda mode evaluations)
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --include-lambda-policy
-#
-#   # Deploy with existing OIDC provider
+#   # Deploy to development environment (OIDC provider ARN required)
 #   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
 #     --github-repo chat-template \
 #     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
 #
-#   # Validate templates before deployment
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev validate \
+#   # Deploy to staging with custom branch
+#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
 #     --aws-account-id 123456789012 \
 #     --github-org myorg \
-#     --github-repo chat-template
+#     --github-repo chat-template \
+#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
+#     --github-source-branch main
+#
+#   # Deploy with Lambda policy (for lambda mode evaluations)
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+#     --aws-account-id 123456789012 \
+#     --github-org myorg \
+#     --github-repo chat-template \
+#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
+#     --include-lambda-policy
+#
+#   # Deploy with Bedrock knowledge base scoped to this environment (recommended for same-account multi-env)
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+#     --aws-account-id 123456789012 \
+#     --github-org myorg \
+#     --github-repo chat-template \
+#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
+#     --knowledge-base-id YOUR_KB_ID
+#
+#   # Validate templates before deployment
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev validate
 #
 #   # Check stack status
 #   ./scripts/deploy/deploy_evals_github_action_role.sh dev status
@@ -84,6 +90,9 @@ print_header() {
 show_usage() {
     echo "GitHub Actions IAM Role Deployment Script"
     echo ""
+    echo "PREREQUISITE: Create the GitHub OIDC identity provider in AWS before using this script."
+    echo "See docs/oidc_github_identity_provider_setup.md for setup steps."
+    echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
     echo "Environments:"
@@ -98,23 +107,23 @@ show_usage() {
     echo "  validate  - Validate the templates"
     echo "  status    - Show stack status"
     echo ""
-    echo "Required Options:"
+    echo "Required Options (for deploy/update):"
     echo "  --aws-account-id <id>        - AWS Account ID (12 digits)"
     echo "  --github-org <org>            - GitHub organization or username"
     echo "  --github-repo <repo>          - GitHub repository name"
+    echo "  --oidc-provider-arn <arn>      - ARN of GitHub OIDC identity provider (create first; see docs/oidc_github_identity_provider_setup.md)"
     echo ""
     echo "Optional Options:"
     echo "  --github-source-branch <branch> - GitHub source branch for PRs (default: development)"
     echo "  --github-target-branch <branch>  - GitHub target branch for PRs (default: main)"
     echo "  --region <region>                - AWS region (default: us-east-1)"
     echo "  --include-lambda-policy        - Include Lambda invoke policy (for lambda mode)"
-    echo "  --oidc-provider-arn <arn>      - ARN of existing OIDC provider (creates new if not provided)"
+    echo "  --knowledge-base-id <id>      - Bedrock knowledge base ID for this environment (recommended for same-account multi-env)"
     echo "  --project-name <name>          - Project name (default: chat-template)"
     echo ""
     echo "Examples:"
-    echo "  $0 dev deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template"
-    echo "  $0 staging deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --github-source-branch main"
-    echo "  $0 dev deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --github-target-branch main"
+    echo "  $0 dev deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
+    echo "  $0 staging deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com --github-source-branch main"
     echo "  $0 dev status"
     echo ""
     echo "Note: This script deploys policies first, then the role that uses them."
@@ -136,6 +145,7 @@ GITHUB_SOURCE_BRANCH="development"
 GITHUB_TARGET_BRANCH="main"
 INCLUDE_LAMBDA_POLICY=false
 OIDC_PROVIDER_ARN=""
+KNOWLEDGE_BASE_ID=""
 AWS_ACCOUNT_ID=""
 GITHUB_ORG=""
 GITHUB_REPO=""
@@ -180,6 +190,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --oidc-provider-arn)
             OIDC_PROVIDER_ARN="$2"
+            shift 2
+            ;;
+        --knowledge-base-id)
+            KNOWLEDGE_BASE_ID="$2"
             shift 2
             ;;
         --project-name)
@@ -233,6 +247,12 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
     # Validate AWS Account ID format (12 digits)
     if ! [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
         print_error "Invalid AWS Account ID format. Must be 12 digits."
+        exit 1
+    fi
+
+    if [ -z "$OIDC_PROVIDER_ARN" ]; then
+        print_error "OIDC provider ARN is required (--oidc-provider-arn). Create the GitHub OIDC identity provider first; see docs/oidc_github_identity_provider_setup.md"
+        show_usage
         exit 1
     fi
 fi
@@ -617,28 +637,41 @@ EOF
     deploy_policy_stack "$SECRETS_MANAGER_POLICY_STACK" "$SECRETS_MANAGER_POLICY_TEMPLATE" "$secrets_params_file"
     local SECRETS_MANAGER_POLICY_ARN=$(get_stack_output "$SECRETS_MANAGER_POLICY_STACK" "PolicyArn")
     
-    # Deploy S3 Policy
+    # Deploy S3 Policy (scoped to this environment's evals bucket pattern)
     print_status "Deploying S3 evaluation policy..."
+    local s3_bucket_pattern="${PROJECT_NAME}-evals-${ENVIRONMENT}"
     local s3_params_file="$temp_dir/s3_params.json"
     cat > "$s3_params_file" <<EOF
 [
   {"ParameterKey": "ProjectName", "ParameterValue": "$PROJECT_NAME"},
-  {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"}
+  {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
+  {"ParameterKey": "S3BucketPattern", "ParameterValue": "$s3_bucket_pattern"}
 ]
 EOF
     deploy_policy_stack "$S3_POLICY_STACK" "$S3_POLICY_TEMPLATE" "$s3_params_file"
     local S3_POLICY_ARN=$(get_stack_output "$S3_POLICY_STACK" "PolicyArn")
     
-    # Deploy Bedrock Policy
+    # Deploy Bedrock Policy (optionally scoped to this environment's knowledge base)
     print_status "Deploying Bedrock evaluation policy..."
     local bedrock_params_file="$temp_dir/bedrock_params.json"
-    cat > "$bedrock_params_file" <<EOF
+    if [ -n "$KNOWLEDGE_BASE_ID" ]; then
+        cat > "$bedrock_params_file" <<EOF
+[
+  {"ParameterKey": "ProjectName", "ParameterValue": "$PROJECT_NAME"},
+  {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
+  {"ParameterKey": "AWSRegion", "ParameterValue": "$AWS_REGION"},
+  {"ParameterKey": "KnowledgeBaseId", "ParameterValue": "$KNOWLEDGE_BASE_ID"}
+]
+EOF
+    else
+        cat > "$bedrock_params_file" <<EOF
 [
   {"ParameterKey": "ProjectName", "ParameterValue": "$PROJECT_NAME"},
   {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
   {"ParameterKey": "AWSRegion", "ParameterValue": "$AWS_REGION"}
 ]
 EOF
+    fi
     deploy_policy_stack "$BEDROCK_POLICY_STACK" "$BEDROCK_POLICY_TEMPLATE" "$bedrock_params_file"
     local BEDROCK_POLICY_ARN=$(get_stack_output "$BEDROCK_POLICY_STACK" "PolicyArn")
     
@@ -678,12 +711,9 @@ EOF
         role_params="$role_params,
   {\"ParameterKey\": \"LambdaInvokePolicyArn\", \"ParameterValue\": \"$LAMBDA_POLICY_ARN\"}"
     fi
-    
-    if [ -n "$OIDC_PROVIDER_ARN" ]; then
-        role_params="$role_params,
+
+    role_params="$role_params,
   {\"ParameterKey\": \"OIDCProviderArn\", \"ParameterValue\": \"$OIDC_PROVIDER_ARN\"}"
-    fi
-    
     role_params="$role_params
 ]"
     

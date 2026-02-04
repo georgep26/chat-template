@@ -20,8 +20,8 @@ Parameters:
   
   S3BucketPattern:
     Type: String
-    Default: '*eval*'
-    Description: 'Pattern for S3 bucket names (used if S3BucketName is empty)'
+    Default: '*-evals-dev'
+    Description: 'Pattern for S3 bucket names (used if S3BucketName is empty). Should be environment-scoped, e.g. <project>-evals-<env> or *-evals-<env>.'
 
 Resources:
   S3EvaluationPolicy:

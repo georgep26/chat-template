@@ -18,6 +18,14 @@ Parameters:
     Default: 'us-east-1'
     Description: 'AWS region'
 
+  KnowledgeBaseId:
+    Type: String
+    Default: ''
+    Description: 'Optional: Bedrock knowledge base ID for this environment. When provided, restricts Retrieve/RetrieveAndGenerate to this KB only (recommended for same-account multi-env). When empty, allows all knowledge bases in the account.'
+
+Conditions:
+  HasKnowledgeBaseId: !Not [!Equals [!Ref KnowledgeBaseId, '']]
+
 Resources:
   BedrockEvaluationPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -43,8 +51,11 @@ Resources:
               - bedrock:Retrieve
               - bedrock:RetrieveAndGenerate
             Resource:
-              # Allow access to knowledge bases (if needed for evaluation)
-              - !Sub 'arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*'
+              # When KnowledgeBaseId is provided, restrict to that KB only (env separation); otherwise allow all KBs
+              - !If
+                - HasKnowledgeBaseId
+                - !Sub 'arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}'
+                - !Sub 'arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*'
 
 Outputs:
   PolicyArn:
