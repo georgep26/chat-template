@@ -101,7 +101,7 @@ The branch protection setup script will:
 ### Prerequisites
 
 - GitHub CLI (`gh`) must be installed and authenticated
-  - Install: `brew install gh` (macOS) or `apt install gh` (Linux)
+  - Install: `brew install gh` (macOS), `apt install gh` (Linux), or `choco install gh` (Windows with [Chocolatey](https://chocolatey.org/install))
   - Authenticate: `gh auth login`
 - Repository must be initialized with a git remote pointing to GitHub
 
