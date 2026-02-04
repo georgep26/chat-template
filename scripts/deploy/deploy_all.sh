@@ -21,10 +21,13 @@
 # Note: This script deploys components in the following order:
 #       1. Network (VPC, subnets, security groups) - optional, but included
 #       2. S3 Bucket (for knowledge base documents)
-#       3. Database (Aurora PostgreSQL) - requires Network
+#       3. Database (Aurora PostgreSQL) - requires Network (or pass --vpc-id and --subnet-ids)
 #       4. Knowledge Base (AWS Bedrock) - requires Database and S3
 #       5. Lambda Function - requires Database, Knowledge Base, and optionally Network
 #       6. Cost Allocation Tags - activates tags for Cost Explorer (optional)
+#
+#       If you use --skip-network, you must pass --vpc-id and --subnet-ids when deploying
+#       the Database; the DB script cannot auto-detect them without the VPC stack.
 
 set -e
 
@@ -82,14 +85,18 @@ show_usage() {
     echo "  --skip-kb                       - Skip knowledge base deployment (use existing KB)"
     echo "  --skip-lambda                  - Skip Lambda deployment (use existing Lambda)"
     echo "  --skip-cost-tags               - Skip cost allocation tags activation"
-    echo "  --vpc-id <vpc-id>               - VPC ID (for Lambda, if not using auto-detection)"
-    echo "  --subnet-ids <id1,id2,...>      - Subnet IDs (for Lambda, if not using auto-detection)"
-    echo "  --security-group-ids <id1,...>  - Security group IDs (for Lambda, if not using auto-detection)"
+    echo "  --vpc-id <vpc-id>               - VPC ID (required for DB and Lambda when using --skip-network)"
+    echo "  --subnet-ids <id1,id2,...>      - Subnet IDs (required for DB when using --skip-network)"
+    echo "  --security-group-ids <id1,...>  - Security group IDs (for Lambda when using --skip-network)"
+    echo ""
+    echo "Note: If you use --skip-network, the Database step cannot auto-detect VPC/subnets (no VPC stack)."
+    echo "      You must pass --vpc-id and --subnet-ids so the DB can be created in your existing VPC."
     echo ""
     echo "Examples:"
     echo "  $0 dev --s3-app-config-uri s3://my-bucket/config/app_config.yml"
     echo "  $0 staging --s3-app-config-uri s3://my-bucket/config/app_config.yml --region us-west-2"
     echo "  $0 prod --s3-app-config-uri s3://my-bucket/config/app_config.yml --master-password MyPass123"
+    echo "  $0 staging --s3-app-config-uri s3://bucket/config.yml --skip-network --vpc-id vpc-xxx --subnet-ids subnet-a,subnet-b"
     echo ""
     echo "Note: The script will deploy all components in order. If a component already exists,"
     echo "      it will be updated (or show 'no updates needed' if already up to date)."
@@ -214,6 +221,17 @@ if [ "$SKIP_LAMBDA" = false ] && [ -z "$S3_APP_CONFIG_URI" ]; then
     exit 1
 fi
 
+# When skipping network, DB deployment cannot auto-detect VPC — require VPC args
+if [ "$SKIP_NETWORK" = true ] && [ "$SKIP_DB" = false ]; then
+    if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
+        print_error "With --skip-network, database deployment requires --vpc-id and --subnet-ids."
+        print_error "The VPC stack is not deployed, so the DB script cannot auto-detect them."
+        echo ""
+        show_usage
+        exit 1
+    fi
+fi
+
 # Function to run a deployment script and handle errors
 run_deployment_script() {
     local script_name=$1
@@ -280,12 +298,17 @@ if [ "$SKIP_DB" = false ]; then
     print_header "Step $DEPLOYMENT_STEPS: Deploying Database"
     
     # Build database deployment arguments
-    local db_args=("$ENVIRONMENT" "deploy" --region "$AWS_REGION")
+    db_args=("$ENVIRONMENT" "deploy" --region "$AWS_REGION")
     
+    if [ -n "$VPC_ID" ]; then
+        db_args+=(--vpc-id "$VPC_ID")
+    fi
+    if [ -n "$SUBNET_IDS" ]; then
+        db_args+=(--subnet-ids "$SUBNET_IDS")
+    fi
     if [ -n "$MASTER_PASSWORD" ]; then
         db_args+=(--master-password "$MASTER_PASSWORD")
     fi
-    
     if [ -n "$MASTER_USERNAME" ]; then
         db_args+=(--master-username "$MASTER_USERNAME")
     fi
@@ -322,7 +345,7 @@ if [ "$SKIP_LAMBDA" = false ]; then
     print_header "Step $DEPLOYMENT_STEPS: Deploying Lambda Function"
     
     # Build Lambda deployment arguments
-    local lambda_args=("$ENVIRONMENT" "deploy" --s3_app_config_uri "$S3_APP_CONFIG_URI" --region "$AWS_REGION")
+    lambda_args=("$ENVIRONMENT" "deploy" --s3_app_config_uri "$S3_APP_CONFIG_URI" --region "$AWS_REGION")
     
     if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
         lambda_args+=(--local_app_config_path "$LOCAL_APP_CONFIG_PATH")
