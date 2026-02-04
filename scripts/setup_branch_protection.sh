@@ -175,15 +175,15 @@ setup_branch_protection() {
     # Requires 1 approval (2 recommended for standard releases); use --solo for 0 approvals
     
     # Construct JSON payload for branch protection
-    # Required context must match the status check name reported by GitHub Actions.
-    # When using a reusable workflow (pull_request.yml -> test.yml), the reported
-    # check includes the event type suffix, e.g. "(pull_request)". If you add
-    # more matrix entries in test.yml (e.g. Python 3.12), add those contexts here.
+    # The "Run Tests" context is manually reported by the report-test-status job
+    # in pull_request.yml. This is a workaround for reusable workflows not properly
+    # reporting status checks for branch protection.
+    # See: https://github.com/orgs/community/discussions/8512
     local protection_json=$(cat <<EOF
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Pull Request Workflow / Run Tests / test (3.11) (pull_request)"]
+    "contexts": ["Run Tests"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
@@ -217,7 +217,7 @@ EOF
     fi
     print_info "   - Prevents direct pushes to main"
     print_info "   - Requires branches to be up to date"
-    print_info "   - Requires 'Pull Request Workflow / Run Tests / test (3.11) (pull_request)' status check to pass"
+    print_info "   - Requires 'Run Tests' status check to pass"
     print_info "   - Requires conversation resolution"
 }
 
