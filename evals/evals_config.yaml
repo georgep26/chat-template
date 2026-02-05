@@ -5,7 +5,7 @@ run: # Configuration for a particular evaluation run
 
 rag_app:
   # local_entrypoint: "src.rag_lambda.main:main"
-  lambda_function_name: "chat-template-dev-rag-chat" # uncomment this if you want to run the evaluation on a lambda function
+  lambda_function_name: "chat-template-staging-rag-chat" # uncomment this if you want to run the evaluation on a lambda function
 
 
 data:
