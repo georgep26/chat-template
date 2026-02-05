@@ -18,6 +18,10 @@
 #   ./scripts/deploy/deploy_all.sh dev --s3-app-config-uri s3://my-bucket/config/app_config.yml \
 #     --local-app-config-path config/app_config.yml
 #
+#   # Restrict DB access to a specific IP (otherwise your current public IP is auto-detected)
+#   ./scripts/deploy/deploy_all.sh dev --s3-app-config-uri s3://my-bucket/config/app_config.yml \
+#     --public-ip 1.2.3.4/32
+#
 # Note: This script deploys components in the following order:
 #       1. Network (VPC, subnets, security groups) - optional, but included
 #       2. S3 Bucket (for knowledge base documents)
@@ -88,6 +92,9 @@ show_usage() {
     echo "  --vpc-id <vpc-id>               - VPC ID (required for DB and Lambda when using --skip-network)"
     echo "  --subnet-ids <id1,id2,...>      - Subnet IDs (required for DB when using --skip-network)"
     echo "  --security-group-ids <id1,...>  - Security group IDs (for Lambda when using --skip-network)"
+    echo "  --public-ip <ip>                - Public IP allowed to access the DB (CIDR, e.g. 1.2.3.4/32). Auto-detected if omitted."
+    echo "  --public-ip2 <ip>               - Second public IP allowed DB access (optional)."
+    echo "  --public-ip3 <ip>               - Third public IP allowed DB access (optional)."
     echo ""
     echo "Note: If you use --skip-network, the Database step cannot auto-detect VPC/subnets (no VPC stack)."
     echo "      You must pass --vpc-id and --subnet-ids so the DB can be created in your existing VPC."
@@ -97,6 +104,7 @@ show_usage() {
     echo "  $0 staging --s3-app-config-uri s3://my-bucket/config/app_config.yml --region us-west-2"
     echo "  $0 prod --s3-app-config-uri s3://my-bucket/config/app_config.yml --master-password MyPass123"
     echo "  $0 staging --s3-app-config-uri s3://bucket/config.yml --skip-network --vpc-id vpc-xxx --subnet-ids subnet-a,subnet-b"
+    echo "  $0 dev --s3-app-config-uri s3://bucket/config.yml --public-ip 1.2.3.4/32   # Restrict DB access to this IP"
     echo ""
     echo "Note: The script will deploy all components in order. If a component already exists,"
     echo "      it will be updated (or show 'no updates needed' if already up to date)."
@@ -124,6 +132,9 @@ SKIP_COST_TAGS=false
 VPC_ID=""
 SUBNET_IDS=""
 SECURITY_GROUP_IDS=""
+PUBLIC_IP=""
+PUBLIC_IP2=""
+PUBLIC_IP3=""
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -189,6 +200,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --security-group-ids)
             SECURITY_GROUP_IDS="$2"
+            shift 2
+            ;;
+        --public-ip)
+            PUBLIC_IP="$2"
+            shift 2
+            ;;
+        --public-ip2)
+            PUBLIC_IP2="$2"
+            shift 2
+            ;;
+        --public-ip3)
+            PUBLIC_IP3="$2"
             shift 2
             ;;
         *)
@@ -312,7 +335,16 @@ if [ "$SKIP_DB" = false ]; then
     if [ -n "$MASTER_USERNAME" ]; then
         db_args+=(--master-username "$MASTER_USERNAME")
     fi
-    
+    if [ -n "$PUBLIC_IP" ]; then
+        db_args+=(--public-ip "$PUBLIC_IP")
+    fi
+    if [ -n "$PUBLIC_IP2" ]; then
+        db_args+=(--public-ip2 "$PUBLIC_IP2")
+    fi
+    if [ -n "$PUBLIC_IP3" ]; then
+        db_args+=(--public-ip3 "$PUBLIC_IP3")
+    fi
+
     if run_deployment_script "deploy_chat_template_db.sh" "${db_args[@]}"; then
         print_status "Database deployment completed"
     else
