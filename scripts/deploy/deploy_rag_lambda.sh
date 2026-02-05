@@ -7,22 +7,22 @@
 #   # Deploy to development environment (default region: us-east-1)
 #   # (Requires an S3-hosted app config)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml
 #
 #   # Deploy to staging with custom memory and timeout
 #   ./scripts/deploy/deploy_rag_lambda.sh staging deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --s3_app_config_uri s3://my-bucket/config/staging/app_config.yaml \
 #     --memory-size 2048 --timeout 600
 #
 #   # Deploy to production with custom ECR repository
 #   ./scripts/deploy/deploy_rag_lambda.sh prod deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --s3_app_config_uri s3://my-bucket/config/prod/app_config.yaml \
 #     --ecr-repo my-rag-lambda
 #
-#   # Optional: overwrite the S3 config with a local file (useful for CI/CD or local dev)
+#   # Optional: overwrite the S3 config with a local file (default: config/<env>/app_config.yaml)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
-#     --local_app_config_path config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml \
+#     --local_app_config_path config/dev/app_config.yaml
 #
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_rag_lambda.sh dev validate
@@ -32,7 +32,7 @@
 #
 #   # Update existing stack (rebuilds and pushes image)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev update \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml
 #
 #   # Delete stack (with confirmation prompt)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev delete
@@ -102,21 +102,22 @@ show_usage() {
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected from DB stack if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected from KB stack if not provided)"
     echo "  --lambda-role-arn <arn>            - Lambda execution role ARN (auto-detected from role stack if not provided)"
-    echo "  --s3_app_config_uri <uri>          - S3 URI for app config file (e.g., s3://bucket/key) (required for deploy/update)"
-    echo "  --local_app_config_path <path>     - Local app config file to upload to --s3_app_config_uri (optional)"
+    echo "  --s3_app_config_uri <uri>          - S3 URI for app config (e.g., s3://bucket/config/<env>/app_config.yaml) (required for deploy/update)"
+    echo "  --local_app_config_path <path>     - Local app config to upload (default: config/<environment>/app_config.yaml if present)"
     echo "  --app-config-s3-uri <uri>          - (deprecated) Alias for --s3_app_config_uri"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
     echo "Examples:"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml  # Default: no VPC"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # With VPC"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --local_app_config_path config/app_config.yml  # Upload local config to S3"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml  # Default: no VPC; uploads config/dev/app_config.yaml if present"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # With VPC"
+    echo "  $0 staging deploy --s3_app_config_uri s3://my-bucket/config/staging/app_config.yaml  # Uses config/staging/app_config.yaml by default when uploading"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
     echo ""
     echo "Note: Default is to deploy Lambda without VPC. Use --vpc-id, --subnet-ids, and --security-group-ids to deploy in a VPC."
+    echo "      App config paths follow config/<environment>/app_config.yaml (e.g. config/dev/app_config.yaml)."
     echo "      The script will automatically detect DB and KB stack outputs if available."
     echo "      The Lambda execution role will be automatically deployed if it doesn't exist."
 }
@@ -458,6 +459,44 @@ get_lambda_role_arn() {
     echo "$role_arn"
 }
 
+# ECR lifecycle policy: keep only the 5 most recent images; expire oldest when count exceeds 5
+ECR_LIFECYCLE_POLICY_KEEP_IMAGES=5
+
+# Function to apply ECR lifecycle policy (keep last N images, expire older)
+apply_ecr_lifecycle_policy() {
+    local repo_name=$1
+    local keep_count=${2:-$ECR_LIFECYCLE_POLICY_KEEP_IMAGES}
+    local policy_file
+    policy_file=$(mktemp)
+    trap "rm -f $policy_file" RETURN
+    cat > "$policy_file" << EOF
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep only ${keep_count} most recent images",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": ${keep_count}
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
+EOF
+    if aws ecr put-lifecycle-policy \
+        --repository-name "$repo_name" \
+        --lifecycle-policy-text "file://$policy_file" \
+        --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_status "ECR lifecycle policy applied: keep ${keep_count} most recent images" >&2
+    else
+        print_warning "Failed to apply ECR lifecycle policy (repo may still work)" >&2
+    fi
+}
+
 # Function to create ECR repository if it doesn't exist
 ensure_ecr_repo() {
     local repo_name=$1
@@ -474,6 +513,9 @@ ensure_ecr_repo() {
             --encryption-configuration encryptionType=AES256 >/dev/null 2>&1
         print_status "ECR repository created successfully" >&2
     fi
+
+    # Apply lifecycle policy: keep last 5 images, expire oldest when limit exceeded
+    apply_ecr_lifecycle_policy "$repo_name" "$ECR_LIFECYCLE_POLICY_KEEP_IMAGES"
 }
 
 # Function to build and push Docker image
@@ -636,8 +678,14 @@ deploy_stack() {
         image_uri=$(build_and_push_image)
     fi
 
-    # If a local app config path is provided, upload it to the required S3 URI.
-    # This allows CI/CD or local deploys to keep the "real" config out of GitHub.
+    # Default local app config path to config/<environment>/app_config.yaml when not provided (matches config/ folder structure).
+    local default_local_config="config/${ENVIRONMENT}/app_config.yaml"
+    if [ -z "$LOCAL_APP_CONFIG_PATH" ] && [ -f "$default_local_config" ]; then
+        LOCAL_APP_CONFIG_PATH="$default_local_config"
+        print_status "Using default local app config: $LOCAL_APP_CONFIG_PATH"
+    fi
+
+    # If a local app config path is set, upload it to the required S3 URI.
     if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
         if [ ! -f "$LOCAL_APP_CONFIG_PATH" ]; then
             print_error "Local app config file not found: $LOCAL_APP_CONFIG_PATH"
