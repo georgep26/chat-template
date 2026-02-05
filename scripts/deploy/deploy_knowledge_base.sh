@@ -28,9 +28,9 @@
 #
 # Note: This script requires:
 #       1. The database stack to be deployed first (via deploy_chat_template_db.sh)
-#       2. The database table to be created (run sql/embeddings_table_setup.sql)
-#       3. An S3 bucket with documents for the knowledge base (deploy via deploy_s3_bucket.sh)
-#       It will automatically retrieve DB stack outputs and S3 bucket name (if S3 stack exists)
+#       2. An S3 bucket with documents for the knowledge base (deploy via deploy_s3_bucket.sh)
+#       It runs sql/embeddings_table_setup.sql via RDS Data API before deploying the KB stack.
+#       It will automatically retrieve DB stack outputs and S3 bucket name (if S3 stack exists).
 
 set -e
 
@@ -90,7 +90,8 @@ show_usage() {
     echo "  $0 prod status"
     echo ""
     echo "Note: The database stack must be deployed before deploying the knowledge base."
-    echo "      The script will automatically retrieve DB stack outputs."
+    echo "      The script runs sql/embeddings_table_setup.sql via RDS Data API before deploying."
+    echo "      The caller needs rds-data:ExecuteStatement and rds:DescribeDBClusters IAM permissions."
 }
 
 # Check if environment is provided
@@ -275,6 +276,59 @@ get_s3_bucket_name() {
     echo "$bucket_name"
 }
 
+# Function to run embeddings table setup SQL via RDS Data API
+# Requires: db_cluster_id, db_name, secret_arn (from get_db_stack_outputs)
+# The caller (user or CI) must have rds-data:ExecuteStatement and rds:DescribeDBClusters IAM permissions.
+run_embeddings_sql_via_data_api() {
+    local db_cluster_id="$1"
+    local db_name="$2"
+    local secret_arn="$3"
+    local sql_file="$PROJECT_ROOT/sql/embeddings_table_setup.sql"
+
+    if [ ! -f "$sql_file" ]; then
+        print_error "SQL file not found: $sql_file"
+        return 1
+    fi
+
+    print_status "Resolving cluster ARN for RDS Data API..."
+    local db_cluster_arn
+    db_cluster_arn=$(aws rds describe-db-clusters \
+        --db-cluster-identifier "$db_cluster_id" \
+        --region "$AWS_REGION" \
+        --query 'DBClusters[0].DBClusterArn' \
+        --output text 2>/dev/null)
+
+    if [ -z "$db_cluster_arn" ] || [ "$db_cluster_arn" == "None" ]; then
+        print_error "Could not resolve cluster ARN for $db_cluster_id. Ensure the cluster has Data API enabled (EnableHttpEndpoint)."
+        return 1
+    fi
+
+    print_status "Running embeddings table setup via RDS Data API (sql/embeddings_table_setup.sql)..."
+    # Strip full-line comments and empty lines, strip inline -- comments, normalize whitespace, split by ;
+    local content
+    content=$(grep -v '^[[:space:]]*--' "$sql_file" | grep -v '^[[:space:]]*$' | sed 's/--.*$//' | tr '\n' ' ' | sed 's/;[[:space:]]*/;/g')
+    local count=0
+
+    while IFS= read -r -d ';' statement; do
+        statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$statement" ] && continue
+        count=$((count + 1))
+        print_status "Executing statement $count..."
+        if ! aws rds-data execute-statement \
+            --resource-arn "$db_cluster_arn" \
+            --secret-arn "$secret_arn" \
+            --database "$db_name" \
+            --sql "$statement" \
+            --region "$AWS_REGION" >/dev/null 2>&1; then
+            print_error "Failed to execute statement $count"
+            return 1
+        fi
+    done < <(printf '%s;' "$content")
+
+    print_status "Embeddings table setup completed ($count statements)."
+    return 0
+}
+
 # Function to validate template
 validate_template() {
     print_status "Validating CloudFormation template..."
@@ -373,6 +427,12 @@ deploy_stack() {
     print_status "Using DB Cluster ID: $db_cluster_id"
     print_status "Using Database Name: $db_name"
     print_status "Using Secret ARN: $secret_arn"
+    
+    # Run embeddings table setup SQL via RDS Data API before deploying the KB stack
+    if ! run_embeddings_sql_via_data_api "$db_cluster_id" "$db_name" "$secret_arn"; then
+        print_error "Embeddings table setup failed. Fix the error above and retry."
+        exit 1
+    fi
     
     # Get S3 bucket name - try auto-detection first, then use default pattern
     if [ -z "$S3_BUCKET_NAME" ]; then
