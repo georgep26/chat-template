@@ -19,10 +19,6 @@
 #     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
 #     --ecr-repo my-rag-lambda
 #
-#   # Deploy without VPC (omit VPC parameters for aurora_data_api backend)
-#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
-#
 #   # Optional: overwrite the S3 config with a local file (useful for CI/CD or local dev)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
 #     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
@@ -45,8 +41,9 @@
 #       1. Docker to be installed and running
 #       2. AWS CLI configured with appropriate credentials
 #       3. The database stack to be deployed (for DB secret ARN)
-#       4. VPC, subnets, and security groups to be available (optional, only for postgres backend)
 #
+#       By default Lambda is deployed without VPC. Use --vpc-id, --subnet-ids, and
+#       --security-group-ids to deploy inside a VPC (e.g. for postgres backend).
 #       The Lambda execution role will be automatically deployed if it doesn't exist.
 
 set -e
@@ -99,9 +96,9 @@ show_usage() {
     echo "  --image-tag <tag>                 - Docker image tag (default: latest)"
     echo "  --memory-size <mb>                - Lambda memory size in MB (default: 1024)"
     echo "  --timeout <seconds>               - Lambda timeout in seconds (default: 300)"
-    echo "  --vpc-id <vpc-id>                 - VPC ID (auto-detected from VPC stack if not provided)"
-    echo "  --subnet-ids <id1,id2,...>        - Subnet IDs (auto-detected from VPC stack if not provided)"
-    echo "  --security-group-ids <id1,id2,...> - Security group IDs (auto-detected if not provided)"
+    echo "  --vpc-id <vpc-id>                 - VPC ID (optional; default: no VPC)"
+    echo "  --subnet-ids <id1,id2,...>        - Subnet IDs (optional; auto-detected from VPC stack when --vpc-id used)"
+    echo "  --security-group-ids <id1,id2,...> - Security group IDs (optional; auto-detected from DB stack when VPC used)"
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected from DB stack if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected from KB stack if not provided)"
     echo "  --lambda-role-arn <arn>            - Lambda execution role ARN (auto-detected from role stack if not provided)"
@@ -111,18 +108,16 @@ show_usage() {
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
-    echo "Note: If VPC ID is not provided, Lambda will be deployed without VPC (suitable for aurora_data_api backend)"
-    echo ""
     echo "Examples:"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml  # Deploy without VPC (aurora_data_api backend)"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (postgres backend)"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml  # Default: no VPC"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # With VPC"
     echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --local_app_config_path config/app_config.yml  # Upload local config to S3"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
     echo ""
-    echo "Note: The script will automatically detect VPC, DB, and KB stack outputs if available."
-    echo "      If VPC parameters are not provided, Lambda will be deployed without VPC."
+    echo "Note: Default is to deploy Lambda without VPC. Use --vpc-id, --subnet-ids, and --security-group-ids to deploy in a VPC."
+    echo "      The script will automatically detect DB and KB stack outputs if available."
     echo "      The Lambda execution role will be automatically deployed if it doesn't exist."
 }
 
@@ -657,56 +652,45 @@ deploy_stack() {
         print_status "Uploaded app config to S3 successfully"
     fi
     
-    # Handle VPC configuration (optional - only needed for postgres backend)
-    # Auto-detect parameters if not provided
-    if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
-        print_status "Auto-detecting VPC and subnet IDs..."
-        local vpc_outputs=$(get_vpc_stack_outputs)
-        if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
-            VPC_ID=$(echo "$vpc_outputs" | cut -d'|' -f1)
-            SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
-            print_status "Auto-detected VPC ID: $VPC_ID"
-            print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
-        fi
-    fi
-    
+    # VPC configuration: default is no VPC; only use VPC when user provides --vpc-id
     if [ -z "$VPC_ID" ]; then
-        print_status "VPC ID not provided. Deploying Lambda without VPC (suitable for aurora_data_api backend)."
-        print_status "To deploy with VPC (for postgres backend), provide --vpc-id, --subnet-ids, and --security-group-ids."
+        print_status "No VPC specified. Deploying Lambda without VPC (default)."
         VPC_ID=""
         SUBNET_IDS=""
         SECURITY_GROUP_IDS=""
-    elif [ -z "$SUBNET_IDS" ]; then
-        print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
-        exit 1
     else
-    # Convert subnet IDs to CloudFormation list format
-    local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
-        # Try to get security group from RDS stack
-        print_status "Auto-detecting security group IDs..."
-        if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            local sg_id=$(aws cloudformation describe-stacks \
-                --stack-name "$DB_STACK_NAME" \
-                --region "$AWS_REGION" \
-                    --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
-                --output text 2>/dev/null)
-            if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
-                SECURITY_GROUP_IDS="$sg_id"
-                print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+        # User provided VPC; ensure we have subnets and security groups (auto-detect if missing)
+        if [ -z "$SUBNET_IDS" ]; then
+            print_status "Auto-detecting subnet IDs from VPC stack..."
+            local vpc_outputs=$(get_vpc_stack_outputs)
+            if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
+                SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
+                print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
             fi
         fi
-    fi
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
+        if [ -z "$SUBNET_IDS" ]; then
+            print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
+            exit 1
+        fi
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
+            print_status "Auto-detecting security group IDs from DB stack..."
+            if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+                local sg_id=$(aws cloudformation describe-stacks \
+                    --stack-name "$DB_STACK_NAME" \
+                    --region "$AWS_REGION" \
+                    --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
+                    --output text 2>/dev/null)
+                if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
+                    SECURITY_GROUP_IDS="$sg_id"
+                    print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+                fi
+            fi
+        fi
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
             print_error "Security Group IDs are required when VPC is configured. Provide --security-group-ids or ensure DB stack has security group output."
-        exit 1
-    fi
-    
-    # Convert security group IDs to CloudFormation list format
-    local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
-        print_status "Deploying Lambda with VPC configuration (for postgres backend)."
+            exit 1
+        fi
+        print_status "Deploying Lambda with VPC (subnets and security groups)."
     fi
     
     if [ -z "$DB_SECRET_ARN" ]; then
