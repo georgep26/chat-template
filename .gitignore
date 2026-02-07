@@ -225,6 +225,8 @@ secrets.yaml
 
 # pytest
 .pytest_cache/
+junit/
+test-report.html
 
 # Coverage reports
 htmlcov/
@@ -270,7 +272,7 @@ docs/working_notes.md
 docs/working_notes.rtf
 
 # Local configuration
-config/app_config.yaml
+app_config.yaml
 
 # Environment files
 *.env

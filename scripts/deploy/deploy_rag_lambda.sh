@@ -7,26 +7,22 @@
 #   # Deploy to development environment (default region: us-east-1)
 #   # (Requires an S3-hosted app config)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml
 #
 #   # Deploy to staging with custom memory and timeout
 #   ./scripts/deploy/deploy_rag_lambda.sh staging deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --s3_app_config_uri s3://my-bucket/config/staging/app_config.yaml \
 #     --memory-size 2048 --timeout 600
 #
 #   # Deploy to production with custom ECR repository
 #   ./scripts/deploy/deploy_rag_lambda.sh prod deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
+#     --s3_app_config_uri s3://my-bucket/config/prod/app_config.yaml \
 #     --ecr-repo my-rag-lambda
 #
-#   # Deploy without VPC (omit VPC parameters for aurora_data_api backend)
+#   # Optional: overwrite the S3 config with a local file (default: config/<env>/app_config.yaml)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
-#
-#   # Optional: overwrite the S3 config with a local file (useful for CI/CD or local dev)
-#   ./scripts/deploy/deploy_rag_lambda.sh dev deploy \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml \
-#     --local_app_config_path config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml \
+#     --local_app_config_path config/dev/app_config.yaml
 #
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_rag_lambda.sh dev validate
@@ -36,7 +32,7 @@
 #
 #   # Update existing stack (rebuilds and pushes image)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev update \
-#     --s3_app_config_uri s3://my-bucket/config/app_config.yml
+#     --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml
 #
 #   # Delete stack (with confirmation prompt)
 #   ./scripts/deploy/deploy_rag_lambda.sh dev delete
@@ -45,8 +41,9 @@
 #       1. Docker to be installed and running
 #       2. AWS CLI configured with appropriate credentials
 #       3. The database stack to be deployed (for DB secret ARN)
-#       4. VPC, subnets, and security groups to be available (optional, only for postgres backend)
 #
+#       By default Lambda is deployed without VPC. Use --vpc-id, --subnet-ids, and
+#       --security-group-ids to deploy inside a VPC (e.g. for postgres backend).
 #       The Lambda execution role will be automatically deployed if it doesn't exist.
 
 set -e
@@ -99,30 +96,29 @@ show_usage() {
     echo "  --image-tag <tag>                 - Docker image tag (default: latest)"
     echo "  --memory-size <mb>                - Lambda memory size in MB (default: 1024)"
     echo "  --timeout <seconds>               - Lambda timeout in seconds (default: 300)"
-    echo "  --vpc-id <vpc-id>                 - VPC ID (auto-detected from VPC stack if not provided)"
-    echo "  --subnet-ids <id1,id2,...>        - Subnet IDs (auto-detected from VPC stack if not provided)"
-    echo "  --security-group-ids <id1,id2,...> - Security group IDs (auto-detected if not provided)"
+    echo "  --vpc-id <vpc-id>                 - VPC ID (optional; default: no VPC)"
+    echo "  --subnet-ids <id1,id2,...>        - Subnet IDs (optional; auto-detected from VPC stack when --vpc-id used)"
+    echo "  --security-group-ids <id1,id2,...> - Security group IDs (optional; auto-detected from DB stack when VPC used)"
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected from DB stack if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected from KB stack if not provided)"
     echo "  --lambda-role-arn <arn>            - Lambda execution role ARN (auto-detected from role stack if not provided)"
-    echo "  --s3_app_config_uri <uri>          - S3 URI for app config file (e.g., s3://bucket/key) (required for deploy/update)"
-    echo "  --local_app_config_path <path>     - Local app config file to upload to --s3_app_config_uri (optional)"
+    echo "  --s3_app_config_uri <uri>          - S3 URI for app config (e.g., s3://bucket/config/<env>/app_config.yaml) (required for deploy/update)"
+    echo "  --local_app_config_path <path>     - Local app config to upload (default: config/<environment>/app_config.yaml if present)"
     echo "  --app-config-s3-uri <uri>          - (deprecated) Alias for --s3_app_config_uri"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
     echo ""
-    echo "Note: If VPC ID is not provided, Lambda will be deployed without VPC (suitable for aurora_data_api backend)"
-    echo ""
     echo "Examples:"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml  # Deploy without VPC (aurora_data_api backend)"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # Deploy with VPC (postgres backend)"
-    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/app_config.yml --local_app_config_path config/app_config.yml  # Upload local config to S3"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml  # Default: no VPC; uploads config/dev/app_config.yaml if present"
+    echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml --vpc-id vpc-123 --subnet-ids subnet-1,subnet-2 --security-group-ids sg-123  # With VPC"
+    echo "  $0 staging deploy --s3_app_config_uri s3://my-bucket/config/staging/app_config.yaml  # Uses config/staging/app_config.yaml by default when uploading"
     echo "  $0 staging deploy --memory-size 2048 --timeout 600"
     echo "  $0 prod deploy --ecr-repo my-rag-lambda --image-tag v1.0.0"
     echo "  $0 dev build --image-tag test"
     echo ""
-    echo "Note: The script will automatically detect VPC, DB, and KB stack outputs if available."
-    echo "      If VPC parameters are not provided, Lambda will be deployed without VPC."
+    echo "Note: Default is to deploy Lambda without VPC. Use --vpc-id, --subnet-ids, and --security-group-ids to deploy in a VPC."
+    echo "      App config paths follow config/<environment>/app_config.yaml (e.g. config/dev/app_config.yaml)."
+    echo "      The script will automatically detect DB and KB stack outputs if available."
     echo "      The Lambda execution role will be automatically deployed if it doesn't exist."
 }
 
@@ -136,7 +132,7 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-rag-lambda-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/lambda_template.yaml"
+TEMPLATE_FILE="infra/resources/lambda_template.yaml"
 ROLE_STACK_NAME="chat-template-lambda-execution-role-${ENVIRONMENT}"
 ROLE_TEMPLATE_FILE="infra/roles/lambda_execution_role.yaml"
 DB_STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
@@ -321,18 +317,20 @@ get_db_stack_outputs() {
             --region "$AWS_REGION" \
             --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
             --output text 2>/dev/null)
-    else
-        # Try to get secret ARN directly from Secrets Manager
-        local secret_name1="${PROJECT_NAME}-chat-template-db-connection-${ENVIRONMENT}"
-        local secret_name2="python-template-chat-template-db-connection-${ENVIRONMENT}"
-        
-        if aws secretsmanager describe-secret --secret-id "$secret_name1" --region "$AWS_REGION" >/dev/null 2>&1; then
-            secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name1" --region "$AWS_REGION" \
-                --query 'ARN' --output text 2>/dev/null)
-        elif aws secretsmanager describe-secret --secret-id "$secret_name2" --region "$AWS_REGION" >/dev/null 2>&1; then
-            secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name2" --region "$AWS_REGION" \
-                --query 'ARN' --output text 2>/dev/null)
-        fi
+    fi
+
+    if [ -z "$secret_arn" ] || [ "$secret_arn" == "None" ]; then
+        local secret_name1="${PROJECT_NAME}-db-connection-${ENVIRONMENT}"
+        local secret_name2="${PROJECT_NAME}-chat-template-db-connection-${ENVIRONMENT}"
+        local secret_name3="python-template-db-connection-${ENVIRONMENT}"
+        local secret_name4="python-template-chat-template-db-connection-${ENVIRONMENT}"
+        for name in "$secret_name1" "$secret_name2" "$secret_name3" "$secret_name4"; do
+            if aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" >/dev/null 2>&1; then
+                secret_arn=$(aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" \
+                    --query 'ARN' --output text 2>/dev/null)
+                break
+            fi
+        done
     fi
     
     if [ -z "$secret_arn" ] || [ "$secret_arn" == "None" ]; then
@@ -461,6 +459,44 @@ get_lambda_role_arn() {
     echo "$role_arn"
 }
 
+# ECR lifecycle policy: keep only the 5 most recent images; expire oldest when count exceeds 5
+ECR_LIFECYCLE_POLICY_KEEP_IMAGES=5
+
+# Function to apply ECR lifecycle policy (keep last N images, expire older)
+apply_ecr_lifecycle_policy() {
+    local repo_name=$1
+    local keep_count=${2:-$ECR_LIFECYCLE_POLICY_KEEP_IMAGES}
+    local policy_file
+    policy_file=$(mktemp)
+    trap "rm -f $policy_file" RETURN
+    cat > "$policy_file" << EOF
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep only ${keep_count} most recent images",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": ${keep_count}
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
+EOF
+    if aws ecr put-lifecycle-policy \
+        --repository-name "$repo_name" \
+        --lifecycle-policy-text "file://$policy_file" \
+        --region "$AWS_REGION" >/dev/null 2>&1; then
+        print_status "ECR lifecycle policy applied: keep ${keep_count} most recent images" >&2
+    else
+        print_warning "Failed to apply ECR lifecycle policy (repo may still work)" >&2
+    fi
+}
+
 # Function to create ECR repository if it doesn't exist
 ensure_ecr_repo() {
     local repo_name=$1
@@ -477,6 +513,9 @@ ensure_ecr_repo() {
             --encryption-configuration encryptionType=AES256 >/dev/null 2>&1
         print_status "ECR repository created successfully" >&2
     fi
+
+    # Apply lifecycle policy: keep last 5 images, expire oldest when limit exceeded
+    apply_ecr_lifecycle_policy "$repo_name" "$ECR_LIFECYCLE_POLICY_KEEP_IMAGES"
 }
 
 # Function to build and push Docker image
@@ -639,8 +678,14 @@ deploy_stack() {
         image_uri=$(build_and_push_image)
     fi
 
-    # If a local app config path is provided, upload it to the required S3 URI.
-    # This allows CI/CD or local deploys to keep the "real" config out of GitHub.
+    # Default local app config path to config/<environment>/app_config.yaml when not provided (matches config/ folder structure).
+    local default_local_config="config/${ENVIRONMENT}/app_config.yaml"
+    if [ -z "$LOCAL_APP_CONFIG_PATH" ] && [ -f "$default_local_config" ]; then
+        LOCAL_APP_CONFIG_PATH="$default_local_config"
+        print_status "Using default local app config: $LOCAL_APP_CONFIG_PATH"
+    fi
+
+    # If a local app config path is set, upload it to the required S3 URI.
     if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
         if [ ! -f "$LOCAL_APP_CONFIG_PATH" ]; then
             print_error "Local app config file not found: $LOCAL_APP_CONFIG_PATH"
@@ -655,56 +700,45 @@ deploy_stack() {
         print_status "Uploaded app config to S3 successfully"
     fi
     
-    # Handle VPC configuration (optional - only needed for postgres backend)
-    # Auto-detect parameters if not provided
-    if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
-        print_status "Auto-detecting VPC and subnet IDs..."
-        local vpc_outputs=$(get_vpc_stack_outputs)
-        if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
-            VPC_ID=$(echo "$vpc_outputs" | cut -d'|' -f1)
-            SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
-            print_status "Auto-detected VPC ID: $VPC_ID"
-            print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
-        fi
-    fi
-    
+    # VPC configuration: default is no VPC; only use VPC when user provides --vpc-id
     if [ -z "$VPC_ID" ]; then
-        print_status "VPC ID not provided. Deploying Lambda without VPC (suitable for aurora_data_api backend)."
-        print_status "To deploy with VPC (for postgres backend), provide --vpc-id, --subnet-ids, and --security-group-ids."
+        print_status "No VPC specified. Deploying Lambda without VPC (default)."
         VPC_ID=""
         SUBNET_IDS=""
         SECURITY_GROUP_IDS=""
-    elif [ -z "$SUBNET_IDS" ]; then
-        print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
-        exit 1
     else
-    # Convert subnet IDs to CloudFormation list format
-    local subnet_ids_list=$(echo "$SUBNET_IDS" | tr ',' ' ')
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
-        # Try to get security group from RDS stack
-        print_status "Auto-detecting security group IDs..."
-        if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            local sg_id=$(aws cloudformation describe-stacks \
-                --stack-name "$DB_STACK_NAME" \
-                --region "$AWS_REGION" \
-                    --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
-                --output text 2>/dev/null)
-            if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
-                SECURITY_GROUP_IDS="$sg_id"
-                print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+        # User provided VPC; ensure we have subnets and security groups (auto-detect if missing)
+        if [ -z "$SUBNET_IDS" ]; then
+            print_status "Auto-detecting subnet IDs from VPC stack..."
+            local vpc_outputs=$(get_vpc_stack_outputs)
+            if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
+                SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
+                print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
             fi
         fi
-    fi
-    
-    if [ -z "$SECURITY_GROUP_IDS" ]; then
+        if [ -z "$SUBNET_IDS" ]; then
+            print_error "Subnet IDs are required when VPC ID is provided. Provide --subnet-ids or deploy VPC stack first."
+            exit 1
+        fi
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
+            print_status "Auto-detecting security group IDs from DB stack..."
+            if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+                local sg_id=$(aws cloudformation describe-stacks \
+                    --stack-name "$DB_STACK_NAME" \
+                    --region "$AWS_REGION" \
+                    --query 'Stacks[0].Outputs[?OutputKey==`SecurityGroupId`].OutputValue' \
+                    --output text 2>/dev/null)
+                if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
+                    SECURITY_GROUP_IDS="$sg_id"
+                    print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+                fi
+            fi
+        fi
+        if [ -z "$SECURITY_GROUP_IDS" ]; then
             print_error "Security Group IDs are required when VPC is configured. Provide --security-group-ids or ensure DB stack has security group output."
-        exit 1
-    fi
-    
-    # Convert security group IDs to CloudFormation list format
-    local sg_ids_list=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
-        print_status "Deploying Lambda with VPC configuration (for postgres backend)."
+            exit 1
+        fi
+        print_status "Deploying Lambda with VPC (subnets and security groups)."
     fi
     
     if [ -z "$DB_SECRET_ARN" ]; then

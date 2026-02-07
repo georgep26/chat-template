@@ -116,8 +116,6 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
-        - Key: Purpose
-          Value: 'Lambda Execution'
 
 Outputs:
   RoleArn:

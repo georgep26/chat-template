@@ -101,7 +101,7 @@ show_usage() {
     echo "  After deploying the DB stack, the script will automatically check if a secret exists."
     echo "  If the secret doesn't exist, you will be prompted for DB username and password."
     echo "  The secret will be created in AWS Secrets Manager with the name:"
-    echo "  python-template-chat-template-db-connection-<environment>"
+    echo "  <ProjectName>-db-connection-<environment> (e.g. chat-template-db-connection-dev)"
 }
 
 # Check if environment is provided
@@ -114,9 +114,9 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/light_db_template.yaml"
+TEMPLATE_FILE="infra/resources/light_db_template.yaml"
 SECRET_STACK_NAME="chat-template-db-secret-${ENVIRONMENT}"
-SECRET_TEMPLATE_FILE="infra/cloudformation/db_secret_template.yaml"
+SECRET_TEMPLATE_FILE="infra/resources/db_secret_template.yaml"
 SECRET_NAME="db-connection"
 VPC_STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
 
@@ -485,7 +485,7 @@ show_status() {
 
 # Function to check if secret exists
 check_secret_exists() {
-    local secret_name="python-template-${SECRET_NAME}-${ENVIRONMENT}"
+    local secret_name="${PROJECT_NAME}-${SECRET_NAME}-${ENVIRONMENT}"
     aws secretsmanager describe-secret --secret-id "$secret_name" --region $AWS_REGION >/dev/null 2>&1
 }
 
@@ -585,8 +585,8 @@ deploy_secret() {
     local db_port=$(echo "$db_outputs" | cut -d'|' -f2)
     local db_name=$(echo "$db_outputs" | cut -d'|' -f3)
     
-    # Check if secret exists
-    local secret_full_name="python-template-${SECRET_NAME}-${ENVIRONMENT}"
+    # Check if secret exists (name matches template: ProjectName-SecretName-Environment)
+    local secret_full_name="${PROJECT_NAME}-${SECRET_NAME}-${ENVIRONMENT}"
     if check_secret_exists; then
         print_status "Secret $secret_full_name already exists. Skipping secret creation."
         print_status "To update the secret, delete it first or update it manually in AWS Secrets Manager."
@@ -651,13 +651,19 @@ deploy_secret() {
             --region $AWS_REGION
     fi
     
-    if [ $? -eq 0 ]; then
-        print_status "Secret stack operation initiated successfully"
-        print_status "Secret will be available at: $secret_full_name"
-    else
+    if [ $? -ne 0 ]; then
         print_error "Secret stack operation failed"
         return 1
     fi
+
+    print_status "Secret stack operation initiated successfully"
+    print_status "Waiting for secret stack to reach CREATE_COMPLETE or UPDATE_COMPLETE..."
+    if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null | grep -q "CREATE_IN_PROGRESS"; then
+        aws cloudformation wait stack-create-complete --stack-name $SECRET_STACK_NAME --region $AWS_REGION
+    elif aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null | grep -q "UPDATE_IN_PROGRESS"; then
+        aws cloudformation wait stack-update-complete --stack-name $SECRET_STACK_NAME --region $AWS_REGION
+    fi
+    print_status "Secret will be available at: $secret_full_name"
 }
 
 # Function to deploy stack

@@ -12,7 +12,7 @@ infra/
 │   ├── main.tf         # Main Terraform configuration
 │   ├── variables.tf    # Variable definitions
 │   └── outputs.tf      # Output definitions
-├── cloudformation/     # CloudFormation templates
+├── resources/     # CloudFormation templates
 │   ├── db_secret_template.yaml
 │   ├── knowledge_base_template.yaml
 │   ├── lambda_template.yaml
@@ -20,14 +20,14 @@ infra/
 │   ├── s3_bucket_template.yaml
 │   └── README.md       # CloudFormation documentation
 ├── policies/           # IAM managed policies
-│   ├── secrets_manager_policy.yaml
-│   ├── s3_policy.yaml
-│   ├── lambda_policy.yaml
-│   ├── bedrock_policy.yaml
+│   ├── evals_secrets_manager_policy.yaml
+│   ├── evals_s3_policy.yaml
+│   ├── evals_lambda_policy.yaml
+│   ├── evals_bedrock_policy.yaml
 │   └── README.md
 ├── roles/              # IAM roles
 │   ├── lambda_execution_role.yaml
-│   ├── github_actions_role.yaml
+│   ├── evals_github_action_role.yaml
 │   └── README.md
 └── README.md           # This file
 ```
@@ -172,7 +172,7 @@ All deployment scripts are centralized in the `scripts/deploy/` directory:
 - `deploy_s3_bucket.sh` - S3 bucket deployment
 - `deploy_knowledge_base.sh` - Knowledge base deployment
 - `deploy_rag_lambda.sh` - Lambda function deployment
-- `deploy_github_action_role.sh` - GitHub Actions IAM role deployment
+- `deploy_evals_github_action_role.sh` - GitHub Actions IAM role deployment for evaluations
 - `README.md` - Detailed usage instructions
 
 Each script provides a consistent interface for deploying specific infrastructure components.
@@ -204,16 +204,16 @@ To use OIDC authentication with GitHub Actions:
 1. **Deploy the policies** (in order):
    ```bash
    # Deploy each policy stack
-   aws cloudformation create-stack --stack-name chat-template-dev-secrets-manager-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-s3-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-bedrock-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-lambda-policy ...  # Optional
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-secrets-manager-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-s3-evaluation-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-bedrock-evaluation-policy ...
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-lambda-invoke-policy ...  # Optional
    ```
 
 2. **Deploy the GitHub Actions role**:
    ```bash
-   aws cloudformation create-stack --stack-name chat-template-dev-github-actions-role \
-     --template-body file://infra/roles/github_actions_role.yaml \
+   aws cloudformation create-stack --stack-name chat-template-dev-evals-github-actions-role \
+     --template-body file://infra/roles/evals_github_action_role.yaml \
      --parameters ... \
      --capabilities CAPABILITY_NAMED_IAM
    ```

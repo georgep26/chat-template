@@ -99,7 +99,7 @@ fi
 ENVIRONMENT=$1
 ACTION=${2:-deploy}
 STACK_NAME="chat-template-s3-bucket-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/cloudformation/s3_bucket_template.yaml"
+TEMPLATE_FILE="infra/resources/s3_bucket_template.yaml"
 PROJECT_NAME="chat-template"
 AWS_REGION="us-east-1"  # Default AWS region
 BUCKET_NAME="chat-template-s3-bucket-${ENVIRONMENT}"

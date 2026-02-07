@@ -67,6 +67,52 @@ To use the conda environment in your IDE, you'll need to configure it to use the
 
 **Note**: For other IDEs (PyCharm, IntelliJ, etc.), the setup process may differ. Please refer to your IDE's documentation for configuring Python interpreters with conda environments.
 
+## Branch Protection Setup
+
+**Important**: If you are copying or forking this repository, you need to set up branch protection rules to enforce the development workflow. Pull requests to the `main` branch should come from the `development` branch for standard feature releases. However, pull requests from hotfix branches are also allowed when an immediate change needs to be made to production.
+
+### Quick Setup
+
+The easiest way to set up branch protection is using the Makefile:
+
+```bash
+make branch-protection
+```
+
+Alternatively, you can run the setup script directly:
+
+```bash
+bash scripts/setup_branch_protection.sh
+```
+
+### What It Does
+
+The branch protection setup script will:
+
+1. **Configure branch protection rules** for the `main` branch:
+   - Requires pull requests before merging
+   - Requires 1 approval (2 reviewers recommended for standard releases)
+   - Prevents direct pushes to main
+   - Requires branches to be up to date before merging
+   - Requires conversation resolution
+
+**Note**: The standard process is to submit PRs from the `development` branch, but hotfix branches are allowed for immediate production fixes. See `docs/development_process.md` for details on the hotfix process.
+
+### Prerequisites
+
+- GitHub CLI (`gh`) must be installed and authenticated
+  - Install: `brew install gh` (macOS), `apt install gh` (Linux), or `choco install gh` (Windows with [Chocolatey](https://chocolatey.org/install))
+  - Authenticate: `gh auth login`
+- Repository must be initialized with a git remote pointing to GitHub
+
+### Manual Setup
+
+If you prefer to set up branch protection manually:
+
+1. Go to your repository on GitHub
+2. Navigate to **Settings** → **Branches**
+3. Add a branch protection rule for `main` with the settings mentioned above
+
 ## Configuration
 
 ### Application Configuration
@@ -113,6 +159,68 @@ rag_chat:
 - For `aurora_data_api` backend: Configure `db_cluster_arn`, `db_credentials_secret_arn`, and `database_name` in `app_config.yml`. This backend does not require VPC configuration.
 - The application will automatically create the required tables on first run.
 
+## AWS Roles
+
+This project uses IAM roles to provide secure access to AWS resources. Each role is designed for a specific purpose and follows the principle of least privilege.
+
+### Evals GitHub Action Role
+
+The **Evals GitHub Action Role** enables GitHub Actions workflows to perform evaluations on AWS resources using OIDC (OpenID Connect) authentication. This role allows CI/CD pipelines to run evaluation tests without requiring long-lived AWS access keys.
+
+**Key Features:**
+- **OIDC Authentication**: Uses GitHub's OIDC provider for secure, temporary credential exchange
+- **Environment-Scoped Permissions**: The role is scoped to a specific environment (dev, staging, or prod)
+- **Automatic Policy Management**: Deploys required IAM policies (Secrets Manager, S3, Bedrock, and optionally Lambda) automatically
+
+**How It Works:**
+1. The role is deployed per environment using the deployment script
+2. GitHub Actions workflows authenticate using OIDC tokens
+3. AWS validates the token and grants temporary credentials
+4. The role's permissions are limited to resources in the specified environment
+
+**Important Security Note:**
+When you deploy this role to an environment, GitHub Actions will **only** have permissions to access resources in that specific environment. For example:
+- Deploying to `staging` allows access only to staging resources (staging Lambda functions, staging S3 buckets, etc.)
+- Deploying to `dev` allows access only to dev resources
+- Deploying to `prod` allows access only to production resources
+
+This ensures that evaluation workflows can only interact with the environment they are intended to test, providing better security and isolation.
+
+**Deployment:**
+```bash
+# Deploy to development environment
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+
+# Deploy to staging environment
+./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template
+
+# Deploy with Lambda policy (for lambda mode evaluations)
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org your-org \
+  --github-repo chat-template \
+  --include-lambda-policy
+```
+
+**After Deployment:**
+1. The script will output the role ARN
+2. Add this ARN to your GitHub repository secrets as `AWS_ROLE_ARN`
+3. The GitHub Actions workflow (`.github/workflows/run-evals.yml`) will automatically use this role for authentication
+
+**Permissions Included:**
+- Secrets Manager: Access to retrieve database credentials and other secrets
+- S3: Upload evaluation results to S3 buckets
+- Bedrock: Invoke Bedrock models for evaluation judge models
+- Lambda (optional): Invoke Lambda functions when running evaluations in lambda mode
+
+For more details, see the [evaluation framework documentation](evals/README.md).
+
 ## Directory Structure
 
 ```
@@ -138,7 +246,7 @@ chat-template/
 │   ├── template_outline.md
 │   └── working_notes.md
 ├── infra/               # Infrastructure as Code (IaC) definitions
-│   ├── cloudformation/  # AWS CloudFormation templates
+│   ├── resources/  # AWS CloudFormation templates
 │   │   ├── db_secret_template.yaml
 │   │   ├── knowledge_base_template.yaml
 │   │   ├── lambda_template.yaml
@@ -148,13 +256,13 @@ chat-template/
 │   │   ├── NETWORK_COST_ESTIMATE.md
 │   │   └── README.md
 │   ├── policies/        # IAM policy templates
-│   │   ├── bedrock_policy.yaml
-│   │   ├── lambda_policy.yaml
-│   │   ├── s3_policy.yaml
-│   │   ├── secrets_manager_policy.yaml
+│   │   ├── evals_bedrock_policy.yaml
+│   │   ├── evals_lambda_policy.yaml
+│   │   ├── evals_s3_policy.yaml
+│   │   ├── evals_secrets_manager_policy.yaml
 │   │   └── README.md
 │   ├── roles/           # IAM role templates
-│   │   ├── github_actions_role.yaml
+│   │   ├── evals_github_action_role.yaml
 │   │   ├── lambda_execution_role.yaml
 │   │   └── README.md
 │   └── README.md
@@ -163,7 +271,7 @@ chat-template/
 ├── scripts/             # Utility and deployment scripts
 │   ├── deploy/          # Deployment automation scripts
 │   │   ├── deploy_chat_template_db.sh
-│   │   ├── deploy_github_action_role.sh
+│   │   ├── deploy_evals_github_action_role.sh
 │   │   ├── deploy_knowledge_base.sh
 │   │   ├── deploy_network.sh
 │   │   ├── deploy_rag_lambda.sh
@@ -215,7 +323,7 @@ chat-template/
 - **docs/**: Documentation files for the project, including guides, API documentation, development processes, code standards, and project outlines.
 
 - **infra/**: Infrastructure as Code (IaC) definitions for deploying the application.
-  - `cloudformation/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
+  - `resources/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
   - `policies/`: IAM policy templates for various AWS services
   - `roles/`: IAM role templates for Lambda execution and GitHub Actions
 

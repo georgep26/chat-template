@@ -96,7 +96,7 @@ Lambda can access AWS services (Bedrock, Secrets Manager, S3) through:
 
 ## Cost Considerations
 
-See `infra/cloudformation/NETWORK_COST_ESTIMATE.md` for detailed cost breakdown.
+See `infra/resources/NETWORK_COST_ESTIMATE.md` for detailed cost breakdown.
 
 **Quick Summary**:
 - **With NAT Gateway**: ~$47/month + data transfer
@@ -211,5 +211,5 @@ To delete the network stack:
 - [AWS VPC Documentation](https://docs.aws.amazon.com/vpc/)
 - [VPC Endpoints Documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/)
 - [Security Groups Documentation](https://docs.aws.amazon.com/vpc/latest/userguide/security-groups.html)
-- Cost Estimate: `infra/cloudformation/NETWORK_COST_ESTIMATE.md`
+- Cost Estimate: `infra/resources/NETWORK_COST_ESTIMATE.md`
 

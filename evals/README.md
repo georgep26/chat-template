@@ -16,11 +16,7 @@ A comprehensive, config-driven evaluation framework for RAG (Retrieval-Augmented
 
 ### 1. Install Dependencies
 
-The evaluation framework dependencies are included in `evals/requirements.txt` and will be installed via `environment.yml`:
-
-```bash
-conda env update -f environment.yml
-```
+The evaluation framework dependencies are included in `evals/requirements.txt` and will be installed via `environment.yml`. See the [README](../README.md) for instructions on setting up the environment (make dev-env or bash scripts/setup_env.sh).
 
 ### 2. Create Configuration File
 
@@ -606,20 +602,20 @@ Deploy the IAM role and policies using the deployment script:
 
 ```bash
 # Deploy to development environment
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template
 
 # Deploy with Lambda policy (if running evaluations in lambda mode)
-./scripts/deploy/deploy_github_action_role.sh dev deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template \
   --include-lambda-policy
 
 # Deploy to other environments
-./scripts/deploy/deploy_github_action_role.sh staging deploy \
+./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
   --aws-account-id 123456789012 \
   --github-org your-org \
   --github-repo chat-template
@@ -651,7 +647,7 @@ After deployment, add the role ARN to your GitHub repository secrets:
 3. Click **New repository secret**
 4. Add a secret with:
    - **Name**: `AWS_ROLE_ARN`
-   - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-github-actions-role`)
+   - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-evals-github-actions-role`)
 
 The GitHub Actions workflow (`.github/workflows/run-evals.yml`) is already configured to use this secret for OIDC authentication.
 
@@ -675,7 +671,7 @@ The workflow automatically:
 Check the status of deployed stacks:
 
 ```bash
-./scripts/deploy/deploy_github_action_role.sh dev status
+./scripts/deploy/deploy_evals_github_action_role.sh dev status
 ```
 
 #### 5. Running Evaluations in CI/CD

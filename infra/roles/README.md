@@ -43,7 +43,7 @@ IAM role for RAG Lambda function execution with Bedrock, Secrets Manager, and VP
 **Usage:**
 Attach this role to Lambda functions that need to access Bedrock, Secrets Manager, and RDS.
 
-### GitHub Actions Role (`github_actions_role.yaml`)
+### GitHub Actions Role for Evaluations (`evals_github_action_role.yaml`)
 
 IAM role for GitHub Actions to run the evaluation pipeline using OIDC authentication.
 
@@ -66,17 +66,17 @@ IAM role for GitHub Actions to run the evaluation pipeline using OIDC authentica
 **Deployment Example:**
 ```bash
 aws cloudformation create-stack \
-  --stack-name chat-template-dev-github-actions-role \
-  --template-body file://infra/roles/github_actions_role.yaml \
+  --stack-name chat-template-dev-evals-github-actions-role \
+  --template-body file://infra/roles/evals_github_action_role.yaml \
   --parameters \
     ParameterKey=ProjectName,ParameterValue=chat-template \
     ParameterKey=Environment,ParameterValue=dev \
     ParameterKey=GitHubOrg,ParameterValue=your-org \
     ParameterKey=GitHubRepo,ParameterValue=chat-template \
     ParameterKey=GitHubBranch,ParameterValue=development \
-    ParameterKey=SecretsManagerPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-secrets-manager-policy \
-    ParameterKey=S3EvaluationPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-s3-evaluation-policy \
-    ParameterKey=BedrockEvaluationPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-bedrock-evaluation-policy \
+    ParameterKey=SecretsManagerPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-evals-secrets-manager-policy \
+    ParameterKey=S3EvaluationPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-evals-s3-evaluation-policy \
+    ParameterKey=BedrockEvaluationPolicyArn,ParameterValue=arn:aws:iam::ACCOUNT:policy/chat-template-dev-evals-bedrock-evaluation-policy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 

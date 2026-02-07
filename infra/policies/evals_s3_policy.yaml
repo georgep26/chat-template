@@ -20,14 +20,14 @@ Parameters:
   
   S3BucketPattern:
     Type: String
-    Default: '*eval*'
-    Description: 'Pattern for S3 bucket names (used if S3BucketName is empty)'
+    Default: '*-evals-dev'
+    Description: 'Pattern for S3 bucket names (used if S3BucketName is empty). Should be environment-scoped, e.g. <project>-evals-<env> or *-evals-<env>.'
 
 Resources:
   S3EvaluationPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-s3-evaluation-policy'
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-evals-s3-evaluation-policy'
       Description: 'Policy for uploading evaluation results to S3'
       PolicyDocument:
         Version: '2012-10-17'
