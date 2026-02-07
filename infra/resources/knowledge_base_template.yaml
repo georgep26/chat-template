@@ -163,6 +163,8 @@ Resources:
       KnowledgeBaseId: !Ref KnowledgeBase
       Name: !Sub '${ProjectName}-kb-datasource-${Environment}'
       Description: !Sub 'S3 data source for ${ProjectName} Knowledge Base in ${Environment}'
+      # RETAIN avoids "Unable to delete data from vector store" when deleting the stack; vector store is in Aurora and is removed when the DB stack is deleted.
+      DataDeletionPolicy: RETAIN
       DataSourceConfiguration:
         Type: S3
         S3Configuration:
