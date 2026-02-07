@@ -414,6 +414,58 @@ deploy_stack() {
     fi
 }
 
+# Empty a versioned bucket: delete all object versions and delete markers (required before CF can delete the bucket).
+empty_versioned_bucket() {
+    local bucket_name=$1
+    if [ -z "$bucket_name" ] || [ "$bucket_name" = "None" ]; then
+        return 0
+    fi
+    print_warning "Emptying bucket (all versions and delete markers): $bucket_name"
+    # Use Python to paginate list-object-versions and delete in batches of 1000 (no boto3 required).
+    BUCKET_FOR_EMPTY="$bucket_name" REGION_FOR_EMPTY="$AWS_REGION" python3 << 'PYTHON_SCRIPT'
+import subprocess
+import json
+import os
+
+bucket = os.environ["BUCKET_FOR_EMPTY"]
+region = os.environ["REGION_FOR_EMPTY"]
+next_key = None
+next_version = None
+total_deleted = 0
+
+while True:
+    cmd = ["aws", "s3api", "list-object-versions", "--bucket", bucket, "--region", region, "--output", "json"]
+    if next_key:
+        cmd += ["--key-marker", next_key]
+        if next_version:
+            cmd += ["--version-id-marker", next_version]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        print(out.stderr or "list-object-versions failed", file=__import__("sys").stderr)
+        raise SystemExit(1)
+    data = json.loads(out.stdout)
+    objects = [{"Key": v["Key"], "VersionId": v["VersionId"]} for v in data.get("Versions", [])]
+    objects += [{"Key": d["Key"], "VersionId": d["VersionId"]} for d in data.get("DeleteMarkers", [])]
+    if objects:
+        delete_payload = {"Objects": objects, "Quiet": True}
+        del_out = subprocess.run(
+            ["aws", "s3api", "delete-objects", "--bucket", bucket, "--region", region, "--delete", json.dumps(delete_payload)],
+            capture_output=True, text=True,
+        )
+        if del_out.returncode != 0:
+            print(del_out.stderr or "delete-objects failed", file=__import__("sys").stderr)
+            raise SystemExit(1)
+        total_deleted += len(objects)
+    if not data.get("IsTruncated", False):
+        break
+    next_key = data.get("NextKeyMarker", "")
+    next_version = data.get("NextVersionIdMarker") or ""
+
+if total_deleted:
+    print(f"Deleted {total_deleted} object version(s) and/or delete marker(s).")
+PYTHON_SCRIPT
+}
+
 # Function to delete stack
 delete_stack() {
     print_warning "Deleting CloudFormation stack: $STACK_NAME"
@@ -425,7 +477,7 @@ delete_stack() {
     read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # First, empty the bucket if it exists
+        # Get bucket name from stack outputs
         local bucket_name=$(aws cloudformation describe-stacks \
             --stack-name $STACK_NAME \
             --region $AWS_REGION \
@@ -433,7 +485,10 @@ delete_stack() {
             --output text 2>/dev/null)
         
         if [ -n "$bucket_name" ] && [ "$bucket_name" != "None" ]; then
-            print_warning "Emptying bucket: $bucket_name"
+            # Empty versioned bucket (all versions + delete markers) so CloudFormation can delete it
+            empty_versioned_bucket "$bucket_name" || true
+            # Also remove any current objects (non-versioned or current version only)
+            print_warning "Removing current objects: $bucket_name"
             aws s3 rm "s3://$bucket_name" --recursive --region $AWS_REGION 2>/dev/null || true
         fi
         
