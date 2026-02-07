@@ -49,6 +49,12 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              # CloudFormation: ValidateTemplate has no resource (validates template body); requires Resource: *
+              - Sid: CloudFormationValidateTemplate
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
               # CloudFormation: stacks scoped to project and environment (e.g. chat-template-vpc-dev)
               - Sid: CloudFormation
                 Effect: Allow
@@ -61,7 +67,6 @@ Resources:
                   - cloudformation:DescribeStackResource
                   - cloudformation:DescribeStackResources
                   - cloudformation:GetTemplate
-                  - cloudformation:ValidateTemplate
                   - cloudformation:ListStackResources
                 Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-*-${Environment}*'
               # IAM: roles and policies scoped to project and environment (e.g. chat-template-*-dev*)
