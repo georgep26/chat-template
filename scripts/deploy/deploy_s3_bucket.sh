@@ -179,10 +179,21 @@ fi
 # Function to validate template
 validate_template() {
     print_status "Validating CloudFormation template..."
-    if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
+    local template_path="${PROJECT_ROOT}/${TEMPLATE_FILE}"
+    if [ ! -f "$template_path" ]; then
+        print_error "Template file not found: $template_path"
+        exit 1
+    fi
+    local validate_out
+    local validate_rc=0
+    validate_out=$(aws cloudformation validate-template \
+        --template-body "file://${template_path}" \
+        --region "$AWS_REGION" 2>&1) || validate_rc=$?
+    if [ $validate_rc -eq 0 ]; then
         print_status "Template validation successful"
     else
         print_error "Template validation failed"
+        echo "$validate_out" | sed 's/^/  /'
         exit 1
     fi
 }
