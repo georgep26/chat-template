@@ -255,6 +255,47 @@ Deploy the complete RAG chat application infrastructure to a specific environmen
 
 **Note:** The script will deploy all components in order. If a component already exists, it will be updated (or show 'no updates needed' if already up to date). This is expected behavior for infrastructure that doesn't change frequently (like network and S3).
 
+### Destroy All Resources (`destroy_all.sh`)
+
+Delete all infrastructure for a given environment by calling the `delete` action on each deploy script in the correct dependency order (reverse of deploy).
+
+**Usage:**
+```bash
+./scripts/deploy/destroy_all.sh <environment> [options]
+```
+
+**Environments:** `dev`, `staging`, `prod`
+
+**Options:**
+- `--region <region>` - AWS region (default: `us-east-1`)
+- `--force`, `-y` - Auto-confirm each component (single prompt at start)
+- `--skip-lambda` - Do not destroy Lambda stack
+- `--skip-kb` - Do not destroy Knowledge Base stack
+- `--skip-db` - Do not destroy Database stack
+- `--skip-s3` - Do not destroy S3 bucket stack
+- `--skip-network` - Do not destroy Network stack
+
+**Destroy Order:** Lambda → Knowledge Base → Database → S3 Bucket → Network (dependencies removed first).
+
+**Examples:**
+```bash
+# Destroy development (prompts per component)
+./scripts/deploy/destroy_all.sh dev
+
+# Destroy staging with custom region
+./scripts/deploy/destroy_all.sh staging --region us-west-2
+
+# Destroy with single confirmation
+./scripts/deploy/destroy_all.sh dev --force
+
+# Destroy only app components, keep network
+./scripts/deploy/destroy_all.sh dev --skip-network
+```
+
+**Troubleshooting destroy:**
+- **S3 "bucket is not empty"**: The S3 script now empties versioned buckets (all object versions and delete markers) before deleting the stack. Re-run destroy for that environment.
+- **Knowledge Base "Unable to delete data from vector store"**: The Knowledge Base template now sets `DataDeletionPolicy: RETAIN` on the data source so stack delete does not try to clear the vector store. For an *existing* stack that already failed to delete: update the Knowledge Base stack once (e.g. run `deploy_knowledge_base.sh <env> update`) so the data source gets this policy, then run `destroy_all.sh` again. Or set the data source's `dataDeletionPolicy` to `RETAIN` in the AWS Console / CLI and retry stack delete.
+
 ### Individual Component Scripts
 
 The following scripts are used by `deploy_all.sh` and can also be run individually:
@@ -312,7 +353,54 @@ The script activates these tags by default (matching your infrastructure tags):
 - `Environment` - Environment tag (dev, staging, prod)
 - `Project` - Project identifier tag
 
+### AWS Organizations Accounts (`deploy_accounts.sh`)
+
+Create three member accounts (dev, staging, prod) under the management account using AWS Organizations. Optionally create per-account budgets with email alerts. **Must be run from the management account** with Organizations permissions. See [docs/aws_organizations.md](../docs/aws_organizations.md) for background.
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_accounts.sh [options]
+```
+
+**Options:**
+- `--project-name <name>` - Project name for account names (default: `chat-template`)
+- `--dev-email <email>` - Email for dev account (default: `<project>+dev@example.com`)
+- `--staging-email <email>` - Email for staging account
+- `--prod-email <email>` - Email for prod account
+- `--budget-alert-email <email>` - Enable monthly budgets and send alerts to this email
+- `--dev-budget-usd <amount>` - Monthly budget limit for dev (default: 75)
+- `--staging-budget-usd <amount>` - Monthly budget limit for staging (default: 150)
+- `--prod-budget-usd <amount>` - Monthly budget limit for prod (default: 500)
+- `--org-access-role-name <name>` - Role created in new accounts (default: `OrganizationAccountAccessRole`)
+- `--out-json <path>` - Output JSON file (default: `accounts.json`)
+- `--poll-sleep-seconds <n>` - Seconds between status polls (default: 15)
+- `--poll-max-minutes <n>` - Max minutes to wait per account creation (default: 20)
+- `--help` - Show help
+
+All options can be set via environment variables (e.g. `PROJECT_NAME`, `DEV_EMAIL`, `BUDGET_ALERT_EMAIL`).
+
+**Examples:**
+```bash
+# Create accounts with default project name and email pattern
+./scripts/deploy/deploy_accounts.sh
+
+# Custom project and emails
+./scripts/deploy/deploy_accounts.sh --project-name myapp \
+  --dev-email myapp+dev@example.com \
+  --staging-email myapp+staging@example.com \
+  --prod-email myapp+prod@example.com
+
+# Enable budget alerts
+BUDGET_ALERT_EMAIL=you@yourdomain.com ./scripts/deploy/deploy_accounts.sh
+```
+
+The script writes an `accounts.json` (or `--out-json` path) with project name, management account ID, dev/staging/prod account IDs and emails, and the org access role name. To assume the role in a member account: `aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/OrganizationAccountAccessRole --role-session-name <name>`.
+
 ## Prerequisites
+
+### For AWS Organizations Accounts:
+- AWS CLI installed and configured
+- Run from the **management account** with `organizations:CreateAccount`, `organizations:DescribeOrganization`, `organizations:DescribeCreateAccountStatus`, `organizations:ListAccounts`; for budgets: `budgets:CreateBudget`, `budgets:CreateNotification`, `budgets:CreateSubscriber`, `budgets:DescribeBudget`
 
 ### For CloudFormation:
 - AWS CLI installed and configured
