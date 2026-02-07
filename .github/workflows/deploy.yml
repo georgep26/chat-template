@@ -12,8 +12,8 @@ on:
           - staging
           - prod
       s3_app_config_uri:
-        description: 'S3 URI for app config file (e.g., s3://bucket/key)'
-        required: true
+        description: 'S3 URI for app config file (e.g., s3://bucket/key). Required when deploying Lambda.'
+        required: false
         type: string
       local_app_config_path:
         description: 'Local app config file path (optional, will upload to S3)'
@@ -53,6 +53,23 @@ on:
         required: false
         default: false
         type: boolean
+      skip_cost_tags:
+        description: 'Skip cost allocation tags activation'
+        required: false
+        default: false
+        type: boolean
+      vpc_id:
+        description: 'VPC ID (required when skip_network is true and skip_db is false)'
+        required: false
+        type: string
+      subnet_ids:
+        description: 'Comma-separated subnet IDs (required when skip_network is true and skip_db is false)'
+        required: false
+        type: string
+      security_group_ids:
+        description: 'Comma-separated security group IDs (for Lambda when skip_network is true)'
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -74,7 +91,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOYER_ROLE_ARN }}
           aws-region: ${{ inputs.region || 'us-east-1' }}
         env:
           AWS_REGION: ${{ inputs.region || 'us-east-1' }}
@@ -91,6 +108,13 @@ jobs:
             exit 1
           fi
           
+          if [ "${{ inputs.skip_network }}" == "true" ] && [ "${{ inputs.skip_db }}" != "true" ]; then
+            if [ -z "${{ inputs.vpc_id }}" ] || [ -z "${{ inputs.subnet_ids }}" ]; then
+              echo "Error: vpc_id and subnet_ids are required when skip_network is true and skip_db is false"
+              exit 1
+            fi
+          fi
+          
           echo "Deployment configuration:"
           echo "  Environment: ${{ inputs.environment }}"
           echo "  Region: ${{ inputs.region || 'us-east-1' }}"
@@ -101,12 +125,16 @@ jobs:
           echo "  Skip DB: ${{ inputs.skip_db }}"
           echo "  Skip KB: ${{ inputs.skip_kb }}"
           echo "  Skip Lambda: ${{ inputs.skip_lambda }}"
+          echo "  Skip Cost Tags: ${{ inputs.skip_cost_tags }}"
 
       - name: Build deployment command
         id: build-cmd
         run: |
           CMD="./scripts/deploy/deploy_all.sh ${{ inputs.environment }}"
-          CMD="$CMD --s3-app-config-uri ${{ inputs.s3_app_config_uri }}"
+          # Only add --s3-app-config-uri when set (required when deploying Lambda; empty when skip_lambda would break parsing)
+          if [ -n "${{ inputs.s3_app_config_uri }}" ]; then
+            CMD="$CMD --s3-app-config-uri ${{ inputs.s3_app_config_uri }}"
+          fi
           CMD="$CMD --region ${{ inputs.region || 'us-east-1' }}"
           
           if [ -n "${{ inputs.local_app_config_path }}" ]; then
@@ -137,7 +165,24 @@ jobs:
             CMD="$CMD --skip-lambda"
           fi
           
-          echo "command=$CMD" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then
+            CMD="$CMD --skip-cost-tags"
+          fi
+          
+          if [ -n "${{ inputs.vpc_id }}" ]; then
+            CMD="$CMD --vpc-id ${{ inputs.vpc_id }}"
+          fi
+          if [ -n "${{ inputs.subnet_ids }}" ]; then
+            CMD="$CMD --subnet-ids ${{ inputs.subnet_ids }}"
+          fi
+          if [ -n "${{ inputs.security_group_ids }}" ]; then
+            CMD="$CMD --security-group-ids ${{ inputs.security_group_ids }}"
+          fi
+          
+          # Use delimiter so command with spaces/special chars is stored correctly
+          echo "command<<EOF" >> $GITHUB_OUTPUT
+          echo "$CMD" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
           echo "Deployment command: $CMD"
 
       - name: Run deployment
