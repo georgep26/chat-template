@@ -210,7 +210,7 @@ This ensures that evaluation workflows can only interact with the environment th
 
 **After Deployment:**
 1. The script will output the role ARN
-2. Add this ARN to your GitHub repository secrets as `AWS_ROLE_ARN`
+2. Add this ARN to your GitHub environment or repository secrets as `AWS_EVALS_ROLE_ARN`
 3. The GitHub Actions workflow (`.github/workflows/run-evals.yml`) will automatically use this role for authentication
 
 **Permissions Included:**

@@ -36,8 +36,10 @@ Grants access to S3 buckets for uploading evaluation results.
 - `s3:ListBucket` - List bucket contents
 
 **Resources:**
-- Can be configured for a specific bucket or use pattern-based access
-- Default pattern: `*eval*`
+- Can be configured for a specific bucket (`S3BucketName`) or use pattern-based access (`S3BucketPattern`).
+- Default pattern: `*-evals-dev` (environment-scoped). The deploy script passes an environment-scoped pattern so each environment's role only accesses that environment's evals bucket.
+
+**Evals bucket naming convention:** Use environment-scoped bucket names so each environment's role is restricted to its own bucket, e.g. `${ProjectName}-evals-${Environment}` (e.g. `chat-template-evals-dev`, `chat-template-evals-staging`, `chat-template-evals-prod`) or a pattern like `*-evals-${Environment}`.
 
 **Usage:**
 Attach this policy to roles that need to upload evaluation results to S3 (e.g., GitHub Actions).
@@ -70,10 +72,10 @@ Grants access to AWS Bedrock for LLM inference during evaluation.
 
 **Resources:**
 - Foundation models: `arn:aws:bedrock:${AWSRegion}::foundation-model/*`
-- Knowledge bases: `arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*`
+- Knowledge bases: When `KnowledgeBaseId` is provided, restricted to that KB only (recommended for same-account multi-env). When empty, allows `arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*`.
 
 **Usage:**
-Attach this policy to roles that need to invoke Bedrock models for evaluation judge models.
+Attach this policy to roles that need to invoke Bedrock models for evaluation judge models. For environment separation when multiple environments share an account, pass the environment's knowledge base ID via the deploy script's `--knowledge-base-id` option.
 
 ## Deployment
 

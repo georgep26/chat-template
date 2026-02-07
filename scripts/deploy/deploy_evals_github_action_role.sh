@@ -735,11 +735,11 @@ EOF
     echo ""
     print_status "GitHub Actions Role ARN: $ROLE_ARN"
     echo ""
-    print_warning "IMPORTANT: Add this role ARN to your GitHub repository secrets:"
-    print_warning "  Secret name: AWS_ROLE_ARN"
+    print_warning "IMPORTANT: Add this role ARN to your GitHub environment/repository secrets:"
+    print_warning "  Secret name: AWS_EVALS_ROLE_ARN"
     print_warning "  Secret value: $ROLE_ARN"
     echo ""
-    print_status "You can find this in: Repository Settings → Secrets and variables → Actions"
+    print_status "Add to environment secrets (e.g. staging) or Repository Settings → Secrets and variables → Actions"
 }
 
 # Main execution

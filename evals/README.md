@@ -640,13 +640,12 @@ The script will:
 
 #### 2. Add Role ARN to GitHub Secrets
 
-After deployment, add the role ARN to your GitHub repository secrets:
+After deployment, add the role ARN to your GitHub environment or repository secrets:
 
 1. Go to your GitHub repository
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Add a secret with:
-   - **Name**: `AWS_ROLE_ARN`
+2. For the environment used by run-evals (e.g. **Settings** → **Environments** → `staging`), or **Secrets and variables** → **Actions** for repository-level
+3. Add a secret with:
+   - **Name**: `AWS_EVALS_ROLE_ARN`
    - **Value**: The role ARN printed by the deployment script (e.g., `arn:aws:iam::123456789012:role/chat-template-dev-evals-github-actions-role`)
 
 The GitHub Actions workflow (`.github/workflows/run-evals.yml`) is already configured to use this secret for OIDC authentication.

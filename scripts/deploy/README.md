@@ -140,7 +140,62 @@ Deploy IAM policies and role for GitHub Actions OIDC authentication to enable ev
 4. Lambda Invoke Policy (optional)
 5. GitHub Actions Role
 
-After deployment, add the role ARN to your GitHub repository secrets as `AWS_ROLE_ARN`.
+After deployment, add the role ARN to your GitHub environment or repository secrets as `AWS_EVALS_ROLE_ARN`.
+
+### GitHub Actions Deployer Role (`deploy_deployer_github_action_role.sh`)
+
+Deploy the IAM role used by the **deploy workflow** (`.github/workflows/deploy.yml`) for OIDC authentication. This role has permissions to run the full deployment (network, S3, DB, knowledge base, Lambda, cost tags) scoped to the specified environment. Deploy one stack per environment; use the role ARN as the `AWS_DEPLOYER_ROLE_ARN` secret for the matching GitHub environment.
+
+**Prerequisite:** Create the GitHub OIDC identity provider in AWS before using this script. See [docs/oidc_github_identity_provider_setup.md](../docs/oidc_github_identity_provider_setup.md).
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_deployer_github_action_role.sh <environment> [action] [options]
+```
+
+**Environments:** `dev` (default), `staging`, `prod`
+
+**Actions:**
+- `deploy` (default) - Deploy the stack
+- `update` - Update the stack
+- `delete` - Delete the stack
+- `validate` - Validate the template
+- `status` - Show stack status
+
+**Required Options (for deploy/update):**
+- `--aws-account-id <id>` - AWS Account ID (12 digits)
+- `--github-org <org>` - GitHub organization or username
+- `--github-repo <repo>` - GitHub repository name
+- `--oidc-provider-arn <arn>` - ARN of GitHub OIDC identity provider (create first; see docs)
+
+**Optional Options:**
+- `--region <region>` - AWS region (default: us-east-1)
+- `--project-name <name>` - Project name (default: chat-template)
+
+**Examples:**
+```bash
+# Deploy to development environment
+./scripts/deploy/deploy_deployer_github_action_role.sh dev deploy \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template \
+  --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
+
+# Deploy to staging
+./scripts/deploy/deploy_deployer_github_action_role.sh staging deploy \
+  --aws-account-id 123456789012 \
+  --github-org myorg \
+  --github-repo chat-template \
+  --oidc-provider-arn arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com
+
+# Check status
+./scripts/deploy/deploy_deployer_github_action_role.sh dev status
+
+# Validate template
+./scripts/deploy/deploy_deployer_github_action_role.sh dev validate
+```
+
+After deployment, add the role ARN to the **GitHub environment** secret `AWS_DEPLOYER_ROLE_ARN` (Repository Settings → Environments → &lt;env&gt; → Environment secrets) so the deploy workflow can assume this role. For evaluation workflows (run-evals), set `AWS_EVALS_ROLE_ARN` on the same or different environments as needed.
 
 ### Full Application Deployment (`deploy_all.sh`)
 
@@ -341,15 +396,12 @@ A GitHub Actions workflow (`.github/workflows/deploy.yml`) is available for auto
      --github-repo chat-template
    ```
 
-2. **Add Role ARN to GitHub Secrets:**
-   - Go to your GitHub repository
-   - Navigate to **Settings** → **Secrets and variables** → **Actions**
-   - Add a secret named `AWS_ROLE_ARN` with the role ARN from step 1
-
-3. **Create GitHub Environments** (optional but recommended):
-   - Go to **Settings** → **Environments**
-   - Create environments: `dev`, `staging`, `prod`
-   - Add the `AWS_ROLE_ARN` secret to each environment
+2. **Add Role ARNs to GitHub Secrets:**
+   - Go to your GitHub repository → **Settings** → **Environments** → create `dev`, `staging`, `prod`
+   - For each environment, add **environment secrets**:
+     - `AWS_DEPLOYER_ROLE_ARN`: ARN from the deployer role (for the deploy workflow)
+     - `AWS_EVALS_ROLE_ARN`: ARN from the evals role (for run-evals workflow)
+   - Or use **Secrets and variables** → **Actions** for repository-level secrets
 
 ### Using the Workflow
 

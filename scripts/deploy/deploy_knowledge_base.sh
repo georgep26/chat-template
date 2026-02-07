@@ -276,9 +276,13 @@ get_s3_bucket_name() {
     echo "$bucket_name"
 }
 
+# Seconds to wait for Aurora to spin up from 0 ACU before retrying SQL (3 minutes)
+DB_STARTUP_WAIT_SECONDS=180
+
 # Function to run embeddings table setup SQL via RDS Data API
 # Requires: db_cluster_id, db_name, secret_arn (from get_db_stack_outputs)
 # The caller (user or CI) must have rds-data:ExecuteStatement and rds:DescribeDBClusters IAM permissions.
+# If the first query fails (e.g. Aurora at 0 ACU is starting), waits DB_STARTUP_WAIT_SECONDS then retries once.
 run_embeddings_sql_via_data_api() {
     local db_cluster_id="$1"
     local db_name="$2"
@@ -307,26 +311,45 @@ run_embeddings_sql_via_data_api() {
     # Strip full-line comments and empty lines, strip inline -- comments, normalize whitespace, split by ;
     local content
     content=$(grep -v '^[[:space:]]*--' "$sql_file" | grep -v '^[[:space:]]*$' | sed 's/--.*$//' | tr '\n' ' ' | sed 's/;[[:space:]]*/;/g')
-    local count=0
 
-    while IFS= read -r -d ';' statement; do
-        statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        [ -z "$statement" ] && continue
-        count=$((count + 1))
-        print_status "Executing statement $count..."
-        if ! aws rds-data execute-statement \
-            --resource-arn "$db_cluster_arn" \
-            --secret-arn "$secret_arn" \
-            --database "$db_name" \
-            --sql "$statement" \
-            --region "$AWS_REGION" >/dev/null 2>&1; then
-            print_error "Failed to execute statement $count"
+    local waited_for_db=false
+    local attempt=1
+
+    while true; do
+        local count=0
+        local failed_statement=0
+
+        while IFS= read -r -d ';' statement; do
+            statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$statement" ] && continue
+            count=$((count + 1))
+            print_status "Executing statement $count..."
+            if ! aws rds-data execute-statement \
+                --resource-arn "$db_cluster_arn" \
+                --secret-arn "$secret_arn" \
+                --database "$db_name" \
+                --sql "$statement" \
+                --region "$AWS_REGION" >/dev/null 2>&1; then
+                failed_statement=$count
+                break
+            fi
+        done < <(printf '%s;' "$content")
+
+        if [ "$failed_statement" -eq 0 ]; then
+            print_status "Embeddings table setup completed ($count statements)."
+            return 0
+        fi
+
+        if [ "$waited_for_db" = true ]; then
+            print_error "Failed to execute statement $failed_statement after waiting for DB to start."
             return 1
         fi
-    done < <(printf '%s;' "$content")
 
-    print_status "Embeddings table setup completed ($count statements)."
-    return 0
+        print_warning "Statement $failed_statement failed (database may be starting from 0 ACU). Waiting ${DB_STARTUP_WAIT_SECONDS}s for Aurora to become available..."
+        sleep "$DB_STARTUP_WAIT_SECONDS"
+        waited_for_db=true
+        print_status "Retrying embeddings table setup..."
+    done
 }
 
 # Function to validate template

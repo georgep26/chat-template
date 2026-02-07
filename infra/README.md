@@ -201,6 +201,8 @@ See `roles/README.md` for detailed documentation.
 
 To use OIDC authentication with GitHub Actions:
 
+**Prerequisite:** Create the GitHub OIDC identity provider in your AWS account **before** deploying the evals role. See [docs/oidc_github_identity_provider_setup.md](../docs/oidc_github_identity_provider_setup.md) for setup steps. The deploy script ([scripts/deploy/deploy_evals_github_action_role.sh](../scripts/deploy/deploy_evals_github_action_role.sh)) requires the provider ARN via `--oidc-provider-arn`.
+
 1. **Deploy the policies** (in order):
    ```bash
    # Deploy each policy stack
@@ -219,8 +221,8 @@ To use OIDC authentication with GitHub Actions:
    ```
 
 3. **Add the role ARN to GitHub secrets**:
-   - Go to repository Settings → Secrets and variables → Actions
-   - Add secret: `AWS_ROLE_ARN` with the role ARN from the stack output
+   - Go to repository Settings → Secrets and variables → Actions (or Environment secrets for the env used by run-evals)
+   - Add secret: `AWS_EVALS_ROLE_ARN` with the role ARN from the stack output
 
 4. **Update the workflow** (already done in `.github/workflows/run-evals.yml`):
    - Uses `role-to-assume` instead of access keys

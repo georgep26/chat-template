@@ -287,7 +287,7 @@ FAILED_STEPS=()
 
 # Step 1: Deploy Network (VPC, subnets, security groups)
 if [ "$SKIP_NETWORK" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Deploying Network Infrastructure"
     if run_deployment_script "deploy_network.sh" "$ENVIRONMENT" "deploy" --region "$AWS_REGION"; then
         print_status "Network deployment completed"
@@ -302,7 +302,7 @@ fi
 
 # Step 2: Deploy S3 Bucket
 if [ "$SKIP_S3" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Deploying S3 Bucket"
     if run_deployment_script "deploy_s3_bucket.sh" "$ENVIRONMENT" "deploy" --region "$AWS_REGION"; then
         print_status "S3 bucket deployment completed"
@@ -317,7 +317,7 @@ fi
 
 # Step 3: Deploy Database
 if [ "$SKIP_DB" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Deploying Database"
     
     # Build database deployment arguments
@@ -358,7 +358,7 @@ fi
 
 # Step 4: Deploy Knowledge Base
 if [ "$SKIP_KB" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Deploying Knowledge Base"
     if run_deployment_script "deploy_knowledge_base.sh" "$ENVIRONMENT" "deploy" --region "$AWS_REGION"; then
         print_status "Knowledge base deployment completed"
@@ -373,7 +373,7 @@ fi
 
 # Step 5: Deploy Lambda Function
 if [ "$SKIP_LAMBDA" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Deploying Lambda Function"
     
     # Build Lambda deployment arguments
@@ -408,7 +408,7 @@ fi
 
 # Step 6: Activate Cost Allocation Tags
 if [ "$SKIP_COST_TAGS" = false ]; then
-    ((DEPLOYMENT_STEPS++))
+    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
     print_header "Step $DEPLOYMENT_STEPS: Activating Cost Allocation Tags"
     
     # Make script executable

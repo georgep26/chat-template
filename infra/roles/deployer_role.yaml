@@ -1,0 +1,292 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Role for GitHub Actions OIDC - Application Deployment'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name (must match GitHub environment used by deploy workflow)'
+
+  GitHubOrg:
+    Type: String
+    Description: 'GitHub organization or username (e.g., "myorg" or "username")'
+
+  GitHubRepo:
+    Type: String
+    Description: 'GitHub repository name (e.g., "chat-template")'
+
+  OIDCProviderArn:
+    Type: String
+    Description: 'ARN of the GitHub OIDC identity provider. Create first; see docs/oidc_github_identity_provider_setup.md.'
+
+Resources:
+  DeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-deployer-github-actions-role'
+      Description: 'IAM role for GitHub Actions to run the deploy workflow via OIDC'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow workflow_dispatch when job runs in the matching GitHub environment (dev, staging, prod)
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OIDCProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:${Environment}'
+      Policies:
+        - PolicyName: DeployerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CloudFormation: ValidateTemplate has no resource (validates template body); requires Resource: *
+              - Sid: CloudFormationValidateTemplate
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
+              # CloudFormation: stacks scoped to project and environment (e.g. chat-template-vpc-dev)
+              - Sid: CloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-*-${Environment}*'
+              # IAM: roles and policies scoped to project and environment (e.g. chat-template-*-dev*)
+              - Sid: IAMForDeployment
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:CreatePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-*-${Environment}*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${ProjectName}-*-${Environment}*'
+              # EC2: VPC, subnets, security groups, NAT, endpoints (deploy_network, light_db SG)
+              - Sid: EC2Network
+                Effect: Allow
+                Action:
+                  - ec2:CreateVpc
+                  - ec2:DeleteVpc
+                  - ec2:DescribeVpcs
+                  - ec2:ModifyVpcAttribute
+                  - ec2:CreateSubnet
+                  - ec2:DeleteSubnet
+                  - ec2:DescribeSubnets
+                  - ec2:CreateInternetGateway
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:DescribeInternetGateways
+                  - ec2:CreateNatGateway
+                  - ec2:DeleteNatGateway
+                  - ec2:DescribeNatGateways
+                  - ec2:AllocateAddress
+                  - ec2:ReleaseAddress
+                  - ec2:DescribeAddresses
+                  - ec2:CreateRouteTable
+                  - ec2:DeleteRouteTable
+                  - ec2:DescribeRouteTables
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:DescribeSecurityGroups
+                  - ec2:CreateVpcEndpoint
+                  - ec2:DeleteVpcEndpoints
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:ModifySubnetAttribute
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ec2:DescribeTags
+                Resource: '*'
+              # S3: chat-template buckets for this environment (KB bucket, app config)
+              - Sid: S3Deployment
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketLifecycleConfiguration
+                  - s3:GetBucketLifecycleConfiguration
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}/*'
+              # RDS: Aurora cluster and instance scoped to project and environment
+              - Sid: RDSDeployment
+                Effect: Allow
+                Action:
+                  - rds:CreateDBCluster
+                  - rds:DeleteDBCluster
+                  - rds:CreateDBInstance
+                  - rds:DeleteDBInstance
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                  - rds:ModifyDBCluster
+                  - rds:ModifyDBInstance
+                  - rds:CreateDBSubnetGroup
+                  - rds:DeleteDBSubnetGroup
+                  - rds:DescribeDBSubnetGroups
+                  - rds:AddTagsToResource
+                  - rds:RemoveTagsFromResource
+                  - rds:ListTagsForResource
+                  - rds-data:ExecuteStatement
+                  - rds-data:BatchExecuteStatement
+                  - rds-data:BeginTransaction
+                  - rds-data:CommitTransaction
+                  - rds-data:RollbackTransaction
+                Resource:
+                  - !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${ProjectName}-*-${Environment}*'
+                  - !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${ProjectName}-*-${Environment}*'
+                  - !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:${ProjectName}-*-${Environment}*'
+              # Secrets Manager: secrets scoped to project and environment (e.g. chat-template-*-dev-*)
+              - Sid: SecretsManagerDeployment
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:ListSecrets
+                  - secretsmanager:TagResource
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-*-${Environment}-*'
+              # Bedrock: Knowledge Base and Data Source (deploy_knowledge_base)
+              - Sid: BedrockKnowledgeBase
+                Effect: Allow
+                Action:
+                  - bedrock:CreateKnowledgeBase
+                  - bedrock:UpdateKnowledgeBase
+                  - bedrock:DeleteKnowledgeBase
+                  - bedrock:GetKnowledgeBase
+                  - bedrock:ListKnowledgeBases
+                  - bedrock:CreateDataSource
+                  - bedrock:UpdateDataSource
+                  - bedrock:DeleteDataSource
+                  - bedrock:GetDataSource
+                  - bedrock:ListDataSources
+                  - bedrock:StartIngestionJob
+                  - bedrock:GetIngestionJob
+                  - bedrock:ListIngestionJobs
+                Resource: '*'
+              # Lambda: function scoped to project and environment (e.g. chat-template-dev-rag-chat)
+              - Sid: LambdaDeployment
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:PublishVersion
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:ListVersionsByFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
+              # CloudWatch Logs: log group for Lambda scoped to project and environment
+              - Sid: LogsDeployment
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-*'
+              # ECR: repo for Lambda container image (rag-lambda-${Environment}); GetAuthorizationToken is account-level
+              - Sid: ECRDeployment
+                Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DescribeRepositories
+                  - ecr:PutLifecyclePolicy
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: ECRPushImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchGetImage
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/rag-lambda-${Environment}'
+              # Cost Explorer: cost allocation tags (deploy_cost_analysis_tags)
+              - Sid: CostExplorerTags
+                Effect: Allow
+                Action:
+                  - ce:ListCostAllocationTags
+                  - ce:UpdateCostAllocationTagsStatus
+                Resource: '*'
+              # STS: get caller identity (deploy_rag_lambda account id)
+              - Sid: STS
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-deployer-github-actions-role'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: GitHubRepo
+          Value: !Sub '${GitHubOrg}/${GitHubRepo}'
+
+Outputs:
+  RoleArn:
+    Description: 'ARN of the GitHub Actions deployer IAM role'
+    Value: !GetAtt DeployerRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DeployerRoleArn'
+  RoleName:
+    Description: 'Name of the deployer role'
+    Value: !Ref DeployerRole
+    Export:
+      Name: !Sub '${AWS::StackName}-DeployerRoleName'
