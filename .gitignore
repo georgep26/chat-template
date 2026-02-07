@@ -276,3 +276,6 @@ app_config.yaml
 
 # Environment files
 *.env
+
+# Security reports 
+docs/security_reports/
