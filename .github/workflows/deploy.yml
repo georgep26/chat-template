@@ -1,3 +1,6 @@
+# Sensitive values are read from environment secrets (per-environment: dev/staging/prod).
+# Set these in GitHub: Settings → Environments → <env> → Environment secrets.
+# See README or docs for secret names (S3_APP_CONFIG_URI, LOCAL_APP_CONFIG_PATH, etc.).
 name: Deploy Application
 
 on:
@@ -11,23 +14,6 @@ on:
           - dev
           - staging
           - prod
-      s3_app_config_uri:
-        description: 'S3 URI for app config file (e.g., s3://bucket/key). Required when deploying Lambda.'
-        required: false
-        type: string
-      local_app_config_path:
-        description: 'Local app config file path (optional, will upload to S3)'
-        required: false
-        type: string
-      master_password:
-        description: 'Database master password (optional, required if DB does not exist)'
-        required: false
-        type: string
-      region:
-        description: 'AWS region'
-        required: false
-        default: 'us-east-1'
-        type: string
       skip_network:
         description: 'Skip network deployment'
         required: false
@@ -58,18 +44,6 @@ on:
         required: false
         default: false
         type: boolean
-      vpc_id:
-        description: 'VPC ID (required when skip_network is true and skip_db is false)'
-        required: false
-        type: string
-      subnet_ids:
-        description: 'Comma-separated subnet IDs (required when skip_network is true and skip_db is false)'
-        required: false
-        type: string
-      security_group_ids:
-        description: 'Comma-separated security group IDs (for Lambda when skip_network is true)'
-        required: false
-        type: string
 
 permissions:
   id-token: write
@@ -92,9 +66,9 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOYER_ROLE_ARN }}
-          aws-region: ${{ inputs.region || 'us-east-1' }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
         env:
-          AWS_REGION: ${{ inputs.region || 'us-east-1' }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
       - name: Validate inputs
         run: |
@@ -103,46 +77,44 @@ jobs:
             exit 1
           fi
           
-          if [ "${{ inputs.skip_lambda }}" != "true" ] && [ -z "${{ inputs.s3_app_config_uri }}" ]; then
-            echo "Error: s3_app_config_uri is required when deploying Lambda"
+          if [ "${{ inputs.skip_lambda }}" != "true" ] && [ -z "${{ secrets.S3_APP_CONFIG_URI }}" ]; then
+            echo "Error: S3_APP_CONFIG_URI secret is required when deploying Lambda"
             exit 1
           fi
           
           if [ "${{ inputs.skip_network }}" == "true" ] && [ "${{ inputs.skip_db }}" != "true" ]; then
-            if [ -z "${{ inputs.vpc_id }}" ] || [ -z "${{ inputs.subnet_ids }}" ]; then
-              echo "Error: vpc_id and subnet_ids are required when skip_network is true and skip_db is false"
+            if [ -z "${{ secrets.VPC_ID }}" ] || [ -z "${{ secrets.SUBNET_IDS }}" ]; then
+              echo "Error: VPC_ID and SUBNET_IDS secrets are required when skip_network is true and skip_db is false"
               exit 1
             fi
           fi
           
-          echo "Deployment configuration:"
-          echo "  Environment: ${{ inputs.environment }}"
-          echo "  Region: ${{ inputs.region || 'us-east-1' }}"
-          echo "  S3 App Config URI: ${{ inputs.s3_app_config_uri }}"
-          echo "  Local App Config Path: ${{ inputs.local_app_config_path || 'N/A' }}"
-          echo "  Skip Network: ${{ inputs.skip_network }}"
-          echo "  Skip S3: ${{ inputs.skip_s3 }}"
-          echo "  Skip DB: ${{ inputs.skip_db }}"
-          echo "  Skip KB: ${{ inputs.skip_kb }}"
-          echo "  Skip Lambda: ${{ inputs.skip_lambda }}"
-          echo "  Skip Cost Tags: ${{ inputs.skip_cost_tags }}"
+          echo "Validating deployment inputs..."
 
       - name: Build deployment command
         id: build-cmd
+        env:
+          S3_APP_CONFIG_URI: ${{ secrets.S3_APP_CONFIG_URI }}
+          LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
+          MASTER_PASSWORD: ${{ secrets.MASTER_PASSWORD }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          VPC_ID: ${{ secrets.VPC_ID }}
+          SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
+          SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
         run: |
+          REGION="${AWS_REGION:-us-east-1}"
           CMD="./scripts/deploy/deploy_all.sh ${{ inputs.environment }}"
-          # Only add --s3-app-config-uri when set (required when deploying Lambda; empty when skip_lambda would break parsing)
-          if [ -n "${{ inputs.s3_app_config_uri }}" ]; then
-            CMD="$CMD --s3-app-config-uri ${{ inputs.s3_app_config_uri }}"
+          if [ -n "$S3_APP_CONFIG_URI" ]; then
+            CMD="$CMD --s3-app-config-uri $S3_APP_CONFIG_URI"
           fi
-          CMD="$CMD --region ${{ inputs.region || 'us-east-1' }}"
+          CMD="$CMD --region $REGION"
           
-          if [ -n "${{ inputs.local_app_config_path }}" ]; then
-            CMD="$CMD --local-app-config-path ${{ inputs.local_app_config_path }}"
+          if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
+            CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"
           fi
           
-          if [ -n "${{ inputs.master_password }}" ]; then
-            CMD="$CMD --master-password ${{ inputs.master_password }}"
+          if [ -n "$MASTER_PASSWORD" ]; then
+            CMD="$CMD --master-password $MASTER_PASSWORD"
           fi
           
           if [ "${{ inputs.skip_network }}" == "true" ]; then
@@ -169,35 +141,31 @@ jobs:
             CMD="$CMD --skip-cost-tags"
           fi
           
-          if [ -n "${{ inputs.vpc_id }}" ]; then
-            CMD="$CMD --vpc-id ${{ inputs.vpc_id }}"
+          if [ -n "$VPC_ID" ]; then
+            CMD="$CMD --vpc-id $VPC_ID"
           fi
-          if [ -n "${{ inputs.subnet_ids }}" ]; then
-            CMD="$CMD --subnet-ids ${{ inputs.subnet_ids }}"
+          if [ -n "$SUBNET_IDS" ]; then
+            CMD="$CMD --subnet-ids $SUBNET_IDS"
           fi
-          if [ -n "${{ inputs.security_group_ids }}" ]; then
-            CMD="$CMD --security-group-ids ${{ inputs.security_group_ids }}"
+          if [ -n "$SECURITY_GROUP_IDS" ]; then
+            CMD="$CMD --security-group-ids $SECURITY_GROUP_IDS"
           fi
           
-          # Use delimiter so command with spaces/special chars is stored correctly
           echo "command<<EOF" >> $GITHUB_OUTPUT
           echo "$CMD" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "Deployment command: $CMD"
 
       - name: Run deployment
         id: deploy
         run: ${{ steps.build-cmd.outputs.command }}
         env:
-          AWS_REGION: ${{ inputs.region || 'us-east-1' }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
       - name: Deployment summary
         if: always()
         run: |
           if [ "${{ steps.deploy.outcome }}" == "success" ]; then
             echo "✅ Deployment completed successfully!"
-            echo "Environment: ${{ inputs.environment }}"
-            echo "Region: ${{ inputs.region || 'us-east-1' }}"
           else
             echo "❌ Deployment failed. Check logs above for details."
             exit 1
