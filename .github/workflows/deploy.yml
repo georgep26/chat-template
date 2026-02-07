@@ -1,6 +1,6 @@
 # Sensitive values are read from environment secrets (per-environment: dev/staging/prod).
 # Set these in GitHub: Settings → Environments → <env> → Environment secrets.
-# See README or docs for secret names (S3_APP_CONFIG_URI, LOCAL_APP_CONFIG_PATH, etc.).
+# See docs/github_environment_secrets.md for secret names (S3_APP_CONFIG_URI, MASTER_DB_PASSWORD, etc.).
 name: Deploy Application
 
 on:
@@ -96,7 +96,8 @@ jobs:
         env:
           S3_APP_CONFIG_URI: ${{ secrets.S3_APP_CONFIG_URI }}
           LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
-          MASTER_PASSWORD: ${{ secrets.MASTER_PASSWORD }}
+          MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
+          MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           VPC_ID: ${{ secrets.VPC_ID }}
           SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
@@ -113,8 +114,11 @@ jobs:
             CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"
           fi
           
-          if [ -n "$MASTER_PASSWORD" ]; then
-            CMD="$CMD --master-password $MASTER_PASSWORD"
+          if [ -n "$MASTER_DB_USERNAME" ]; then
+            CMD="$CMD --master-username $MASTER_DB_USERNAME"
+          fi
+          if [ -n "$MASTER_DB_PASSWORD" ]; then
+            CMD="$CMD --master-password $MASTER_DB_PASSWORD"
           fi
           
           if [ "${{ inputs.skip_network }}" == "true" ]; then
