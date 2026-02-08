@@ -37,29 +37,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[DEPLOYER GITHUB ACTIONS ROLE]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
 show_usage() {
@@ -91,6 +71,7 @@ show_usage() {
     echo "Optional Options:"
     echo "  --region <region>           - AWS region (default: us-east-1)"
     echo "  --project-name <name>      - Project name (default: chat-template)"
+    echo "  -y, --yes                   - Skip confirmation prompt (deploy/update/delete)"
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
@@ -117,16 +98,17 @@ AWS_ACCOUNT_ID=""
 GITHUB_ORG=""
 GITHUB_REPO=""
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-
-# Change to project root directory
 cd "$PROJECT_ROOT"
+AUTO_CONFIRM=false
 
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
         --aws-account-id)
             AWS_ACCOUNT_ID="$2"
             shift 2
@@ -166,7 +148,7 @@ print_header "Starting deployer role deployment for $ENVIRONMENT environment"
 # Validate environment
 case $ENVIRONMENT in
     dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
+        print_info "Using environment: $ENVIRONMENT"
         ;;
     *)
         print_error "Invalid environment: $ENVIRONMENT"
@@ -206,6 +188,12 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
         show_usage
         exit 1
     fi
+
+    print_step "Deploying deployer role for $ENVIRONMENT"
+    print_info "Environment: $ENVIRONMENT | Region: $AWS_REGION | Stack: ${PROJECT_NAME}-${ENVIRONMENT}-deployer-role"
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_deployment "Proceed with $ACTION?" || exit 0
+    fi
 fi
 
 # Stack and template
@@ -217,9 +205,9 @@ validate_template() {
     local template_file=$1
     local stack_name=$2
 
-    print_status "Validating CloudFormation template: $template_file"
+    print_info "Validating CloudFormation template: $template_file"
     if aws cloudformation validate-template --template-body file://$template_file --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Template validation successful: $stack_name"
+        print_info "Template validation successful: $stack_name"
     else
         print_error "Template validation failed: $template_file"
         exit 1
@@ -298,7 +286,7 @@ deploy_stack() {
     local template_file=$2
     local param_file=$3
 
-    print_status "Deploying stack: $stack_name"
+    print_info "Deploying stack: $stack_name"
 
     # Get current stack status before attempting update
     local initial_status=""
@@ -308,7 +296,7 @@ deploy_stack() {
             --region $AWS_REGION \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null)
-        print_status "Current stack status: $initial_status"
+        print_info "Current stack status: $initial_status"
         print_warning "Stack $stack_name already exists. Attempting update..."
 
         local update_output=$(aws cloudformation update-stack \
@@ -321,7 +309,7 @@ deploy_stack() {
 
         # Check output for "No updates are to be performed" regardless of exit code
         if echo "$update_output" | grep -qi "No updates are to be performed"; then
-            print_status "No updates needed for stack $stack_name (template and parameters unchanged)"
+            print_info "No updates needed for stack $stack_name (template and parameters unchanged)"
             return 0
         fi
 
@@ -331,7 +319,7 @@ deploy_stack() {
         fi
 
         # Update was triggered successfully - verify it actually started
-        print_status "Update command succeeded. Verifying update was triggered..."
+        print_info "Update command succeeded. Verifying update was triggered..."
         sleep 3
 
         local verify_status=$(aws cloudformation describe-stacks \
@@ -343,7 +331,7 @@ deploy_stack() {
         local update_triggered=false
         if [ "$verify_status" = "UPDATE_IN_PROGRESS" ]; then
             update_triggered=true
-            print_status "✓ Update confirmed: Stack transitioned to UPDATE_IN_PROGRESS"
+            print_info "✓ Update confirmed: Stack transitioned to UPDATE_IN_PROGRESS"
         fi
 
         local event_status=$(aws cloudformation describe-stack-events \
@@ -374,11 +362,11 @@ deploy_stack() {
         fi
 
         if [ "$update_triggered" = false ]; then
-            print_status "No updates needed for stack $stack_name"
+            print_info "No updates needed for stack $stack_name"
             return 0
         fi
     else
-        print_status "Creating new stack: $stack_name"
+        print_info "Creating new stack: $stack_name"
         aws cloudformation create-stack \
             --stack-name $stack_name \
             --template-body file://$template_file \
@@ -387,7 +375,7 @@ deploy_stack() {
             --region $AWS_REGION
     fi
 
-    print_status "Waiting for stack $stack_name to complete..."
+    print_info "Waiting for stack $stack_name to complete..."
 
     local max_wait_time=1800
     local elapsed_time=0
@@ -408,7 +396,7 @@ deploy_stack() {
 
         case "$stack_status" in
             CREATE_COMPLETE|UPDATE_COMPLETE)
-                print_status "Stack $stack_name completed successfully"
+                print_info "Stack $stack_name completed successfully"
                 return 0
                 ;;
             ROLLBACK_COMPLETE|CREATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED|ROLLBACK_FAILED)
@@ -418,7 +406,7 @@ deploy_stack() {
                 ;;
             CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|UPDATE_ROLLBACK_IN_PROGRESS|ROLLBACK_IN_PROGRESS|DELETE_IN_PROGRESS)
                 if [ $((elapsed_time % 60)) -eq 0 ]; then
-                    print_status "Stack $stack_name status: $stack_status (waiting...)"
+                    print_info "Stack $stack_name status: $stack_status (waiting...)"
                 fi
                 ;;
             *)
@@ -437,7 +425,7 @@ deploy_stack() {
 
 # Function to show stack status
 show_status() {
-    print_status "Checking stack status..."
+    print_info "Checking stack status..."
     echo ""
 
     if aws cloudformation describe-stacks --stack-name $ROLE_STACK --region $AWS_REGION >/dev/null 2>&1; then
@@ -446,7 +434,7 @@ show_status() {
             --region $AWS_REGION \
             --query 'Stacks[0].StackStatus' \
             --output text)
-        print_status "$ROLE_STACK: $status"
+        print_info "$ROLE_STACK: $status"
     else
         print_warning "$ROLE_STACK: Does not exist"
     fi
@@ -456,26 +444,22 @@ show_status() {
 validate_all_templates() {
     print_header "Validating CloudFormation template"
     validate_template "$ROLE_TEMPLATE" "$ROLE_STACK"
-    print_status "Template validated successfully"
+    print_info "Template validated successfully"
 }
 
 # Function to delete stack
 delete_stacks() {
-    print_warning "This will delete the deployer role stack. Are you sure? (yes/no)"
-    read -r confirmation
-
-    if [ "$confirmation" != "yes" ]; then
-        print_status "Deletion cancelled"
-        return 0
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_destructive_action "$ENVIRONMENT" "delete deployer role stack ($ROLE_STACK)" || return 0
     fi
 
-    print_header "Deleting stack..."
+    print_step "Deleting stack..."
 
     if aws cloudformation describe-stacks --stack-name $ROLE_STACK --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Deleting stack: $ROLE_STACK"
+        print_info "Deleting stack: $ROLE_STACK"
         aws cloudformation delete-stack --stack-name $ROLE_STACK --region $AWS_REGION
         aws cloudformation wait stack-delete-complete --stack-name $ROLE_STACK --region $AWS_REGION
-        print_status "Stack deleted"
+        print_info "Stack deleted"
     else
         print_warning "Stack $ROLE_STACK does not exist"
     fi
@@ -483,12 +467,12 @@ delete_stacks() {
 
 # Function to deploy the role stack
 deploy_all_stacks() {
-    print_header "Deploying GitHub Actions deployer IAM role"
+    print_step "Deploying GitHub Actions deployer IAM role"
 
     local temp_dir=$(mktemp -d)
     trap "rm -rf $temp_dir" EXIT
 
-    print_status "Deploying deployer role..."
+    print_info "Deploying deployer role..."
     local role_params_file="$temp_dir/role_params.json"
     cat > "$role_params_file" <<EOF
 [
@@ -504,16 +488,16 @@ EOF
     local ROLE_ARN=$(get_stack_output "$ROLE_STACK" "RoleArn")
 
     echo ""
-    print_header "Deployment Summary"
+    print_step "Deployment Summary"
     echo ""
-    print_status "GitHub Actions Deployer Role ARN: $ROLE_ARN"
+    print_info "GitHub Actions Deployer Role ARN: $ROLE_ARN"
     echo ""
     print_warning "IMPORTANT: Add this role ARN to your GitHub environment secret:"
     print_warning "  Secret name: AWS_DEPLOYER_ROLE_ARN"
     print_warning "  Secret value: $ROLE_ARN"
     echo ""
-    print_status "Go to: Repository Settings → Environments → $ENVIRONMENT → Environment secrets"
-    print_status "Add or update AWS_DEPLOYER_ROLE_ARN with the value above so the deploy workflow can assume this role."
+    print_info "Go to: Repository Settings → Environments → $ENVIRONMENT → Environment secrets"
+    print_info "Add or update AWS_DEPLOYER_ROLE_ARN with the value above so the deploy workflow can assume this role."
 }
 
 # Main execution

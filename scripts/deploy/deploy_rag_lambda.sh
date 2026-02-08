@@ -48,29 +48,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[RAG LAMBDA]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
 show_usage() {
@@ -107,6 +87,7 @@ show_usage() {
     echo "  --app-config-s3-uri <uri>          - (deprecated) Alias for --s3_app_config_uri"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --region <region>                  - AWS region (default: us-east-1)"
+    echo "  -y, --yes                          - Skip confirmation prompt (deploy/update/delete)"
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --s3_app_config_uri s3://my-bucket/config/dev/app_config.yaml  # Default: no VPC; uploads config/dev/app_config.yaml if present"
@@ -145,9 +126,8 @@ IMAGE_TAG="latest"
 LAMBDA_MEMORY_SIZE=1024
 LAMBDA_TIMEOUT=300
 SKIP_BUILD=false
+AUTO_CONFIRM=false
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 # Change to project root directory
@@ -226,6 +206,10 @@ while [[ $# -gt 0 ]]; do
             AWS_REGION="$2"
             shift 2
             ;;
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
         *)
             # If it's not a recognized option, it might be the action
             if [[ "$ACTION" == "deploy" && "$1" != "deploy" && "$1" != "update" && "$1" != "delete" && "$1" != "validate" && "$1" != "status" && "$1" != "build" ]]; then
@@ -236,7 +220,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "Starting RAG Lambda deployment for $ENVIRONMENT environment"
+print_step "Starting RAG Lambda deployment for $ENVIRONMENT environment"
+
+# Summary and confirmation for deploy/update
+if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
+    print_info "Environment: $ENVIRONMENT | Region: $AWS_REGION | Stack: $STACK_NAME"
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_deployment "Proceed with $ACTION?" || exit 0
+    fi
+fi
 
 # Require an S3 app config URI for deploy/update so Lambda always uses S3 for APP_CONFIG_PATH
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
@@ -250,7 +242,7 @@ fi
 # Validate environment
 case $ENVIRONMENT in
     dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
+        print_info "Using environment: $ENVIRONMENT"
         ;;
     *)
         print_error "Invalid environment: $ENVIRONMENT"
@@ -272,7 +264,7 @@ get_aws_account_id() {
 
 # Function to get VPC stack outputs
 get_vpc_stack_outputs() {
-    print_status "Retrieving VPC stack outputs from: $VPC_STACK_NAME" >&2
+    print_info "Retrieving VPC stack outputs from: $VPC_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$VPC_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "VPC stack $VPC_STACK_NAME does not exist in region $AWS_REGION" >&2
@@ -301,7 +293,7 @@ get_vpc_stack_outputs() {
 
 # Function to get DB stack outputs
 get_db_stack_outputs() {
-    print_status "Retrieving DB stack outputs from: $DB_STACK_NAME" >&2
+    print_info "Retrieving DB stack outputs from: $DB_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "DB stack $DB_STACK_NAME does not exist in region $AWS_REGION" >&2
@@ -343,7 +335,7 @@ get_db_stack_outputs() {
 
 # Function to get KB stack outputs
 get_kb_stack_outputs() {
-    print_status "Retrieving KB stack outputs from: $KB_STACK_NAME" >&2
+    print_info "Retrieving KB stack outputs from: $KB_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$KB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "KB stack $KB_STACK_NAME does not exist in region $AWS_REGION" >&2
@@ -366,7 +358,7 @@ get_kb_stack_outputs() {
 
 # Function to deploy Lambda execution role stack
 deploy_lambda_role_stack() {
-    print_status "Deploying Lambda execution role stack: $ROLE_STACK_NAME"
+    print_info "Deploying Lambda execution role stack: $ROLE_STACK_NAME"
     
     # Check if template file exists
     if [ ! -f "$ROLE_TEMPLATE_FILE" ]; then
@@ -376,7 +368,7 @@ deploy_lambda_role_stack() {
     
     # Check if role stack already exists
     if aws cloudformation describe-stacks --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_status "Lambda role stack $ROLE_STACK_NAME already exists"
+        print_info "Lambda role stack $ROLE_STACK_NAME already exists"
         return 0
     fi
     
@@ -397,22 +389,22 @@ deploy_lambda_role_stack() {
     } > "$role_param_file"
     
     # Create the role stack
-    print_status "Creating Lambda execution role stack..."
+    print_info "Creating Lambda execution role stack..."
     if aws cloudformation create-stack \
         --stack-name "$ROLE_STACK_NAME" \
         --template-body file://$ROLE_TEMPLATE_FILE \
         --parameters file://$role_param_file \
         --capabilities CAPABILITY_NAMED_IAM \
         --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_status "Lambda role stack creation initiated"
-        print_status "Waiting for role stack to be ready..."
+        print_info "Lambda role stack creation initiated"
+        print_info "Waiting for role stack to be ready..."
         
         # Wait for stack to be created
         aws cloudformation wait stack-create-complete --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" 2>/dev/null
         local wait_result=$?
         
         if [ $wait_result -eq 0 ]; then
-            print_status "Lambda role stack created successfully"
+            print_info "Lambda role stack created successfully"
             return 0
         else
             # Check if stack is actually in a good state
@@ -423,7 +415,7 @@ deploy_lambda_role_stack() {
                 --output text 2>/dev/null)
             
             if [ "$stack_status" == "CREATE_COMPLETE" ]; then
-                print_status "Lambda role stack created successfully"
+                print_info "Lambda role stack created successfully"
                 return 0
             else
                 print_error "Lambda role stack creation failed or timed out. Status: $stack_status"
@@ -438,7 +430,7 @@ deploy_lambda_role_stack() {
 
 # Function to get Lambda role ARN
 get_lambda_role_arn() {
-    print_status "Retrieving Lambda execution role ARN from: $ROLE_STACK_NAME" >&2
+    print_info "Retrieving Lambda execution role ARN from: $ROLE_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$ROLE_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "Lambda role stack $ROLE_STACK_NAME does not exist in region $AWS_REGION" >&2
@@ -491,7 +483,7 @@ EOF
         --repository-name "$repo_name" \
         --lifecycle-policy-text "file://$policy_file" \
         --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_status "ECR lifecycle policy applied: keep ${keep_count} most recent images" >&2
+        print_info "ECR lifecycle policy applied: keep ${keep_count} most recent images" >&2
     else
         print_warning "Failed to apply ECR lifecycle policy (repo may still work)" >&2
     fi
@@ -500,18 +492,18 @@ EOF
 # Function to create ECR repository if it doesn't exist
 ensure_ecr_repo() {
     local repo_name=$1
-    print_status "Checking ECR repository: $repo_name" >&2
+    print_info "Checking ECR repository: $repo_name" >&2
     
     if aws ecr describe-repositories --repository-names "$repo_name" --region "$AWS_REGION" >/dev/null 2>&1; then
-        print_status "ECR repository $repo_name already exists" >&2
+        print_info "ECR repository $repo_name already exists" >&2
     else
-        print_status "Creating ECR repository: $repo_name" >&2
+        print_info "Creating ECR repository: $repo_name" >&2
         aws ecr create-repository \
             --repository-name "$repo_name" \
             --region "$AWS_REGION" \
             --image-scanning-configuration scanOnPush=true \
             --encryption-configuration encryptionType=AES256 >/dev/null 2>&1
-        print_status "ECR repository created successfully" >&2
+        print_info "ECR repository created successfully" >&2
     fi
 
     # Apply lifecycle policy: keep last 5 images, expire oldest when limit exceeded
@@ -521,7 +513,7 @@ ensure_ecr_repo() {
 # Function to build and push Docker image
 build_and_push_image() {
     if [ "$SKIP_BUILD" = true ]; then
-        print_status "Skipping Docker build (--skip-build flag set)" >&2
+        print_info "Skipping Docker build (--skip-build flag set)" >&2
         return 0
     fi
     
@@ -534,9 +526,9 @@ build_and_push_image() {
     local ecr_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
     local image_uri="${ecr_uri}:${IMAGE_TAG}"
     
-    print_status "Building Docker image: rag-lambda" >&2
-    print_status "Dockerfile: src/rag_lambda/Dockerfile" >&2
-    print_status "Platform: linux/amd64 (x86_64)" >&2
+    print_info "Building Docker image: rag-lambda" >&2
+    print_info "Dockerfile: src/rag_lambda/Dockerfile" >&2
+    print_info "Platform: linux/amd64 (x86_64)" >&2
     
     # Build the image for x86_64 architecture (Lambda default)
     # Use --platform to ensure correct architecture even when building on ARM Macs
@@ -547,21 +539,21 @@ build_and_push_image() {
         exit 1
     fi
     
-    print_status "Docker image built successfully" >&2
+    print_info "Docker image built successfully" >&2
     
     # Ensure ECR repository exists
     ensure_ecr_repo "$ECR_REPO_NAME"
     
     # Login to ECR
-    print_status "Logging in to ECR..." >&2
+    print_info "Logging in to ECR..." >&2
     aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ecr_uri" >/dev/null 2>&1
     
     # Tag the image
-    print_status "Tagging image: $image_uri" >&2
+    print_info "Tagging image: $image_uri" >&2
     docker tag rag-lambda:latest "$image_uri"
     
     # Push the image (redirect stdout to stderr to prevent it from being captured)
-    print_status "Pushing image to ECR: $image_uri" >&2
+    print_info "Pushing image to ECR: $image_uri" >&2
     docker push "$image_uri" 1>&2
     
     if [ $? -ne 0 ]; then
@@ -569,15 +561,15 @@ build_and_push_image() {
         exit 1
     fi
     
-    print_status "Image pushed successfully: $image_uri" >&2
+    print_info "Image pushed successfully: $image_uri" >&2
     echo "$image_uri"
 }
 
 # Function to validate template
 validate_template() {
-    print_status "Validating CloudFormation template..."
+    print_info "Validating CloudFormation template..."
     if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Template validation successful"
+        print_info "Template validation successful"
     else
         print_error "Template validation failed"
         exit 1
@@ -642,11 +634,11 @@ check_stack_status() {
 
 # Function to show stack status
 show_status() {
-    print_status "Checking stack status: $STACK_NAME"
+    print_info "Checking stack status: $STACK_NAME"
     if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
         aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
         echo ""
-        print_status "Stack outputs:"
+        print_info "Stack outputs:"
         aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs'
     else
         print_warning "Stack $STACK_NAME does not exist"
@@ -655,7 +647,7 @@ show_status() {
 
 # Function to deploy stack
 deploy_stack() {
-    print_status "Deploying CloudFormation stack: $STACK_NAME"
+    print_info "Deploying CloudFormation stack: $STACK_NAME"
     
     # Get or build image URI
     local image_uri=""
@@ -673,7 +665,7 @@ deploy_stack() {
             print_error "Cannot skip build: no existing image URI found. Please build the image first or remove --skip-build flag."
             exit 1
         fi
-        print_status "Using existing image URI: $image_uri"
+        print_info "Using existing image URI: $image_uri"
     else
         image_uri=$(build_and_push_image)
     fi
@@ -688,25 +680,25 @@ deploy_stack() {
             print_error "Invalid --s3_app_config_uri: $APP_CONFIG_S3_URI (expected s3://bucket/key)"
             exit 1
         fi
-        print_status "Uploading local app config to S3 (overwrite): $LOCAL_APP_CONFIG_PATH -> $APP_CONFIG_S3_URI"
+        print_info "Uploading local app config to S3 (overwrite): $LOCAL_APP_CONFIG_PATH -> $APP_CONFIG_S3_URI"
         aws s3 cp "$LOCAL_APP_CONFIG_PATH" "$APP_CONFIG_S3_URI" --region "$AWS_REGION" >/dev/null
-        print_status "Uploaded app config to S3 successfully"
+        print_info "Uploaded app config to S3 successfully"
     fi
     
     # VPC configuration: default is no VPC; only use VPC when user provides --vpc-id
     if [ -z "$VPC_ID" ]; then
-        print_status "No VPC specified. Deploying Lambda without VPC (default)."
+        print_info "No VPC specified. Deploying Lambda without VPC (default)."
         VPC_ID=""
         SUBNET_IDS=""
         SECURITY_GROUP_IDS=""
     else
         # User provided VPC; ensure we have subnets and security groups (auto-detect if missing)
         if [ -z "$SUBNET_IDS" ]; then
-            print_status "Auto-detecting subnet IDs from VPC stack..."
+            print_info "Auto-detecting subnet IDs from VPC stack..."
             local vpc_outputs=$(get_vpc_stack_outputs)
             if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
                 SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
-                print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
+                print_info "Auto-detected Subnet IDs: $SUBNET_IDS"
             fi
         fi
         if [ -z "$SUBNET_IDS" ]; then
@@ -714,7 +706,7 @@ deploy_stack() {
             exit 1
         fi
         if [ -z "$SECURITY_GROUP_IDS" ]; then
-            print_status "Auto-detecting security group IDs from DB stack..."
+            print_info "Auto-detecting security group IDs from DB stack..."
             if aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
                 local sg_id=$(aws cloudformation describe-stacks \
                     --stack-name "$DB_STACK_NAME" \
@@ -723,7 +715,7 @@ deploy_stack() {
                     --output text 2>/dev/null)
                 if [ -n "$sg_id" ] && [ "$sg_id" != "None" ]; then
                     SECURITY_GROUP_IDS="$sg_id"
-                    print_status "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
+                    print_info "Auto-detected Security Group ID: $SECURITY_GROUP_IDS"
                 fi
             fi
         fi
@@ -731,15 +723,15 @@ deploy_stack() {
             print_error "Security Group IDs are required when VPC is configured. Provide --security-group-ids or ensure DB stack has security group output."
             exit 1
         fi
-        print_status "Deploying Lambda with VPC (subnets and security groups)."
+        print_info "Deploying Lambda with VPC (subnets and security groups)."
     fi
     
     if [ -z "$DB_SECRET_ARN" ]; then
-        print_status "Auto-detecting DB secret ARN..."
+        print_info "Auto-detecting DB secret ARN..."
         local secret_arn=$(get_db_stack_outputs)
         if [ $? -eq 0 ] && [ -n "$secret_arn" ]; then
             DB_SECRET_ARN="$secret_arn"
-            print_status "Auto-detected DB Secret ARN: $DB_SECRET_ARN"
+            print_info "Auto-detected DB Secret ARN: $DB_SECRET_ARN"
         fi
     fi
     
@@ -750,20 +742,20 @@ deploy_stack() {
     fi
     
     if [ -z "$KNOWLEDGE_BASE_ID" ]; then
-        print_status "Auto-detecting Knowledge Base ID..."
+        print_info "Auto-detecting Knowledge Base ID..."
         local kb_id=$(get_kb_stack_outputs)
         if [ $? -eq 0 ] && [ -n "$kb_id" ]; then
             KNOWLEDGE_BASE_ID="$kb_id"
-            print_status "Auto-detected Knowledge Base ID: $KNOWLEDGE_BASE_ID"
+            print_info "Auto-detected Knowledge Base ID: $KNOWLEDGE_BASE_ID"
         fi
     fi
     
     if [ -z "$LAMBDA_ROLE_ARN" ]; then
-        print_status "Auto-detecting Lambda execution role ARN..."
+        print_info "Auto-detecting Lambda execution role ARN..."
         local role_arn=$(get_lambda_role_arn)
         if [ $? -eq 0 ] && [ -n "$role_arn" ]; then
             LAMBDA_ROLE_ARN="$role_arn"
-            print_status "Auto-detected Lambda Role ARN: $LAMBDA_ROLE_ARN"
+            print_info "Auto-detected Lambda Role ARN: $LAMBDA_ROLE_ARN"
         fi
     fi
     
@@ -778,7 +770,7 @@ deploy_stack() {
         local role_arn=$(get_lambda_role_arn)
         if [ $? -eq 0 ] && [ -n "$role_arn" ]; then
             LAMBDA_ROLE_ARN="$role_arn"
-            print_status "Retrieved Lambda Role ARN: $LAMBDA_ROLE_ARN"
+            print_info "Retrieved Lambda Role ARN: $LAMBDA_ROLE_ARN"
         else
             print_error "Failed to retrieve Lambda execution role ARN after deployment."
             exit 1
@@ -789,7 +781,7 @@ deploy_stack() {
     local config_bucket=""
     if [[ "$APP_CONFIG_S3_URI" =~ ^s3://([^/]+) ]]; then
         config_bucket="${BASH_REMATCH[1]}"
-        print_status "Extracted S3 bucket from URI: $config_bucket"
+        print_info "Extracted S3 bucket from URI: $config_bucket"
     else
         print_error "Invalid --s3_app_config_uri: $APP_CONFIG_S3_URI (expected s3://bucket/key)"
         exit 1
@@ -858,7 +850,7 @@ deploy_stack() {
         # Check if the error is "No updates are to be performed"
         if [ $stack_operation_result -ne 0 ]; then
             if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $STACK_NAME. Stack is already up to date."
+                print_info "No updates needed for stack $STACK_NAME. Stack is already up to date."
                 no_updates=true
                 stack_operation_result=0  # Treat as success
             else
@@ -866,10 +858,10 @@ deploy_stack() {
                 echo "$update_output"
             fi
         else
-            print_status "Stack update initiated successfully"
+            print_info "Stack update initiated successfully"
         fi
     else
-        print_status "Creating new stack: $STACK_NAME"
+        print_info "Creating new stack: $STACK_NAME"
         local create_output=$(aws cloudformation create-stack \
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
@@ -882,14 +874,14 @@ deploy_stack() {
             print_error "Stack creation failed:"
             echo "$create_output"
         else
-            print_status "Stack creation initiated successfully"
+            print_info "Stack creation initiated successfully"
         fi
     fi
     
     if [ $stack_operation_result -eq 0 ]; then
         if [ "$no_updates" = false ]; then
-            print_status "Stack operation initiated successfully"
-            print_status "Waiting for stack to be ready (this may take several minutes)..."
+            print_info "Stack operation initiated successfully"
+            print_info "Waiting for stack to be ready (this may take several minutes)..."
             
             # Determine which wait command to use
             local is_update=false
@@ -921,7 +913,7 @@ deploy_stack() {
                         --output text 2>/dev/null)
                     
                     if [ -n "$stack_status" ] && [ "$stack_status" != "None" ]; then
-                        print_status "Stack status: $stack_status (elapsed: ${elapsed}s)" >&2
+                        print_info "Stack status: $stack_status (elapsed: ${elapsed}s)" >&2
                     fi
                 done
             ) &
@@ -943,11 +935,11 @@ deploy_stack() {
             # Wait for stack operation to complete
             local wait_result=0
             if [ "$is_update" = true ]; then
-                print_status "Waiting for stack update to complete..."
+                print_info "Waiting for stack update to complete..."
                 aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>&1
                 wait_result=$?
             else
-                print_status "Waiting for stack creation to complete..."
+                print_info "Waiting for stack creation to complete..."
                 aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>&1
                 wait_result=$?
             fi
@@ -978,7 +970,7 @@ deploy_stack() {
             fi
             
             if [ $wait_result -eq 0 ]; then
-                print_status "Stack operation completed successfully"
+                print_info "Stack operation completed successfully"
             else
                 # Wait command may have failed, but check if stack is actually in a good state
                 local final_status=$(aws cloudformation describe-stacks \
@@ -988,7 +980,7 @@ deploy_stack() {
                     --output text 2>/dev/null)
                 
                 if [[ "$final_status" == "CREATE_COMPLETE" ]] || [[ "$final_status" == "UPDATE_COMPLETE" ]]; then
-                    print_status "Stack operation completed successfully (status: $final_status)"
+                    print_info "Stack operation completed successfully (status: $final_status)"
                 elif ! check_stack_status; then
                     print_error "Stack deployment failed. See errors above."
                     exit 1
@@ -1002,7 +994,7 @@ deploy_stack() {
                 print_error "Stack is in a failed state. See errors above."
                 exit 1
             fi
-            print_status "Stack is up to date and ready."
+            print_info "Stack is up to date and ready."
         fi
         
         # Get and display Lambda function name
@@ -1013,19 +1005,19 @@ deploy_stack() {
             --output text 2>/dev/null)
         
         if [ -n "$lambda_name" ] && [ "$lambda_name" != "None" ]; then
-            print_status "Lambda Function Name: $lambda_name"
+            print_info "Lambda Function Name: $lambda_name"
             
             # Explicitly update Lambda function to use the latest image
             # This ensures the function picks up the new image even if the tag hasn't changed
-            print_status "Updating Lambda function to use latest image: $image_uri"
+            print_info "Updating Lambda function to use latest image: $image_uri"
             if aws lambda update-function-code \
                 --function-name "$lambda_name" \
                 --image-uri "$image_uri" \
                 --region "$AWS_REGION" >/dev/null 2>&1; then
-                print_status "Lambda function code updated successfully"
+                print_info "Lambda function code updated successfully"
                 
                 # Wait for the function update to complete
-                print_status "Waiting for Lambda function update to complete..."
+                print_info "Waiting for Lambda function update to complete..."
                 local update_wait_start=$(date +%s)
                 local max_wait=60  # Wait up to 60 seconds
                 
@@ -1037,7 +1029,7 @@ deploy_stack() {
                         --output text 2>/dev/null)
                     
                     if [ "$update_status" == "Successful" ]; then
-                        print_status "Lambda function update completed successfully"
+                        print_info "Lambda function update completed successfully"
                         break
                     elif [ "$update_status" == "Failed" ]; then
                         print_warning "Lambda function update failed. Check Lambda console for details."
@@ -1059,11 +1051,11 @@ deploy_stack() {
                 print_warning "Try running: aws lambda update-function-code --function-name $lambda_name --image-uri $image_uri --region $AWS_REGION"
             fi
             
-            print_status "You can invoke the function or set up API Gateway to expose it."
+            print_info "You can invoke the function or set up API Gateway to expose it."
         fi
         
-        print_status "You can monitor the progress in the AWS Console or with:"
-        print_status "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
+        print_info "You can monitor the progress in the AWS Console or with:"
+        print_info "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
     else
         print_error "Stack operation failed to initiate"
         exit 1
@@ -1072,24 +1064,16 @@ deploy_stack() {
 
 # Function to delete stack
 delete_stack() {
-    print_warning "Deleting CloudFormation stack: $STACK_NAME"
-    print_warning "This will delete:"
-    print_warning "  - Lambda function"
-    print_warning "  - CloudWatch log group"
-    print_warning "Note: This does NOT delete the ECR image or the Lambda execution role"
-    read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
-        if [ $? -eq 0 ]; then
-            print_status "Stack deletion initiated"
-            print_status "This may take several minutes to complete."
-        else
-            print_error "Failed to initiate stack deletion"
-            exit 1
-        fi
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_destructive_action "$ENVIRONMENT" "delete RAG Lambda stack ($STACK_NAME)" || exit 0
+    fi
+    aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
+    if [ $? -eq 0 ]; then
+        print_info "Stack deletion initiated"
+        print_info "This may take several minutes to complete."
     else
-        print_status "Stack deletion cancelled"
+        print_error "Failed to initiate stack deletion"
+        exit 1
     fi
 }
 
@@ -1103,7 +1087,7 @@ case $ACTION in
         ;;
     build)
         build_and_push_image
-        print_status "Docker image build and push completed"
+        print_info "Docker image build and push completed"
         ;;
     deploy|update)
         validate_template
@@ -1119,5 +1103,5 @@ case $ACTION in
         ;;
 esac
 
-print_status "RAG Lambda operation completed successfully"
+print_info "RAG Lambda operation completed successfully"
 

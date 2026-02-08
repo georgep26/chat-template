@@ -33,29 +33,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[AURORA DB]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
 show_usage() {
@@ -87,6 +67,7 @@ show_usage() {
     echo "  --public-ip <ip>              - Public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Auto-detected if not provided."
     echo "  --public-ip2 <ip>             - Second public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
     echo "  --public-ip3 <ip>             - Third public IP address to allow (CIDR format, e.g., 1.2.3.4/32). Optional."
+    echo "  -y, --yes                      - Skip confirmation prompt (deploy/update/delete)"
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy --master-password mypass123"
@@ -120,12 +101,10 @@ SECRET_TEMPLATE_FILE="infra/resources/db_secret_template.yaml"
 SECRET_NAME="db-connection"
 VPC_STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-
-# Change to project root directory
 cd "$PROJECT_ROOT"
+
+AUTO_CONFIRM=false
 
 # Parse additional arguments
 # VPC ID and subnet IDs can be provided via:
@@ -148,6 +127,10 @@ PUBLIC_IP3=""  # Optional third IP
 shift 1  # Remove environment from arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
         --master-password)
             MASTER_PASSWORD="$2"
             shift 2
@@ -202,12 +185,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "Starting Aurora DB deployment for $ENVIRONMENT environment"
+print_step "Starting Aurora DB deployment for $ENVIRONMENT environment"
+
+if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
+    print_info "Environment: $ENVIRONMENT | Region: $AWS_REGION | Stack: $STACK_NAME"
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_deployment "Proceed with $ACTION?" || exit 0
+    fi
+fi
 
 # Validate environment
 case $ENVIRONMENT in
     dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
+        print_info "Using environment: $ENVIRONMENT"
         ;;
     *)
         print_error "Invalid environment: $ENVIRONMENT"
@@ -239,7 +229,7 @@ get_base_parameters() {
 
 # Function to get public IP address
 get_public_ip() {
-    print_status "Detecting your public IP address..." >&2
+    print_info "Detecting your public IP address..." >&2
     
     # Try multiple services in case one is unavailable
     local public_ip=""
@@ -333,7 +323,7 @@ build_parameters_array() {
         fi
     fi
     
-    print_status "Using public IP: ${public_ip_cidr}"
+    print_info "Using public IP: ${public_ip_cidr}"
     params+=("ParameterKey=AllowedPublicIP,ParameterValue=$public_ip_cidr")
     
     # Add second IP if provided
@@ -345,7 +335,7 @@ build_parameters_array() {
             else
                 public_ip2_cidr="${PUBLIC_IP2}/32"
             fi
-            print_status "Using second public IP: ${public_ip2_cidr}"
+            print_info "Using second public IP: ${public_ip2_cidr}"
             params+=("ParameterKey=AllowedPublicIP2,ParameterValue=$public_ip2_cidr")
         else
             print_error "Invalid IP address format for IP2: $PUBLIC_IP2"
@@ -362,7 +352,7 @@ build_parameters_array() {
             else
                 public_ip3_cidr="${PUBLIC_IP3}/32"
             fi
-            print_status "Using third public IP: ${public_ip3_cidr}"
+            print_info "Using third public IP: ${public_ip3_cidr}"
             params+=("ParameterKey=AllowedPublicIP3,ParameterValue=$public_ip3_cidr")
         else
             print_error "Invalid IP address format for IP3: $PUBLIC_IP3"
@@ -376,7 +366,7 @@ build_parameters_array() {
 
 # Function to get VPC stack outputs
 get_vpc_stack_outputs() {
-    print_status "Retrieving VPC stack outputs from: $VPC_STACK_NAME" >&2
+    print_info "Retrieving VPC stack outputs from: $VPC_STACK_NAME" >&2
     
     if ! aws cloudformation describe-stacks --stack-name "$VPC_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         print_warning "VPC stack $VPC_STACK_NAME does not exist in region $AWS_REGION" >&2
@@ -405,9 +395,9 @@ get_vpc_stack_outputs() {
 
 # Function to validate template
 validate_template() {
-    print_status "Validating CloudFormation template..."
+    print_info "Validating CloudFormation template..."
     if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Template validation successful"
+        print_info "Template validation successful"
     else
         print_error "Template validation failed"
         exit 1
@@ -472,11 +462,11 @@ check_stack_status() {
 
 # Function to show stack status
 show_status() {
-    print_status "Checking stack status: $STACK_NAME"
+    print_info "Checking stack status: $STACK_NAME"
     if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
         aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
         echo ""
-        print_status "Stack outputs:"
+        print_info "Stack outputs:"
         aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs'
     else
         print_warning "Stack $STACK_NAME does not exist"
@@ -588,12 +578,12 @@ deploy_secret() {
     # Check if secret exists (name matches template: ProjectName-SecretName-Environment)
     local secret_full_name="${PROJECT_NAME}-${SECRET_NAME}-${ENVIRONMENT}"
     if check_secret_exists; then
-        print_status "Secret $secret_full_name already exists. Skipping secret creation."
-        print_status "To update the secret, delete it first or update it manually in AWS Secrets Manager."
+        print_info "Secret $secret_full_name already exists. Skipping secret creation."
+        print_info "To update the secret, delete it first or update it manually in AWS Secrets Manager."
         return 0
     fi
     
-    print_status "Secret does not exist. Creating secret..."
+    print_info "Secret does not exist. Creating secret..."
     
     # Prompt for credentials if not provided
     if ! prompt_db_credentials; then
@@ -632,7 +622,7 @@ deploy_secret() {
         echo "]"
     } > "$secret_param_file"
     
-    print_status "Deploying secret stack: $SECRET_STACK_NAME"
+    print_info "Deploying secret stack: $SECRET_STACK_NAME"
     
     # Check if secret stack exists
     if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
@@ -643,7 +633,7 @@ deploy_secret() {
             --parameters file://$secret_param_file \
             --region $AWS_REGION
     else
-        print_status "Creating new secret stack: $SECRET_STACK_NAME"
+        print_info "Creating new secret stack: $SECRET_STACK_NAME"
         aws cloudformation create-stack \
             --stack-name $SECRET_STACK_NAME \
             --template-body file://$SECRET_TEMPLATE_FILE \
@@ -656,14 +646,14 @@ deploy_secret() {
         return 1
     fi
 
-    print_status "Secret stack operation initiated successfully"
-    print_status "Waiting for secret stack to reach CREATE_COMPLETE or UPDATE_COMPLETE..."
+    print_info "Secret stack operation initiated successfully"
+    print_info "Waiting for secret stack to reach CREATE_COMPLETE or UPDATE_COMPLETE..."
     if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null | grep -q "CREATE_IN_PROGRESS"; then
         aws cloudformation wait stack-create-complete --stack-name $SECRET_STACK_NAME --region $AWS_REGION
     elif aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null | grep -q "UPDATE_IN_PROGRESS"; then
         aws cloudformation wait stack-update-complete --stack-name $SECRET_STACK_NAME --region $AWS_REGION
     fi
-    print_status "Secret will be available at: $secret_full_name"
+    print_info "Secret will be available at: $secret_full_name"
 }
 
 # Function to deploy stack
@@ -672,13 +662,13 @@ deploy_stack() {
     
     # Auto-detect VPC and subnet IDs if not provided
     if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
-        print_status "Auto-detecting VPC and subnet IDs..."
+        print_info "Auto-detecting VPC and subnet IDs..."
         local vpc_outputs=$(get_vpc_stack_outputs)
         if [ $? -eq 0 ] && [ -n "$vpc_outputs" ]; then
             VPC_ID=$(echo "$vpc_outputs" | cut -d'|' -f1)
             SUBNET_IDS=$(echo "$vpc_outputs" | cut -d'|' -f2)
-            print_status "Auto-detected VPC ID: $VPC_ID"
-            print_status "Auto-detected Subnet IDs: $SUBNET_IDS"
+            print_info "Auto-detected VPC ID: $VPC_ID"
+            print_info "Auto-detected Subnet IDs: $SUBNET_IDS"
         fi
     fi
     
@@ -700,7 +690,7 @@ deploy_stack() {
         exit 1
     fi
     
-    print_status "Deploying CloudFormation stack: $STACK_NAME"
+    print_info "Deploying CloudFormation stack: $STACK_NAME"
     
     # Get public IP first (before building JSON to avoid status messages in JSON)
     local public_ip_cidr=""
@@ -726,7 +716,7 @@ deploy_stack() {
         fi
     fi
     
-    print_status "Using public IP: ${public_ip_cidr}"
+    print_info "Using public IP: ${public_ip_cidr}"
     
     # Process second IP if provided
     local public_ip2_cidr=""
@@ -737,7 +727,7 @@ deploy_stack() {
             else
                 public_ip2_cidr="${PUBLIC_IP2}/32"
             fi
-            print_status "Using second public IP: ${public_ip2_cidr}"
+            print_info "Using second public IP: ${public_ip2_cidr}"
         else
             print_error "Invalid IP address format for IP2: $PUBLIC_IP2"
             exit 1
@@ -753,7 +743,7 @@ deploy_stack() {
             else
                 public_ip3_cidr="${PUBLIC_IP3}/32"
             fi
-            print_status "Using third public IP: ${public_ip3_cidr}"
+            print_info "Using third public IP: ${public_ip3_cidr}"
         else
             print_error "Invalid IP address format for IP3: $PUBLIC_IP3"
             exit 1
@@ -821,7 +811,7 @@ deploy_stack() {
         # Check if the error is "No updates are to be performed"
         if [ $stack_operation_result -ne 0 ]; then
             if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $STACK_NAME. Stack is already up to date."
+                print_info "No updates needed for stack $STACK_NAME. Stack is already up to date."
                 no_updates=true
                 stack_operation_result=0  # Treat as success
             else
@@ -830,7 +820,7 @@ deploy_stack() {
             fi
         fi
     else
-        print_status "Creating new stack: $STACK_NAME"
+        print_info "Creating new stack: $STACK_NAME"
         aws cloudformation create-stack \
             --stack-name $STACK_NAME \
             --template-body file://$TEMPLATE_FILE \
@@ -842,11 +832,11 @@ deploy_stack() {
     
     if [ $stack_operation_result -eq 0 ]; then
         if [ "$no_updates" = false ]; then
-            print_status "Stack operation initiated successfully"
-            print_status "Waiting for stack to be ready before creating secret..."
+            print_info "Stack operation initiated successfully"
+            print_info "Waiting for stack to be ready before creating secret..."
             
             # Wait for stack to be in a stable state
-            print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
+            print_info "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
             
             # Try waiting for create first, then update
             local wait_result=0
@@ -866,7 +856,7 @@ deploy_stack() {
             fi
             
             if [ $wait_result -eq 0 ]; then
-                print_status "Stack operation completed successfully"
+                print_info "Stack operation completed successfully"
             else
                 # Wait command timed out or failed, but check if stack is actually in a good state
                 if ! check_stack_status; then
@@ -881,14 +871,14 @@ deploy_stack() {
                 print_error "Stack is in a failed state. See errors above."
                 exit 1
             fi
-            print_status "Stack is up to date and ready."
+            print_info "Stack is up to date and ready."
         fi
         
         # Deploy secret after DB stack is ready
         deploy_secret
         
-        print_status "You can monitor the progress in the AWS Console or with:"
-        print_status "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
+        print_info "You can monitor the progress in the AWS Console or with:"
+        print_info "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
         print_warning "Note: Aurora Serverless v2 can scale to 0 ACU (with PostgreSQL 13.15+)."
         print_warning "      However, auto-pause after 30 minutes requires additional automation."
         print_warning "      The cluster will scale based on load but won't auto-pause without custom automation."
@@ -900,39 +890,32 @@ deploy_stack() {
 
 # Function to delete stack
 delete_stack() {
-    print_warning "Deleting CloudFormation stacks"
-    print_warning "This will delete:"
-    print_warning "  - Aurora database cluster and all data"
-    print_warning "  - Database connection secret"
-    read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Delete secret stack first (if it exists)
-        if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
-            print_status "Deleting secret stack: $SECRET_STACK_NAME"
-            aws cloudformation delete-stack --stack-name $SECRET_STACK_NAME --region $AWS_REGION
-            if [ $? -eq 0 ]; then
-                print_status "Secret stack deletion initiated"
-            else
-                print_error "Failed to initiate secret stack deletion"
-                exit 1
-            fi
-        else
-            print_status "Secret stack $SECRET_STACK_NAME does not exist, skipping"
-        fi
-        
-        # Delete DB stack
-        print_status "Deleting DB stack: $STACK_NAME"
-        aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_destructive_action "$ENVIRONMENT" "delete Aurora DB and secret stacks ($STACK_NAME, $SECRET_STACK_NAME)" || exit 0
+    fi
+    # Delete secret stack first (if it exists)
+    if aws cloudformation describe-stacks --stack-name $SECRET_STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
+        print_info "Deleting secret stack: $SECRET_STACK_NAME"
+        aws cloudformation delete-stack --stack-name $SECRET_STACK_NAME --region $AWS_REGION
         if [ $? -eq 0 ]; then
-            print_status "DB stack deletion initiated"
-            print_status "Both stacks are being deleted. This may take several minutes."
+            print_info "Secret stack deletion initiated"
         else
-            print_error "Failed to initiate DB stack deletion"
+            print_error "Failed to initiate secret stack deletion"
             exit 1
         fi
     else
-        print_status "Stack deletion cancelled"
+        print_info "Secret stack $SECRET_STACK_NAME does not exist, skipping"
+    fi
+
+    # Delete DB stack
+    print_info "Deleting DB stack: $STACK_NAME"
+    aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
+    if [ $? -eq 0 ]; then
+        print_info "DB stack deletion initiated"
+        print_info "Both stacks are being deleted. This may take several minutes."
+    else
+        print_error "Failed to initiate DB stack deletion"
+        exit 1
     fi
 }
 
@@ -962,5 +945,5 @@ case $ACTION in
         ;;
 esac
 
-print_status "Aurora DB operation completed successfully"
+print_complete "Aurora DB operation completed successfully"
 

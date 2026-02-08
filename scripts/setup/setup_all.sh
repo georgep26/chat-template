@@ -1,16 +1,15 @@
 #!/bin/bash
 
-# Full Application Deployment Script
-# This script orchestrates the deployment of all infrastructure components for the RAG chat application
-# Resources are deployed in the order they are defined in infra.yaml
-# Only enabled resources are deployed
+# Full Setup Script
+# This script runs all setup scripts in the correct order based on infra.yaml
+# Only enabled roles are set up
 #
 # Usage Examples:
-#   # Deploy to development environment
-#   ./scripts/deploy/deploy_all.sh dev
+#   # Set up all roles for dev environment
+#   ./scripts/setup/setup_all.sh dev
 #
-#   # Deploy with auto-confirmation (skip all prompts)
-#   ./scripts/deploy/deploy_all.sh dev -y
+#   # Set up with auto-confirmation
+#   ./scripts/setup/setup_all.sh dev -y
 
 set -e
 
@@ -25,7 +24,7 @@ source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 # =============================================================================
 
 show_usage() {
-    echo "Full Application Deployment Script"
+    echo "Full Setup Script"
     echo ""
     echo "Usage: $0 <environment> [options]"
     echo ""
@@ -37,8 +36,8 @@ show_usage() {
     echo "Options:"
     echo "  -y, --yes   - Skip all confirmation prompts"
     echo ""
-    echo "Note: Resources are deployed in the order defined in infra.yaml"
-    echo "      Only enabled resources (enabled: true) are deployed"
+    echo "Note: Only enabled roles in infra.yaml will be set up"
+    echo "      GitHub org/repo are read from secrets file"
     echo ""
     echo "Examples:"
     echo "  $0 dev"
@@ -84,7 +83,7 @@ done
 # Configuration Loading
 # =============================================================================
 
-print_header "Full Application Deployment"
+print_header "Full Setup"
 
 # Validate environment
 validate_environment "$ENVIRONMENT" || exit 1
@@ -100,45 +99,72 @@ AWS_REGION=$(get_environment_region "$ENVIRONMENT")
 AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
 [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
 
-# Change to project root
-PROJECT_ROOT=$(get_project_root)
-cd "$PROJECT_ROOT"
+# Get GitHub info from secrets
+GITHUB_ORG=$(get_secret_value "$ENVIRONMENT" "github.org" 2>/dev/null || echo "")
+GITHUB_REPO=$(get_secret_value "$ENVIRONMENT" "github.repo" 2>/dev/null || echo "")
 
-# =============================================================================
-# Deploy Summary
-# =============================================================================
+# Check if GitHub info is needed
+NEEDS_GITHUB=false
+if is_role_enabled "deployer" || is_role_enabled "evals"; then
+    NEEDS_GITHUB=true
+fi
 
-print_full_deploy_summary "$ENVIRONMENT" "deploy"
-
-# Confirm deployment
-if [ "$AUTO_CONFIRM" = false ]; then
-    confirm_deployment "Do you want to deploy all enabled components?" || exit 0
+if [ "$NEEDS_GITHUB" = true ] && ([ -z "$GITHUB_ORG" ] || [ -z "$GITHUB_REPO" ]); then
+    print_error "GitHub org and repo are required for deployer/evals roles"
+    print_info "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml:"
+    print_info "  github:"
+    print_info "    org: your-org"
+    print_info "    repo: your-repo"
+    exit 1
 fi
 
 # =============================================================================
-# Resource to Script Mapping
+# Setup Summary
 # =============================================================================
 
-get_deploy_script_for_resource() {
-    local resource=$1
-    case "$resource" in
-        network)
-            echo "deploy_network.sh"
+echo ""
+print_info "Setup configuration:"
+print_info "  Environment: $ENVIRONMENT"
+print_info "  Region: $AWS_REGION"
+[ -n "$GITHUB_ORG" ] && print_info "  GitHub Org: $GITHUB_ORG"
+[ -n "$GITHUB_REPO" ] && print_info "  GitHub Repo: $GITHUB_REPO"
+echo ""
+
+print_info "Roles to set up (based on infra.yaml):"
+ROLES=$(get_enabled_roles)
+while IFS= read -r role; do
+    [ -z "$role" ] && continue
+    print_info "  - $role"
+done <<< "$ROLES"
+echo ""
+
+# Confirm
+if [ "$AUTO_CONFIRM" = false ]; then
+    confirm_deployment "Proceed with setup?" || exit 0
+fi
+
+# =============================================================================
+# Role to Script Mapping
+# =============================================================================
+
+get_setup_script_for_role() {
+    local role=$1
+    case "$role" in
+        oidc_provider)
+            echo "setup_oidc_provider.sh"
             ;;
-        s3_bucket)
-            echo "deploy_s3_bucket.sh"
+        deployer)
+            echo "setup_deployer_roles.sh"
             ;;
-        chat_db)
-            echo "deploy_chat_template_db.sh"
+        evals)
+            echo "setup_evals_roles.sh"
             ;;
-        rag_knowledge_base)
-            echo "deploy_knowledge_base.sh"
+        cli)
+            echo "setup_cli_role.sh"
             ;;
-        rag_lambda_ecr)
-            echo "deploy_ecr_repo.sh"
-            ;;
-        rag_lambda)
-            echo "deploy_rag_lambda.sh"
+        rag_lambda_execution)
+            # This is deployed as part of the resource deployment, not setup
+            echo ""
             ;;
         *)
             echo ""
@@ -147,14 +173,15 @@ get_deploy_script_for_resource() {
 }
 
 # =============================================================================
-# Deployment Functions
+# Run Setup Scripts
 # =============================================================================
 
-run_deployment_script() {
+run_setup_script() {
     local script_name=$1
-    local resource_name=$2
+    local role_name=$2
+    local extra_args=("${@:3}")
     
-    print_step "Deploying: $resource_name"
+    print_step "Setting up: $role_name"
     
     if [ ! -f "$SCRIPT_DIR/$script_name" ]; then
         print_warning "Script not found: $SCRIPT_DIR/$script_name, skipping"
@@ -163,65 +190,51 @@ run_deployment_script() {
     
     chmod +x "$SCRIPT_DIR/$script_name"
     
-    if "$SCRIPT_DIR/$script_name" "$ENVIRONMENT" deploy -y; then
-        print_complete "$resource_name deployment completed"
+    if "$SCRIPT_DIR/$script_name" "$ENVIRONMENT" -y "${extra_args[@]}"; then
+        print_complete "$role_name setup completed"
         return 0
     else
-        print_error "$resource_name deployment failed"
+        print_error "$role_name setup failed"
         return 1
     fi
 }
 
-# =============================================================================
-# Main Deployment
-# =============================================================================
-
-DEPLOYMENT_STEPS=0
+SETUP_STEPS=0
 FAILED_STEPS=()
 SKIPPED_STEPS=()
 
-# Get enabled resources in order
-RESOURCES=$(get_enabled_resources)
-
-while IFS= read -r resource; do
-    [ -z "$resource" ] && continue
+# Process roles in order
+while IFS= read -r role; do
+    [ -z "$role" ] && continue
     
-    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
+    SETUP_STEPS=$((SETUP_STEPS + 1))
     
-    # Get the deployment script for this resource
-    script=$(get_deploy_script_for_resource "$resource")
+    # Get the setup script for this role
+    script=$(get_setup_script_for_role "$role")
     
     if [ -z "$script" ]; then
-        print_warning "No deployment script mapped for resource: $resource, skipping"
-        SKIPPED_STEPS+=("$resource")
+        print_info "Role $role does not require separate setup, skipping"
+        SKIPPED_STEPS+=("$role")
         continue
     fi
     
     echo ""
-    print_step "Step $DEPLOYMENT_STEPS: Deploying $resource"
+    print_step "Step $SETUP_STEPS: Setting up $role"
     
-    if ! run_deployment_script "$script" "$resource"; then
-        FAILED_STEPS+=("$resource")
-        print_error "Deployment failed at $resource. Stopping."
+    # Build extra args based on role type
+    extra_args=()
+    case "$role" in
+        deployer|evals)
+            extra_args=(--github-org "$GITHUB_ORG" --github-repo "$GITHUB_REPO")
+            ;;
+    esac
+    
+    if ! run_setup_script "$script" "$role" "${extra_args[@]}"; then
+        FAILED_STEPS+=("$role")
+        print_error "Setup failed at $role. Stopping."
         exit 1
     fi
-done <<< "$RESOURCES"
-
-# Deploy cost allocation tags
-echo ""
-print_step "Activating Cost Allocation Tags"
-
-if [ -f "$SCRIPT_DIR/deploy_cost_analysis_tags.sh" ]; then
-    chmod +x "$SCRIPT_DIR/deploy_cost_analysis_tags.sh"
-    
-    if "$SCRIPT_DIR/deploy_cost_analysis_tags.sh" activate 2>&1; then
-        print_complete "Cost allocation tags activation completed"
-    else
-        print_warning "Cost allocation tags activation failed or tags not found yet"
-    fi
-else
-    print_warning "Cost tags script not found, skipping activation"
-fi
+done <<< "$ROLES"
 
 # =============================================================================
 # Summary
@@ -230,11 +243,10 @@ fi
 echo ""
 echo ""
 draw_box_top 64
-draw_box_row_centered "DEPLOYMENT COMPLETE" 64
+draw_box_row_centered "SETUP COMPLETE" 64
 draw_box_separator 64
 draw_box_row "Environment: $ENVIRONMENT" 64
-draw_box_row "Region: $AWS_REGION" 64
-draw_box_row "Steps completed: $DEPLOYMENT_STEPS" 64
+draw_box_row "Steps completed: $SETUP_STEPS" 64
 if [ ${#SKIPPED_STEPS[@]} -gt 0 ]; then
     draw_box_row "Steps skipped: ${#SKIPPED_STEPS[@]}" 64
 fi
@@ -242,18 +254,18 @@ draw_box_bottom 64
 echo ""
 
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
-    print_complete "All deployment steps completed successfully!"
+    print_complete "All setup steps completed successfully!"
     echo ""
     print_info "Next steps:"
-    print_info "  1. Verify Lambda function is working"
-    print_info "  2. Set up API Gateway if needed"
-    print_info "  3. Test the application"
+    print_info "  1. Add role ARNs to GitHub repository secrets"
+    print_info "  2. Configure AWS CLI profiles for local development"
+    print_info "  3. Run deploy_all.sh to deploy infrastructure"
 else
-    print_error "Some deployment steps failed:"
+    print_error "Some setup steps failed:"
     for step in "${FAILED_STEPS[@]}"; do
         print_error "  - $step"
     done
     exit 1
 fi
 
-print_complete "Full application deployment completed successfully"
+print_complete "Full setup completed successfully"

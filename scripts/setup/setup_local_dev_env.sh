@@ -2,24 +2,8 @@
 
 set -e  # Exit on error
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Function to print colored messages
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
 
 # Detect OS
 detect_os() {
@@ -51,7 +35,7 @@ install_conda_macos() {
         print_info "Using Homebrew to install Miniconda..."
         brew install --cask miniconda
     else
-        print_warn "Homebrew not found. Installing Miniconda via direct download..."
+        print_warning "Homebrew not found. Installing Miniconda via direct download..."
         local installer="Miniconda3-latest-MacOSX-x86_64.sh"
         local url="https://repo.anaconda.com/miniconda/${installer}"
         
@@ -120,7 +104,7 @@ install_conda() {
 # Get the project root directory (parent of scripts directory)
 get_project_root() {
     local script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-    echo "$(dirname "$script_dir")"
+    echo "$(dirname "$(dirname "$script_dir")")"
 }
 
 # Main execution
@@ -129,7 +113,7 @@ main() {
     
     # Check if conda is installed
     if ! check_conda; then
-        print_warn "Conda is not installed."
+        print_warning "Conda is not installed."
         
         # Check if we're in an interactive terminal
         if [[ -t 0 ]]; then
@@ -177,7 +161,7 @@ main() {
     local env_name=$(grep '^name:' "$env_file" | awk '{print $2}')
     
     if conda env list | grep -q "^${env_name}"; then
-        print_warn "Environment already exists. Updating..."
+        print_warning "Environment already exists. Updating..."
         conda env update -f "$env_file"
     else
         conda env create -f "$env_file"
@@ -198,7 +182,7 @@ EOF
         chmod +x "$activate_script"
         print_info "Created activation script to set PYTHONPATH to project root"
     else
-        print_warn "Could not determine environment path. PYTHONPATH will need to be set manually."
+        print_warning "Could not determine environment path. PYTHONPATH will need to be set manually."
     fi
     
     print_info "Environment setup complete!"

@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy for Lambda function permissions - Bedrock, Secrets Manager, RDS Data API, S3'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+
+Resources:
+  # Bedrock Access Policy
+  BedrockAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-bedrock-policy'
+      Description: 'Bedrock permissions for Lambda function'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBedrockInvoke
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/*'
+          - Sid: AllowKnowledgeBaseRetrieval
+            Effect: Allow
+            Action:
+              - bedrock:Retrieve
+              - bedrock:RetrieveAndGenerate
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:knowledge-base/*'
+
+  # Secrets Manager Access Policy
+  SecretsManagerAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-secrets-policy'
+      Description: 'Secrets Manager permissions for Lambda function'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSecretsManagerRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:${AWSRegion}:${AWS::AccountId}:secret:${ProjectName}-*db-connection-${Environment}-*'
+
+  # S3 Config Access Policy
+  S3ConfigAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-s3-policy'
+      Description: 'S3 permissions for Lambda function config access'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3ConfigRead
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-config/*'
+          - Sid: AllowS3BucketList
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-config'
+
+  # RDS Data API Access Policy
+  RDSDataApiAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-lambda-rds-policy'
+      Description: 'RDS Data API permissions for Lambda function'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowRDSDataApiExecute
+            Effect: Allow
+            Action:
+              - rds-data:ExecuteStatement
+              - rds-data:BatchExecuteStatement
+            Resource:
+              - !Sub 'arn:aws:rds:${AWSRegion}:${AWS::AccountId}:cluster:${ProjectName}-light-db-cluster-${Environment}'
+          - Sid: AllowRDSDataApiDescribe
+            Effect: Allow
+            Action:
+              - rds:DescribeDBClusters
+            Resource:
+              - !Sub 'arn:aws:rds:${AWSRegion}:${AWS::AccountId}:cluster:${ProjectName}-light-db-cluster-${Environment}'
+
+Outputs:
+  BedrockPolicyArn:
+    Description: 'ARN of the Bedrock access policy'
+    Value: !Ref BedrockAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockPolicyArn'
+
+  SecretsManagerPolicyArn:
+    Description: 'ARN of the Secrets Manager access policy'
+    Value: !Ref SecretsManagerAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-SecretsManagerPolicyArn'
+
+  S3ConfigPolicyArn:
+    Description: 'ARN of the S3 config access policy'
+    Value: !Ref S3ConfigAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-S3ConfigPolicyArn'
+
+  RDSDataApiPolicyArn:
+    Description: 'ARN of the RDS Data API access policy'
+    Value: !Ref RDSDataApiAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSDataApiPolicyArn'

@@ -1,17 +1,15 @@
 #!/bin/bash
 
 # VPC Network Deployment Script
-# This script deploys the VPC, subnets, security groups, and VPC endpoints for the RAG chat application
+# This script deploys the VPC, subnets, security groups, and VPC endpoints
+# All configuration is read from infra.yaml
 #
 # Usage Examples:
-#   # Deploy to development environment (default region: us-east-1)
+#   # Deploy to development environment
 #   ./scripts/deploy/deploy_network.sh dev deploy
 #
-#   # Deploy to staging with custom VPC CIDR
-#   ./scripts/deploy/deploy_network.sh staging deploy --vpc-cidr 10.1.0.0/16
-#
-#   # Deploy without NAT Gateway (use only VPC endpoints)
-#   ./scripts/deploy/deploy_network.sh dev deploy --no-nat-gateway
+#   # Deploy with auto-confirmation (skip prompt)
+#   ./scripts/deploy/deploy_network.sh dev deploy -y
 #
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_network.sh dev validate
@@ -19,47 +17,28 @@
 #   # Check stack status
 #   ./scripts/deploy/deploy_network.sh dev status
 #
-#   # Update existing stack
-#   ./scripts/deploy/deploy_network.sh dev update
-#
-#   # Delete stack (with confirmation prompt)
+#   # Delete stack
 #   ./scripts/deploy/deploy_network.sh dev delete
-#
-# Note: This script creates:
-#       - VPC with public and private subnets (2 AZs)
-#       - Internet Gateway
-#       - NAT Gateway (optional, for outbound internet access)
-#       - Security Groups for Lambda and Database
-#       - VPC Endpoints for Bedrock, Secrets Manager, and S3
-#       - Route tables and associations
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Get script directory and source utilities
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+# =============================================================================
+# Script Configuration
+# =============================================================================
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
+RESOURCE_NAME="network"
+RESOURCE_DISPLAY_NAME="VPC Network"
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+# =============================================================================
+# Usage
+# =============================================================================
 
-print_header() {
-    echo -e "${BLUE}[NETWORK]${NC} $1"
-}
-
-# Function to show usage
 show_usage() {
     echo "VPC Network Deployment Script"
     echo ""
@@ -78,34 +57,15 @@ show_usage() {
     echo "  status    - Show stack status"
     echo ""
     echo "Options:"
-    echo "  --vpc-cidr <cidr>          - VPC CIDR block (default: 10.0.0.0/16)"
-    echo "  --no-nat-gateway           - Disable NAT Gateway (use only VPC endpoints)"
-    echo "  --region <region>          - AWS region (default: us-east-1)"
+    echo "  -y, --yes   - Skip confirmation prompt"
     echo ""
-    echo "Examples:"
-    echo "  $0 dev deploy"
-    echo "  $0 staging deploy --vpc-cidr 10.1.0.0/16"
-    echo "  $0 dev deploy --no-nat-gateway"
-    echo "  $0 prod validate"
-    echo ""
-    echo "Note: The script creates a complete network setup with:"
-    echo "      - VPC with public and private subnets (2 availability zones)"
-    echo "      - Security groups for Lambda and Database"
-    echo "      - VPC endpoints for Bedrock, Secrets Manager, and S3"
-    echo "      - Optional NAT Gateway for outbound internet access"
-    echo ""
-    echo "Cost Estimate:"
-    echo "  - VPC: Free"
-    echo "  - Subnets: Free"
-    echo "  - Internet Gateway: Free"
-    echo "  - NAT Gateway: ~\$32/month + data transfer (if enabled)"
-    echo "  - VPC Endpoints (Interface): ~\$7/month each + data transfer"
-    echo "  - VPC Endpoint (S3 Gateway): Free"
-    echo "  Total (with NAT): ~\$46/month + data transfer"
-    echo "  Total (without NAT): ~\$14/month + data transfer"
+    echo "Note: All configuration is read from infra/infra.yaml"
 }
 
-# Check if environment is provided
+# =============================================================================
+# Argument Parsing
+# =============================================================================
+
 if [ $# -lt 1 ]; then
     print_error "Environment is required"
     show_usage
@@ -113,307 +73,259 @@ if [ $# -lt 1 ]; then
 fi
 
 ENVIRONMENT=$1
-ACTION=${2:-deploy}
-STACK_NAME="chat-template-vpc-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/resources/vpc_template.yaml"
-PROJECT_NAME="chat-template"
-AWS_REGION="us-east-1"  # Default AWS region
-VPC_CIDR="10.0.0.0/16"
-ENABLE_NAT_GATEWAY="true"
+shift
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+# Default values
+ACTION="deploy"
+AUTO_CONFIRM=false
 
-# Change to project root directory
-cd "$PROJECT_ROOT"
-
-shift 1  # Remove environment from arguments
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --vpc-cidr)
-            VPC_CIDR="$2"
-            shift 2
-            ;;
-        --no-nat-gateway)
-            ENABLE_NAT_GATEWAY="false"
+        deploy|update|delete|validate|status)
+            ACTION="$1"
             shift
             ;;
-        --region)
-            AWS_REGION="$2"
-            shift 2
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
             ;;
         *)
-            # If it's not a recognized option, it might be the action
-            if [[ "$ACTION" == "deploy" && "$1" != "deploy" && "$1" != "update" && "$1" != "delete" && "$1" != "validate" && "$1" != "status" ]]; then
-                ACTION="$1"
-            fi
-            shift
+            print_error "Unknown option: $1"
+            show_usage
+            exit 1
             ;;
     esac
 done
 
-print_header "Starting network deployment for $ENVIRONMENT environment"
+# =============================================================================
+# Configuration Loading
+# =============================================================================
+
+print_header "$RESOURCE_DISPLAY_NAME Deployment"
 
 # Validate environment
-case $ENVIRONMENT in
-    dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
-        ;;
-    *)
-        print_error "Invalid environment: $ENVIRONMENT"
-        show_usage
+validate_environment "$ENVIRONMENT" || exit 1
+
+# Load configuration
+print_step "Loading configuration for $ENVIRONMENT environment"
+load_infra_config || exit 1
+validate_config "$ENVIRONMENT" || exit 1
+
+# Get values from config
+PROJECT_NAME=$(get_project_name)
+AWS_REGION=$(get_environment_region "$ENVIRONMENT")
+AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+
+STACK_NAME=$(get_resource_stack_name "$RESOURCE_NAME" "$ENVIRONMENT")
+TEMPLATE_FILE=$(get_resource_template "$RESOURCE_NAME")
+
+# Get config values
+VPC_CIDR=$(get_resource_config "$RESOURCE_NAME" "vpc_cidr")
+ENABLE_NAT_GATEWAY=$(get_resource_config "$RESOURCE_NAME" "enable_nat_gateway")
+
+# Change to project root
+PROJECT_ROOT=$(get_project_root)
+cd "$PROJECT_ROOT"
+
+# =============================================================================
+# AWS CLI Helper
+# =============================================================================
+
+aws_cmd() {
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+    else
+        aws --region "$AWS_REGION" "$@"
+    fi
+}
+
+# =============================================================================
+# Template Validation
+# =============================================================================
+
+do_validate_template() {
+    print_step "Validating CloudFormation template..."
+    
+    if [ ! -f "$TEMPLATE_FILE" ]; then
+        print_error "Template file not found: $TEMPLATE_FILE"
         exit 1
-        ;;
-esac
-
-# Check if template file exists
-if [ ! -f "$TEMPLATE_FILE" ]; then
-    print_error "Template file not found: $TEMPLATE_FILE"
-    exit 1
-fi
-
-# Function to validate template
-validate_template() {
-    print_status "Validating CloudFormation template..."
-    if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Template validation successful"
+    fi
+    
+    if aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" >/dev/null 2>&1; then
+        print_complete "Template validation successful"
     else
         print_error "Template validation failed"
         exit 1
     fi
 }
 
-# Function to check stack status and detect errors
+# =============================================================================
+# Stack Status
+# =============================================================================
+
 check_stack_status() {
-    local stack_status=$(aws cloudformation describe-stacks \
-        --stack-name $STACK_NAME \
-        --region $AWS_REGION \
+    local status=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
         --query 'Stacks[0].StackStatus' \
         --output text 2>/dev/null)
     
-    if [ -z "$stack_status" ]; then
+    if [ -z "$status" ]; then
         return 1
     fi
     
-    # Check for failure/rollback states
-    case "$stack_status" in
+    case "$status" in
         ROLLBACK_COMPLETE|CREATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
-            print_error "Stack is in failed state: $stack_status"
-            echo ""
-            
-            # Get stack status reason
-            local status_reason=$(aws cloudformation describe-stacks \
-                --stack-name $STACK_NAME \
-                --region $AWS_REGION \
-                --query 'Stacks[0].StackStatusReason' \
-                --output text 2>/dev/null)
-            
-            if [ -n "$status_reason" ] && [ "$status_reason" != "None" ]; then
-                print_error "Status Reason: $status_reason"
-                echo ""
-            fi
-            
-            # Get recent stack events with errors
-            print_error "Recent stack events with errors:"
-            echo ""
-            aws cloudformation describe-stack-events \
-                --stack-name $STACK_NAME \
-                --region $AWS_REGION \
-                --max-items 20 \
-                --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
-                --output table 2>/dev/null || true
-            
-            echo ""
-            print_error "For more details, check the AWS Console or run:"
-            print_error "aws cloudformation describe-stack-events --stack-name $STACK_NAME --region $AWS_REGION"
-            
+            print_error "Stack is in failed state: $status"
             return 1
             ;;
         CREATE_COMPLETE|UPDATE_COMPLETE)
             return 0
             ;;
         *)
-            # Other states (IN_PROGRESS, etc.) - not an error yet
             return 0
             ;;
     esac
 }
 
-# Function to show stack status
 show_status() {
-    print_status "Checking stack status: $STACK_NAME"
-    if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
-        aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
+    print_step "Checking stack status: $STACK_NAME"
+    
+    if aws_cmd cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+        aws_cmd cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
         echo ""
-        print_status "Stack outputs:"
-        aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs'
+        print_info "Stack outputs:"
+        aws_cmd cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Outputs'
     else
         print_warning "Stack $STACK_NAME does not exist"
     fi
 }
 
-# Function to deploy stack
+# =============================================================================
+# Deploy Stack
+# =============================================================================
+
 deploy_stack() {
-    print_status "Deploying CloudFormation stack: $STACK_NAME"
+    # Show deploy summary
+    print_resource_summary "$RESOURCE_NAME" "$ENVIRONMENT" "$ACTION"
+    print_info "VPC CIDR: $VPC_CIDR"
+    print_info "NAT Gateway: $ENABLE_NAT_GATEWAY"
     
-    # Create a temporary parameters file
+    # Confirm deployment
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_deployment || exit 0
+    fi
+    
+    print_step "Deploying CloudFormation stack: $STACK_NAME"
+    
+    # Create parameters file
     local param_file=$(mktemp)
     trap "rm -f $param_file" EXIT
     
-    # Build parameters JSON file
-    {
-        echo "["
-        printf '  {\n    "ParameterKey": "ProjectName",\n    "ParameterValue": "%s"\n  }' "$PROJECT_NAME"
-        echo ","
-        printf '  {\n    "ParameterKey": "Environment",\n    "ParameterValue": "%s"\n  }' "$ENVIRONMENT"
-        echo ","
-        printf '  {\n    "ParameterKey": "AWSRegion",\n    "ParameterValue": "%s"\n  }' "$AWS_REGION"
-        echo ","
-        printf '  {\n    "ParameterKey": "VpcCidr",\n    "ParameterValue": "%s"\n  }' "$VPC_CIDR"
-        echo ","
-        printf '  {\n    "ParameterKey": "EnableNatGateway",\n    "ParameterValue": "%s"\n  }' "$ENABLE_NAT_GATEWAY"
-        echo ""
-        echo "]"
-    } > "$param_file"
+    cat > "$param_file" << EOF
+[
+  {"ParameterKey": "ProjectName", "ParameterValue": "$PROJECT_NAME"},
+  {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
+  {"ParameterKey": "AWSRegion", "ParameterValue": "$AWS_REGION"},
+  {"ParameterKey": "VpcCidr", "ParameterValue": "$VPC_CIDR"},
+  {"ParameterKey": "EnableNatGateway", "ParameterValue": "$ENABLE_NAT_GATEWAY"}
+]
+EOF
     
     # Check if stack exists
-    local stack_operation_result=0
+    local stack_exists=false
     local no_updates=false
     
-    if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
-        print_warning "Stack $STACK_NAME already exists. Updating..."
-        local update_output=$(aws cloudformation update-stack \
-            --stack-name $STACK_NAME \
-            --template-body file://$TEMPLATE_FILE \
-            --parameters file://$param_file \
-            --region $AWS_REGION 2>&1)
-        stack_operation_result=$?
+    if aws_cmd cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+        stack_exists=true
+        print_info "Stack $STACK_NAME already exists. Updating..."
         
-        # Check if the error is "No updates are to be performed"
-        if [ $stack_operation_result -ne 0 ]; then
+        local update_output
+        update_output=$(aws_cmd cloudformation update-stack \
+            --stack-name "$STACK_NAME" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters "file://$param_file" 2>&1) || {
             if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $STACK_NAME. Stack is already up to date."
+                print_info "No updates needed for stack $STACK_NAME"
                 no_updates=true
-                stack_operation_result=0  # Treat as success
             else
-                print_error "Stack update failed:"
-                echo "$update_output"
+                print_error "Stack update failed: $update_output"
+                exit 1
             fi
-        fi
+        }
     else
-        print_status "Creating new stack: $STACK_NAME"
-        aws cloudformation create-stack \
-            --stack-name $STACK_NAME \
-            --template-body file://$TEMPLATE_FILE \
-            --parameters file://$param_file \
-            --region $AWS_REGION
-        stack_operation_result=$?
+        print_info "Creating new stack: $STACK_NAME"
+        aws_cmd cloudformation create-stack \
+            --stack-name "$STACK_NAME" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters "file://$param_file" || {
+            print_error "Stack creation failed"
+            exit 1
+        }
     fi
     
-    if [ $stack_operation_result -eq 0 ]; then
-        if [ "$no_updates" = false ]; then
-            print_status "Stack operation initiated successfully"
-            print_status "Waiting for stack to be ready..."
-            
-            # Wait for stack to be in a stable state
-            print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
-            
-            # Try waiting for create first, then update
-            local wait_result=0
-            aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
-            wait_result=$?
-            
-            if [ $wait_result -ne 0 ]; then
-                # If create wait failed, try update wait
-                aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
-                wait_result=$?
-            fi
-            
-            # Check stack status after wait
-            if ! check_stack_status; then
-                print_error "Stack deployment failed. See errors above."
-                exit 1
-            fi
-            
-            if [ $wait_result -eq 0 ]; then
-                print_status "Stack operation completed successfully"
-            else
-                # Wait command timed out or failed, but check if stack is actually in a good state
-                if ! check_stack_status; then
-                    print_error "Stack deployment failed. See errors above."
-                    exit 1
-                fi
-                print_warning "Stack operation may still be in progress, but current status is valid."
-            fi
+    # Wait for stack operation
+    if [ "$no_updates" = false ]; then
+        print_info "Waiting for stack operation to complete..."
+        
+        local wait_cmd="stack-create-complete"
+        [ "$stack_exists" = true ] && wait_cmd="stack-update-complete"
+        
+        if aws_cmd cloudformation wait "$wait_cmd" --stack-name "$STACK_NAME" 2>/dev/null; then
+            print_complete "Stack operation completed successfully"
         else
-            # No updates needed, but verify stack is in good state
             if ! check_stack_status; then
-                print_error "Stack is in a failed state. See errors above."
+                print_error "Stack deployment failed"
                 exit 1
             fi
-            print_status "Stack is up to date and ready."
         fi
-        
-        # Display key outputs
-        print_status "Network resources created:"
-        echo ""
-        
-        local vpc_id=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --region $AWS_REGION \
-            --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
-            --output text 2>/dev/null)
-        
-        local private_subnets=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --region $AWS_REGION \
-            --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnetIds`].OutputValue' \
-            --output text 2>/dev/null)
-        
-        local lambda_sg=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --region $AWS_REGION \
-            --query 'Stacks[0].Outputs[?OutputKey==`LambdaSecurityGroupId`].OutputValue' \
-            --output text 2>/dev/null)
-        
-        local db_sg=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --region $AWS_REGION \
-            --query 'Stacks[0].Outputs[?OutputKey==`DBSecurityGroupId`].OutputValue' \
-            --output text 2>/dev/null)
-        
-        if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
-            print_status "VPC ID: $vpc_id"
-        fi
-        
-        if [ -n "$private_subnets" ] && [ "$private_subnets" != "None" ]; then
-            print_status "Private Subnet IDs: $private_subnets"
-        fi
-        
-        if [ -n "$lambda_sg" ] && [ "$lambda_sg" != "None" ]; then
-            print_status "Lambda Security Group ID: $lambda_sg"
-        fi
-        
-        if [ -n "$db_sg" ] && [ "$db_sg" != "None" ]; then
-            print_status "Database Security Group ID: $db_sg"
-        fi
-        
-        echo ""
-        print_status "You can now deploy the database and Lambda using these network resources."
-        print_status "The deployment scripts will auto-detect these values from the VPC stack."
-        print_status ""
-        print_status "You can monitor the progress in the AWS Console or with:"
-        print_status "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
-    else
-        print_error "Stack operation failed to initiate"
+    fi
+    
+    # Verify final status
+    if ! check_stack_status; then
+        print_error "Stack is in a failed state"
         exit 1
     fi
+    
+    # Display outputs
+    print_complete "$RESOURCE_DISPLAY_NAME deployment finished"
+    echo ""
+    print_info "Stack outputs:"
+    
+    local vpc_id=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    local private_subnets=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnetIds`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    local lambda_sg=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`LambdaSecurityGroupId`].OutputValue' \
+        --output text 2>/dev/null)
+    
+    [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ] && print_info "  VPC ID: $vpc_id"
+    [ -n "$private_subnets" ] && [ "$private_subnets" != "None" ] && print_info "  Private Subnets: $private_subnets"
+    [ -n "$lambda_sg" ] && [ "$lambda_sg" != "None" ] && print_info "  Lambda Security Group: $lambda_sg"
 }
 
-# Function to delete stack
+# =============================================================================
+# Delete Stack
+# =============================================================================
+
 delete_stack() {
-    print_warning "Deleting CloudFormation stack: $STACK_NAME"
     print_warning "This will delete:"
     print_warning "  - VPC and all subnets"
     print_warning "  - Internet Gateway"
@@ -421,35 +333,44 @@ delete_stack() {
     print_warning "  - VPC Endpoints"
     print_warning "  - Security Groups"
     print_warning "  - Route Tables"
-    print_warning ""
+    echo ""
     print_warning "WARNING: This will affect all resources using this VPC!"
     print_warning "Make sure to delete dependent resources (DB, Lambda) first."
-    read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
-        if [ $? -eq 0 ]; then
-            print_status "Stack deletion initiated"
-            print_status "This may take several minutes to complete."
+    
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_destructive_action "$ENVIRONMENT" "delete" || exit 0
+    fi
+    
+    print_step "Deleting CloudFormation stack: $STACK_NAME"
+    
+    if aws_cmd cloudformation delete-stack --stack-name "$STACK_NAME"; then
+        print_info "Stack deletion initiated"
+        print_info "Waiting for deletion to complete..."
+        
+        if aws_cmd cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null; then
+            print_complete "Stack deleted successfully"
         else
-            print_error "Failed to initiate stack deletion"
-            exit 1
+            print_warning "Stack deletion may still be in progress"
         fi
     else
-        print_status "Stack deletion cancelled"
+        print_error "Failed to initiate stack deletion"
+        exit 1
     fi
 }
 
-# Main execution
+# =============================================================================
+# Main Execution
+# =============================================================================
+
 case $ACTION in
     validate)
-        validate_template
+        do_validate_template
         ;;
     status)
         show_status
         ;;
     deploy|update)
-        validate_template
+        do_validate_template
         deploy_stack
         ;;
     delete)
@@ -462,5 +383,4 @@ case $ACTION in
         ;;
 esac
 
-print_status "Network operation completed successfully"
-
+print_complete "$RESOURCE_DISPLAY_NAME operation completed successfully"

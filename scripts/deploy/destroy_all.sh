@@ -26,33 +26,8 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[DESTROY ALL]${NC} $1"
-}
-
-print_step() {
-    echo -e "${CYAN}[STEP]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
 
 show_usage() {
     echo "Destroy All Resources for an Environment"
@@ -141,13 +116,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "Destroying all resources for environment: $ENVIRONMENT"
-print_status "Region: $AWS_REGION"
+print_step "Destroying all resources for environment: $ENVIRONMENT"
+print_info "Region: $AWS_REGION"
 
 # Validate environment
 case $ENVIRONMENT in
     dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
+        print_info "Using environment: $ENVIRONMENT"
         ;;
     *)
         print_error "Invalid environment: $ENVIRONMENT"
@@ -174,7 +149,7 @@ if [ "$FORCE" = false ]; then
     read -p "Continue? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_status "Aborted."
+        print_info "Aborted."
         exit 0
     fi
     echo ""
@@ -194,12 +169,12 @@ run_destroy_script() {
     print_step "Destroying: $step_name"
     local rc=0
     if [ "$FORCE" = true ]; then
-        echo "y" | "$SCRIPT_DIR/$script_name" "$ENVIRONMENT" "delete" --region "$AWS_REGION" || rc=$?
+        "$SCRIPT_DIR/$script_name" "$ENVIRONMENT" "delete" --region "$AWS_REGION" -y || rc=$?
     else
         "$SCRIPT_DIR/$script_name" "$ENVIRONMENT" "delete" --region "$AWS_REGION" || rc=$?
     fi
     if [ $rc -eq 0 ]; then
-        print_status "$step_name destroyed successfully"
+        print_info "$step_name destroyed successfully"
     else
         print_warning "$step_name destroy failed or stack did not exist (continuing)"
     fi
@@ -212,7 +187,7 @@ FAILED_STEPS=()
 # 1. Lambda
 if [ "$SKIP_LAMBDA" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
-    print_header "Step $DESTROY_STEPS: Destroying Lambda"
+    print_step "Step $DESTROY_STEPS: Destroying Lambda"
     run_destroy_script "deploy_rag_lambda.sh" "Lambda" || FAILED_STEPS+=("Lambda")
     echo ""
 fi
@@ -220,7 +195,7 @@ fi
 # 2. Knowledge Base
 if [ "$SKIP_KB" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
-    print_header "Step $DESTROY_STEPS: Destroying Knowledge Base"
+    print_step "Step $DESTROY_STEPS: Destroying Knowledge Base"
     run_destroy_script "deploy_knowledge_base.sh" "Knowledge Base" || FAILED_STEPS+=("Knowledge Base")
     echo ""
 fi
@@ -228,7 +203,7 @@ fi
 # 3. Database
 if [ "$SKIP_DB" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
-    print_header "Step $DESTROY_STEPS: Destroying Database"
+    print_step "Step $DESTROY_STEPS: Destroying Database"
     run_destroy_script "deploy_chat_template_db.sh" "Database" || FAILED_STEPS+=("Database")
     echo ""
 fi
@@ -236,7 +211,7 @@ fi
 # 4. S3 Bucket
 if [ "$SKIP_S3" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
-    print_header "Step $DESTROY_STEPS: Destroying S3 Bucket"
+    print_step "Step $DESTROY_STEPS: Destroying S3 Bucket"
     run_destroy_script "deploy_s3_bucket.sh" "S3 Bucket" || FAILED_STEPS+=("S3 Bucket")
     echo ""
 fi
@@ -244,26 +219,26 @@ fi
 # 5. Network
 if [ "$SKIP_NETWORK" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
-    print_header "Step $DESTROY_STEPS: Destroying Network"
+    print_step "Step $DESTROY_STEPS: Destroying Network"
     run_destroy_script "deploy_network.sh" "Network" || FAILED_STEPS+=("Network")
     echo ""
 fi
 
 # Summary
-print_header "Destroy Summary"
-print_status "Environment: $ENVIRONMENT"
-print_status "Region: $AWS_REGION"
-print_status "Steps run: $DESTROY_STEPS"
+print_step "Destroy Summary"
+print_info "Environment: $ENVIRONMENT"
+print_info "Region: $AWS_REGION"
+print_info "Steps run: $DESTROY_STEPS"
 
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
-    print_status "All requested resources have been destroyed."
-    print_status "Done."
+    print_info "All requested resources have been destroyed."
+    print_info "Done."
     exit 0
 else
     print_warning "Some steps reported failures or missing stacks:"
     for step in "${FAILED_STEPS[@]}"; do
         print_warning "  - $step"
     done
-    print_status "Done (with errors)."
+    print_info "Done (with errors)."
     exit 1
 fi

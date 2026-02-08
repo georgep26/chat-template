@@ -27,33 +27,8 @@
 
 set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[DEPLOY ACCOUNTS]${NC} $1"
-}
-
-print_step() {
-    echo -e "${CYAN}[STEP]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
 
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -83,6 +58,7 @@ show_usage() {
     echo "  --out-json <path>              - Output JSON file (default: accounts.json)"
     echo "  --poll-sleep-seconds <n>      - Seconds between status polls (default: 15)"
     echo "  --poll-max-minutes <n>         - Max minutes to wait per account (default: 20)"
+    echo "  -y, --yes                      - Skip confirmation prompt"
     echo "  --help                         - Show this help"
     echo ""
     echo "Environment variables (override options):"
@@ -109,6 +85,7 @@ ORG_ACCESS_ROLE_NAME="${ORG_ACCESS_ROLE_NAME:-OrganizationAccountAccessRole}"
 OUT_JSON="${OUT_JSON:-accounts.json}"
 POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-15}"
 POLL_MAX_MINUTES="${POLL_MAX_MINUTES:-20}"
+AUTO_CONFIRM="${AUTO_CONFIRM:-0}"
 
 DEV_EMAIL_SET=false
 STAGING_EMAIL_SET=false
@@ -168,6 +145,10 @@ while [[ $# -gt 0 ]]; do
             POLL_MAX_MINUTES="$2"
             shift 2
             ;;
+        -y|--yes)
+            AUTO_CONFIRM=1
+            shift
+            ;;
         --help|-h)
             show_usage
             exit 0
@@ -188,20 +169,28 @@ done
 require_cmd aws
 require_cmd date
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 cd "$PROJECT_ROOT"
 
 print_header "Creating AWS Organizations member accounts (dev, staging, prod)"
 
-print_status "Preflight: verifying Organizations access (must run from the management account)..."
+print_step "Summary: Create member accounts (dev, staging, prod) under management account."
+print_info "  Project: $PROJECT_NAME"
+print_info "  Dev email: $DEV_EMAIL | Staging: $STAGING_EMAIL | Prod: $PROD_EMAIL"
+print_info "  Output: $OUT_JSON"
+if [ "$AUTO_CONFIRM" -eq 0 ]; then
+    source "$SCRIPT_DIR/../utils/deploy_summary.sh"
+    confirm_deployment "Proceed with creating AWS accounts?" || exit 0
+fi
+
+print_info "Preflight: verifying Organizations access (must run from the management account)..."
 if ! aws organizations describe-organization >/dev/null 2>&1; then
     print_error "Failed to describe organization. Ensure you are in the management account and have organizations:DescribeOrganization permission."
     exit 1
 fi
 
 MANAGEMENT_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-print_status "Management Account ID: ${MANAGEMENT_ACCOUNT_ID}"
+print_info "Management Account ID: ${MANAGEMENT_ACCOUNT_ID}"
 
 find_account_by_name() {
     local name="$1"
@@ -266,7 +255,7 @@ wait_for_account() {
             exit 1
         fi
 
-        print_status "Waiting... request=${req_id} state=${status} (sleep ${POLL_SLEEP_SECONDS}s)"
+        print_info "Waiting... request=${req_id} state=${status} (sleep ${POLL_SLEEP_SECONDS}s)"
         sleep "${POLL_SLEEP_SECONDS}"
     done
 }
@@ -287,7 +276,7 @@ create_budget_for_linked_account() {
     local alert_email="$4"
 
     if aws budgets describe-budget --account-id "${MANAGEMENT_ACCOUNT_ID}" --budget-name "${budget_name}" >/dev/null 2>&1; then
-        print_status "Budget already exists: ${budget_name} (skipping)"
+        print_info "Budget already exists: ${budget_name} (skipping)"
         return 0
     fi
 
@@ -316,7 +305,7 @@ create_budget_for_linked_account() {
             >/dev/null 2>&1 || true
     done
 
-    print_status "Created budget + alerts: ${budget_name} (limit \$${limit_usd}/mo) for LinkedAccount=${linked_account_id}"
+    print_info "Created budget + alerts: ${budget_name} (limit \$${limit_usd}/mo) for LinkedAccount=${linked_account_id}"
 }
 
 # Account names
@@ -348,9 +337,9 @@ cat > "${OUT_JSON}" <<EOF
 EOF
 
 print_header "Done. Wrote: ${OUT_JSON}"
-print_status "Dev:     ${DEV_ACCOUNT_ID} (${DEV_NAME})"
-print_status "Staging: ${STAGING_ACCOUNT_ID} (${STAGING_NAME})"
-print_status "Prod:    ${PROD_ACCOUNT_ID} (${PROD_NAME})"
+print_info "Dev:     ${DEV_ACCOUNT_ID} (${DEV_NAME})"
+print_info "Staging: ${STAGING_ACCOUNT_ID} (${STAGING_NAME})"
+print_info "Prod:    ${PROD_ACCOUNT_ID} (${PROD_NAME})"
 
 if [[ -n "${BUDGET_ALERT_EMAIL}" ]]; then
     print_step "Creating budgets + email alerts (management account owns budgets)..."
@@ -358,7 +347,7 @@ if [[ -n "${BUDGET_ALERT_EMAIL}" ]]; then
     create_budget_for_linked_account "${STAGING_ACCOUNT_ID}" "${STAGING_NAME}-monthly" "${STAGING_BUDGET_USD}" "${BUDGET_ALERT_EMAIL}"
     create_budget_for_linked_account "${PROD_ACCOUNT_ID}"    "${PROD_NAME}-monthly"    "${PROD_BUDGET_USD}"    "${BUDGET_ALERT_EMAIL}"
 else
-    print_status "Budgets skipped (set BUDGET_ALERT_EMAIL or --budget-alert-email to enable)."
+    print_info "Budgets skipped (set BUDGET_ALERT_EMAIL or --budget-alert-email to enable)."
 fi
 
-print_status "To assume the role in a member account: aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/${ORG_ACCESS_ROLE_NAME} --role-session-name <name>"
+print_info "To assume the role in a member account: aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/${ORG_ACCESS_ROLE_NAME} --role-session-name <name>"
