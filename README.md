@@ -11,7 +11,18 @@ A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AW
 - **Evaluation Framework**: Evaluation framework with support for standard RAGAS metrics and custom metrics.
 - **Lambda Deployment**: Standardized API interface for deployment as AWS Lambda function
 
-## Environment Setup
+## Setup 
+
+To get started, the following steps are required:
+1. Setup your local environment.
+2. Setup your GitHub environment including secrets, branch protection, and OIDC provider.
+3. Setup your AWS environment including accounts, roles, and policies.
+4. Deploy the infrastructure.
+5. Deploy the application.
+
+See below for detailed setup instructions.
+
+### Local Environment Setup
 
 The full environment setup process is handled by the `scripts/setup_env.sh` script. This script will:
 - Detect your operating system (macOS, Linux, or Windows)
@@ -67,7 +78,10 @@ To use the conda environment in your IDE, you'll need to configure it to use the
 
 **Note**: For other IDEs (PyCharm, IntelliJ, etc.), the setup process may differ. Please refer to your IDE's documentation for configuring Python interpreters with conda environments.
 
-## Branch Protection Setup
+## GitHub Environment Setup
+This section outlines the setup process for the GitHub environment. This includes setting up branch protection, secrets, and OIDC provider.
+
+### Branch Protection Setup
 
 **Important**: If you are copying or forking this repository, you need to set up branch protection rules to enforce the development workflow. Pull requests to the `main` branch should come from the `development` branch for standard feature releases. However, pull requests from hotfix branches are also allowed when an immediate change needs to be made to production.
 
