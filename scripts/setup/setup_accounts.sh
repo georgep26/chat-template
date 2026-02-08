@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 
-# AWS Organizations Account Deployment Script
+# AWS Organizations Account Setup Script
 # Creates three member accounts (dev, staging, prod) under the management account using
 # AWS Organizations. Optionally creates per-account budgets with email alerts.
+# Reads defaults from infra/infra.yaml; CLI arguments override. Writes account info to infra/infra.yaml.
 # Must be run from the management account with Organizations permissions.
 #
 # See docs/aws_organizations.md for background on Organizations and consolidated billing.
 #
 # Usage Examples:
-#   # Create accounts with default project name and email pattern
-#   ./scripts/deploy/deploy_accounts.sh
+#   # Create accounts using defaults from infra/infra.yaml
+#   ./scripts/setup/setup_accounts.sh
 #
-#   # Create accounts with custom project name and emails
-#   ./scripts/deploy/deploy_accounts.sh --project-name myapp \
+#   # Override project name and emails via CLI
+#   ./scripts/setup/setup_accounts.sh --project-name myapp \
 #     --dev-email myapp+dev@example.com \
 #     --staging-email myapp+staging@example.com \
 #     --prod-email myapp+prod@example.com
 #
-#   # Create accounts and enable budget alerts
-#   BUDGET_ALERT_EMAIL=you@yourdomain.com ./scripts/deploy/deploy_accounts.sh
+#   # Enable budget alerts (from infra.yaml budgets.budget_email or CLI)
+#   ./scripts/setup/setup_accounts.sh --budget-alert-email you@yourdomain.com
 #
-#   # Custom output file and budgets
-#   ./scripts/deploy/deploy_accounts.sh --out-json my-accounts.json \
-#     --budget-alert-email you@example.com \
-#     --dev-budget-usd 75 --staging-budget-usd 150 --prod-budget-usd 500
+#   # Also write a JSON file
+#   ./scripts/setup/setup_accounts.sh --out-json my-accounts.json
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
 
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -38,60 +38,129 @@ require_cmd() {
 }
 
 show_usage() {
-    echo "AWS Organizations Account Deployment Script"
+    echo "AWS Organizations Account Setup Script"
     echo ""
     echo "Creates three member accounts (dev, staging, prod) under the management account."
-    echo "Must be run from the management account with Organizations permissions."
+    echo "Reads defaults from infra/infra.yaml (project, environments.*.email, budgets, org role)."
+    echo "CLI options override infra.yaml. Writes account IDs and names to infra/infra.yaml."
     echo ""
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --project-name <name>         - Project name for account names (default: chat-template)"
-    echo "  --dev-email <email>           - Email for dev account (default: <project>+dev@example.com)"
-    echo "  --staging-email <email>        - Email for staging account"
+    echo "  --project-name <name>         - Project name for account names (overrides infra.yaml)"
+    echo "  --dev-email <email>           - Email for dev account"
+    echo "  --staging-email <email>       - Email for staging account"
     echo "  --prod-email <email>           - Email for prod account"
-    echo "  --budget-alert-email <email>   - Enable budgets and send alerts to this email"
-    echo "  --dev-budget-usd <amount>     - Monthly budget limit for dev (default: 75)"
-    echo "  --staging-budget-usd <amount> - Monthly budget limit for staging (default: 150)"
-    echo "  --prod-budget-usd <amount>     - Monthly budget limit for prod (default: 500)"
-    echo "  --org-access-role-name <name> - Role name Organizations creates in new accounts (default: OrganizationAccountAccessRole)"
-    echo "  --out-json <path>              - Output JSON file (default: accounts.json)"
+    echo "  --budget-alert-email <email>  - Enable budgets and send alerts to this email"
+    echo "  --dev-budget-usd <amount>     - Monthly budget limit for dev"
+    echo "  --staging-budget-usd <amount> - Monthly budget limit for staging"
+    echo "  --prod-budget-usd <amount>     - Monthly budget limit for prod"
+    echo "  --org-access-role-name <name> - Role name Organizations creates in new accounts"
+    echo "  --out-json <path>             - Also write account info to this JSON file (optional)"
     echo "  --poll-sleep-seconds <n>      - Seconds between status polls (default: 15)"
-    echo "  --poll-max-minutes <n>         - Max minutes to wait per account (default: 20)"
-    echo "  -y, --yes                      - Skip confirmation prompt"
-    echo "  --help                         - Show this help"
+    echo "  --poll-max-minutes <n>        - Max minutes to wait per account (default: 20)"
+    echo "  -y, --yes                     - Skip confirmation prompt"
+    echo "  --help                        - Show this help"
     echo ""
     echo "Environment variables (override options):"
     echo "  PROJECT_NAME, DEV_EMAIL, STAGING_EMAIL, PROD_EMAIL"
     echo "  BUDGET_ALERT_EMAIL, DEV_BUDGET_USD, STAGING_BUDGET_USD, PROD_BUDGET_USD"
     echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES"
-    echo ""
-    echo "Examples:"
-    echo "  $0"
-    echo "  $0 --project-name myapp --dev-email myapp+dev@example.com --staging-email myapp+staging@example.com --prod-email myapp+prod@example.com"
-    echo "  BUDGET_ALERT_EMAIL=you@example.com $0 --out-json accounts.json"
 }
 
-# Defaults (env vars override these after parsing)
-PROJECT_NAME="${PROJECT_NAME:-chat-template}"
-DEV_EMAIL="${DEV_EMAIL:-${PROJECT_NAME}+dev@example.com}"
-STAGING_EMAIL="${STAGING_EMAIL:-${PROJECT_NAME}+staging@example.com}"
-PROD_EMAIL="${PROD_EMAIL:-${PROJECT_NAME}+prod@example.com}"
-BUDGET_ALERT_EMAIL="${BUDGET_ALERT_EMAIL:-}"
-DEV_BUDGET_USD="${DEV_BUDGET_USD:-75}"
-STAGING_BUDGET_USD="${STAGING_BUDGET_USD:-150}"
-PROD_BUDGET_USD="${PROD_BUDGET_USD:-500}"
-ORG_ACCESS_ROLE_NAME="${ORG_ACCESS_ROLE_NAME:-OrganizationAccountAccessRole}"
-OUT_JSON="${OUT_JSON:-accounts.json}"
-POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-15}"
-POLL_MAX_MINUTES="${POLL_MAX_MINUTES:-20}"
-AUTO_CONFIRM="${AUTO_CONFIRM:-0}"
+# Load infra config and read defaults from infra.yaml (before CLI overrides)
+INFRA_YAML=""
+read_defaults_from_infra() {
+    local root
+    root="$(get_project_root)"
+    INFRA_YAML="$root/infra/infra.yaml"
+    if [[ ! -f "$INFRA_YAML" ]]; then
+        print_error "infra/infra.yaml not found at $INFRA_YAML"
+        exit 1
+    fi
+    check_yq_installed || exit 1
+
+    local v
+    v=$(yq -r '.project.name // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && PROJECT_NAME="$v"
+    v=$(yq -r '.environments.dev.email // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && DEV_EMAIL="$v"
+    v=$(yq -r '.environments.staging.email // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && STAGING_EMAIL="$v"
+    v=$(yq -r '.environments.prod.email // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && PROD_EMAIL="$v"
+    v=$(yq -r '.environments.dev.org_role_name // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && ORG_ACCESS_ROLE_NAME="$v"
+    v=$(yq -r '.budgets.budget_email // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" ]] && BUDGET_ALERT_EMAIL="$v"
+    v=$(yq -r '.budgets.dev_max_budget // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" && "$v" != "null" ]] && DEV_BUDGET_USD="$v"
+    v=$(yq -r '.budgets.staging_max_budget // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" && "$v" != "null" ]] && STAGING_BUDGET_USD="$v"
+    v=$(yq -r '.budgets.prod_max_budget // ""' "$INFRA_YAML" 2>/dev/null)
+    [[ -n "$v" && "$v" != "null" ]] && PROD_BUDGET_USD="$v"
+}
+
+# Save env vars so we can apply them after loading infra (env overrides infra)
+ENV_PROJECT_NAME="${PROJECT_NAME:-}"
+ENV_DEV_EMAIL="${DEV_EMAIL:-}"
+ENV_STAGING_EMAIL="${STAGING_EMAIL:-}"
+ENV_PROD_EMAIL="${PROD_EMAIL:-}"
+ENV_BUDGET_ALERT_EMAIL="${BUDGET_ALERT_EMAIL:-}"
+ENV_DEV_BUDGET_USD="${DEV_BUDGET_USD:-}"
+ENV_STAGING_BUDGET_USD="${STAGING_BUDGET_USD:-}"
+ENV_PROD_BUDGET_USD="${PROD_BUDGET_USD:-}"
+ENV_ORG_ACCESS_ROLE_NAME="${ORG_ACCESS_ROLE_NAME:-}"
+ENV_OUT_JSON="${OUT_JSON:-}"
+ENV_POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-}"
+ENV_POLL_MAX_MINUTES="${POLL_MAX_MINUTES:-}"
+ENV_AUTO_CONFIRM="${AUTO_CONFIRM:-}"
+
+# Script defaults (lowest precedence)
+PROJECT_NAME="chat-template"
+DEV_EMAIL=""
+STAGING_EMAIL=""
+PROD_EMAIL=""
+BUDGET_ALERT_EMAIL=""
+DEV_BUDGET_USD="75"
+STAGING_BUDGET_USD="150"
+PROD_BUDGET_USD="500"
+ORG_ACCESS_ROLE_NAME="OrganizationAccountAccessRole"
+OUT_JSON=""
+POLL_SLEEP_SECONDS="15"
+POLL_MAX_MINUTES="20"
+AUTO_CONFIRM="0"
 
 DEV_EMAIL_SET=false
 STAGING_EMAIL_SET=false
 PROD_EMAIL_SET=false
 
-# Parse options (CLI overrides env defaults)
+# Apply project-based email defaults when not set from infra or CLI
+apply_email_defaults() {
+    [[ -z "$DEV_EMAIL" ]] && DEV_EMAIL="${PROJECT_NAME}+dev@example.com"
+    [[ -z "$STAGING_EMAIL" ]] && STAGING_EMAIL="${PROJECT_NAME}+staging@example.com"
+    [[ -z "$PROD_EMAIL" ]] && PROD_EMAIL="${PROJECT_NAME}+prod@example.com"
+}
+
+# Load infra and read defaults (precedence: script defaults < infra.yaml < env < CLI)
+read_defaults_from_infra
+
+# Env var overrides
+[[ -n "$ENV_PROJECT_NAME" ]] && PROJECT_NAME="$ENV_PROJECT_NAME"
+[[ -n "$ENV_DEV_EMAIL" ]] && DEV_EMAIL="$ENV_DEV_EMAIL" && DEV_EMAIL_SET=true
+[[ -n "$ENV_STAGING_EMAIL" ]] && STAGING_EMAIL="$ENV_STAGING_EMAIL" && STAGING_EMAIL_SET=true
+[[ -n "$ENV_PROD_EMAIL" ]] && PROD_EMAIL="$ENV_PROD_EMAIL" && PROD_EMAIL_SET=true
+[[ -n "$ENV_BUDGET_ALERT_EMAIL" ]] && BUDGET_ALERT_EMAIL="$ENV_BUDGET_ALERT_EMAIL"
+[[ -n "$ENV_DEV_BUDGET_USD" ]] && DEV_BUDGET_USD="$ENV_DEV_BUDGET_USD"
+[[ -n "$ENV_STAGING_BUDGET_USD" ]] && STAGING_BUDGET_USD="$ENV_STAGING_BUDGET_USD"
+[[ -n "$ENV_PROD_BUDGET_USD" ]] && PROD_BUDGET_USD="$ENV_PROD_BUDGET_USD"
+[[ -n "$ENV_ORG_ACCESS_ROLE_NAME" ]] && ORG_ACCESS_ROLE_NAME="$ENV_ORG_ACCESS_ROLE_NAME"
+[[ -n "$ENV_OUT_JSON" ]] && OUT_JSON="$ENV_OUT_JSON"
+[[ -n "$ENV_POLL_SLEEP_SECONDS" ]] && POLL_SLEEP_SECONDS="$ENV_POLL_SLEEP_SECONDS"
+[[ -n "$ENV_POLL_MAX_MINUTES" ]] && POLL_MAX_MINUTES="$ENV_POLL_MAX_MINUTES"
+[[ -n "$ENV_AUTO_CONFIRM" ]] && AUTO_CONFIRM="$ENV_AUTO_CONFIRM"
+
+# Parse options (CLI overrides infra and env)
 while [[ $# -gt 0 ]]; do
     case $1 in
         --project-name)
@@ -161,15 +230,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Apply project-based email defaults when not explicitly set
-[[ "$DEV_EMAIL_SET" != true ]]     && DEV_EMAIL="${PROJECT_NAME}+dev@example.com"
-[[ "$STAGING_EMAIL_SET" != true ]] && STAGING_EMAIL="${PROJECT_NAME}+staging@example.com"
-[[ "$PROD_EMAIL_SET" != true ]]    && PROD_EMAIL="${PROJECT_NAME}+prod@example.com"
+apply_email_defaults
 
 require_cmd aws
 require_cmd date
 
-PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+PROJECT_ROOT="$(get_project_root)"
 cd "$PROJECT_ROOT"
 
 print_header "Creating AWS Organizations member accounts (dev, staging, prod)"
@@ -177,7 +243,8 @@ print_header "Creating AWS Organizations member accounts (dev, staging, prod)"
 print_step "Summary: Create member accounts (dev, staging, prod) under management account."
 print_info "  Project: $PROJECT_NAME"
 print_info "  Dev email: $DEV_EMAIL | Staging: $STAGING_EMAIL | Prod: $PROD_EMAIL"
-print_info "  Output: $OUT_JSON"
+print_info "  Output: infra/infra.yaml (environments)"
+[[ -n "$OUT_JSON" ]] && print_info "  Also writing: $OUT_JSON"
 if [ "$AUTO_CONFIRM" -eq 0 ]; then
     source "$SCRIPT_DIR/../utils/deploy_summary.sh"
     confirm_deployment "Proceed with creating AWS accounts?" || exit 0
@@ -322,8 +389,25 @@ DEV_ACCOUNT_ID="$(resolve_account_id "${DEV_REQ_OR_ID}")"
 STAGING_ACCOUNT_ID="$(resolve_account_id "${STAGING_REQ_OR_ID}")"
 PROD_ACCOUNT_ID="$(resolve_account_id "${PROD_REQ_OR_ID}")"
 
-# Write output JSON (relative to project root)
-cat > "${OUT_JSON}" <<EOF
+# Update infra/infra.yaml with account info (project.management_account_id, environments.*)
+print_step "Writing account information to infra/infra.yaml..."
+yq -i ".project.management_account_id = \"${MANAGEMENT_ACCOUNT_ID}\"" "$INFRA_YAML"
+yq -i ".environments.dev.account_id = \"${DEV_ACCOUNT_ID}\"" "$INFRA_YAML"
+yq -i ".environments.dev.account_name = \"${DEV_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.dev.email = \"${DEV_EMAIL}\"" "$INFRA_YAML"
+yq -i ".environments.dev.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.staging.account_id = \"${STAGING_ACCOUNT_ID}\"" "$INFRA_YAML"
+yq -i ".environments.staging.account_name = \"${STAGING_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.staging.email = \"${STAGING_EMAIL}\"" "$INFRA_YAML"
+yq -i ".environments.staging.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.prod.account_id = \"${PROD_ACCOUNT_ID}\"" "$INFRA_YAML"
+yq -i ".environments.prod.account_name = \"${PROD_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.prod.email = \"${PROD_EMAIL}\"" "$INFRA_YAML"
+yq -i ".environments.prod.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+
+# Optional: also write JSON if requested
+if [[ -n "${OUT_JSON}" ]]; then
+    cat > "${OUT_JSON}" <<EOF
 {
   "project": "${PROJECT_NAME}",
   "management_account_id": "${MANAGEMENT_ACCOUNT_ID}",
@@ -335,8 +419,10 @@ cat > "${OUT_JSON}" <<EOF
   "org_access_role_name": "${ORG_ACCESS_ROLE_NAME}"
 }
 EOF
+    print_info "Also wrote: ${OUT_JSON}"
+fi
 
-print_header "Done. Wrote: ${OUT_JSON}"
+print_header "Done. Updated: infra/infra.yaml"
 print_info "Dev:     ${DEV_ACCOUNT_ID} (${DEV_NAME})"
 print_info "Staging: ${STAGING_ACCOUNT_ID} (${STAGING_NAME})"
 print_info "Prod:    ${PROD_ACCOUNT_ID} (${PROD_NAME})"
@@ -347,7 +433,7 @@ if [[ -n "${BUDGET_ALERT_EMAIL}" ]]; then
     create_budget_for_linked_account "${STAGING_ACCOUNT_ID}" "${STAGING_NAME}-monthly" "${STAGING_BUDGET_USD}" "${BUDGET_ALERT_EMAIL}"
     create_budget_for_linked_account "${PROD_ACCOUNT_ID}"    "${PROD_NAME}-monthly"    "${PROD_BUDGET_USD}"    "${BUDGET_ALERT_EMAIL}"
 else
-    print_info "Budgets skipped (set BUDGET_ALERT_EMAIL or --budget-alert-email to enable)."
+    print_info "Budgets skipped (set budgets.budget_email in infra.yaml or --budget-alert-email to enable)."
 fi
 
 print_info "To assume the role in a member account: aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/${ORG_ACCESS_ROLE_NAME} --role-session-name <name>"
