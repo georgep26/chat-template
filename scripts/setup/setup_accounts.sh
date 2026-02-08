@@ -3,6 +3,8 @@
 # AWS Organizations Account Setup Script
 # Creates three member accounts (dev, staging, prod) under the management account using
 # AWS Organizations. Optionally creates per-account budgets with email alerts.
+# Creates an IAM user in the management account that can assume OrganizationAccountAccessRole
+# in each member account (policy and user defined in infra/policies/ and infra/roles/).
 # Reads defaults from infra/infra.yaml; CLI arguments override. Writes account info to infra/infra.yaml.
 # Must be run from the management account with Organizations permissions.
 #
@@ -23,6 +25,9 @@
 #
 #   # Also write a JSON file
 #   ./scripts/setup/setup_accounts.sh --out-json my-accounts.json
+#
+#   # Enable console sign-in for the org-admin IAM user (prompts for password)
+#   ./scripts/setup/setup_accounts.sh --set-console-password
 
 set -euo pipefail
 
@@ -59,13 +64,16 @@ show_usage() {
     echo "  --out-json <path>             - Also write account info to this JSON file (optional)"
     echo "  --poll-sleep-seconds <n>      - Seconds between status polls (default: 15)"
     echo "  --poll-max-minutes <n>        - Max minutes to wait per account (default: 20)"
+    echo "  --skip-iam-user               - Do not create the management-account IAM user for assuming member roles"
+    echo "  --set-console-password        - Prompt to set or update console sign-in password (default)"
+    echo "  --no-console-password         - Do not prompt for console password"
     echo "  -y, --yes                     - Skip confirmation prompt"
     echo "  --help                        - Show this help"
     echo ""
     echo "Environment variables (override options):"
     echo "  PROJECT_NAME, DEV_EMAIL, STAGING_EMAIL, PROD_EMAIL"
     echo "  BUDGET_ALERT_EMAIL, DEV_BUDGET_USD, STAGING_BUDGET_USD, PROD_BUDGET_USD"
-    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES"
+    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES, SKIP_IAM_USER, SET_CONSOLE_PASSWORD"
 }
 
 # Load infra config and read defaults from infra.yaml (before CLI overrides)
@@ -114,6 +122,8 @@ ENV_ORG_ACCESS_ROLE_NAME="${ORG_ACCESS_ROLE_NAME:-}"
 ENV_OUT_JSON="${OUT_JSON:-}"
 ENV_POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-}"
 ENV_POLL_MAX_MINUTES="${POLL_MAX_MINUTES:-}"
+ENV_SKIP_IAM_USER="${SKIP_IAM_USER:-}"
+ENV_SET_CONSOLE_PASSWORD="${SET_CONSOLE_PASSWORD:-}"
 ENV_AUTO_CONFIRM="${AUTO_CONFIRM:-}"
 
 # Script defaults (lowest precedence)
@@ -129,6 +139,8 @@ ORG_ACCESS_ROLE_NAME="OrganizationAccountAccessRole"
 OUT_JSON=""
 POLL_SLEEP_SECONDS="15"
 POLL_MAX_MINUTES="20"
+SKIP_IAM_USER="0"
+SET_CONSOLE_PASSWORD="1"
 AUTO_CONFIRM="0"
 
 DEV_EMAIL_SET=false
@@ -137,9 +149,9 @@ PROD_EMAIL_SET=false
 
 # Apply project-based email defaults when not set from infra or CLI
 apply_email_defaults() {
-    [[ -z "$DEV_EMAIL" ]] && DEV_EMAIL="${PROJECT_NAME}+dev@example.com"
-    [[ -z "$STAGING_EMAIL" ]] && STAGING_EMAIL="${PROJECT_NAME}+staging@example.com"
-    [[ -z "$PROD_EMAIL" ]] && PROD_EMAIL="${PROJECT_NAME}+prod@example.com"
+    if [[ -z "$DEV_EMAIL" ]]; then DEV_EMAIL="${PROJECT_NAME}+dev@example.com"; fi
+    if [[ -z "$STAGING_EMAIL" ]]; then STAGING_EMAIL="${PROJECT_NAME}+staging@example.com"; fi
+    if [[ -z "$PROD_EMAIL" ]]; then PROD_EMAIL="${PROJECT_NAME}+prod@example.com"; fi
 }
 
 # Load infra and read defaults (precedence: script defaults < infra.yaml < env < CLI)
@@ -158,6 +170,8 @@ read_defaults_from_infra
 [[ -n "$ENV_OUT_JSON" ]] && OUT_JSON="$ENV_OUT_JSON"
 [[ -n "$ENV_POLL_SLEEP_SECONDS" ]] && POLL_SLEEP_SECONDS="$ENV_POLL_SLEEP_SECONDS"
 [[ -n "$ENV_POLL_MAX_MINUTES" ]] && POLL_MAX_MINUTES="$ENV_POLL_MAX_MINUTES"
+[[ -n "$ENV_SKIP_IAM_USER" ]] && SKIP_IAM_USER="$ENV_SKIP_IAM_USER"
+[[ -n "$ENV_SET_CONSOLE_PASSWORD" ]] && SET_CONSOLE_PASSWORD="$ENV_SET_CONSOLE_PASSWORD"
 [[ -n "$ENV_AUTO_CONFIRM" ]] && AUTO_CONFIRM="$ENV_AUTO_CONFIRM"
 
 # Parse options (CLI overrides infra and env)
@@ -214,6 +228,18 @@ while [[ $# -gt 0 ]]; do
             POLL_MAX_MINUTES="$2"
             shift 2
             ;;
+        --skip-iam-user)
+            SKIP_IAM_USER=1
+            shift
+            ;;
+        --set-console-password)
+            SET_CONSOLE_PASSWORD=1
+            shift
+            ;;
+        --no-console-password)
+            SET_CONSOLE_PASSWORD=0
+            shift
+            ;;
         -y|--yes)
             AUTO_CONFIRM=1
             shift
@@ -232,9 +258,6 @@ done
 
 apply_email_defaults
 
-require_cmd aws
-require_cmd date
-
 PROJECT_ROOT="$(get_project_root)"
 cd "$PROJECT_ROOT"
 
@@ -242,13 +265,22 @@ print_header "Creating AWS Organizations member accounts (dev, staging, prod)"
 
 print_step "Summary: Create member accounts (dev, staging, prod) under management account."
 print_info "  Project: $PROJECT_NAME"
-print_info "  Dev email: $DEV_EMAIL | Staging: $STAGING_EMAIL | Prod: $PROD_EMAIL"
+print_info "  Dev email:     $DEV_EMAIL"
+print_info "  Staging email: $STAGING_EMAIL"
+print_info "  Prod email:    $PROD_EMAIL"
 print_info "  Output: infra/infra.yaml (environments)"
 [[ -n "$OUT_JSON" ]] && print_info "  Also writing: $OUT_JSON"
 if [ "$AUTO_CONFIRM" -eq 0 ]; then
+    if [ ! -t 0 ]; then
+        print_info "Not running in a terminal. Re-run with -y to proceed non-interactively."
+        exit 0
+    fi
     source "$SCRIPT_DIR/../utils/deploy_summary.sh"
     confirm_deployment "Proceed with creating AWS accounts?" || exit 0
 fi
+
+require_cmd aws
+require_cmd date
 
 print_info "Preflight: verifying Organizations access (must run from the management account)..."
 if ! aws organizations describe-organization >/dev/null 2>&1; then
@@ -375,6 +407,157 @@ create_budget_for_linked_account() {
     print_info "Created budget + alerts: ${budget_name} (limit \$${limit_usd}/mo) for LinkedAccount=${linked_account_id}"
 }
 
+# Deploy IAM policy and user in management account so an IAM user can assume member-account roles.
+# Uses infra/policies/assume_org_access_role_policy.yaml and infra/roles/management_account_admin_user.yaml.
+setup_management_account_iam_user() {
+    local infra_dir policy_template user_template policy_stack user_stack param_file policy_arn
+
+    infra_dir="$(dirname "$INFRA_YAML")"
+    policy_template="${infra_dir}/policies/assume_org_access_role_policy.yaml"
+    user_template="${infra_dir}/roles/management_account_admin_user.yaml"
+    policy_stack="${PROJECT_NAME}-assume-org-access-policy"
+    user_stack="${PROJECT_NAME}-management-admin-user"
+
+    if [[ ! -f "$policy_template" ]]; then
+        print_error "Policy template not found: $policy_template"
+        return 1
+    fi
+    if [[ ! -f "$user_template" ]]; then
+        print_error "User template not found: $user_template"
+        return 1
+    fi
+
+    print_step "Deploying assume-org-access policy stack in management account..."
+    param_file="$(mktemp)"
+    trap "rm -f $param_file" RETURN
+    cat > "$param_file" <<EOF
+[
+  {"ParameterKey": "ProjectName", "ParameterValue": "${PROJECT_NAME}"},
+  {"ParameterKey": "DevAccountId", "ParameterValue": "${DEV_ACCOUNT_ID}"},
+  {"ParameterKey": "StagingAccountId", "ParameterValue": "${STAGING_ACCOUNT_ID}"},
+  {"ParameterKey": "ProdAccountId", "ParameterValue": "${PROD_ACCOUNT_ID}"},
+  {"ParameterKey": "OrgAccessRoleName", "ParameterValue": "${ORG_ACCESS_ROLE_NAME}"}
+]
+EOF
+
+    if aws cloudformation describe-stacks --stack-name "$policy_stack" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
+        local update_out
+        update_out="$(aws cloudformation update-stack \
+            --stack-name "$policy_stack" \
+            --template-body "file://${policy_template}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM 2>&1)" || true
+        if echo "$update_out" | grep -q "No updates are to be performed"; then
+            print_info "Policy stack already up to date."
+        elif echo "$update_out" | grep -q "ValidationError\|Failed"; then
+            print_warning "Policy stack update failed: $update_out"
+        else
+            aws cloudformation wait stack-update-complete --stack-name "$policy_stack" || true
+        fi
+    else
+        aws cloudformation create-stack \
+            --stack-name "$policy_stack" \
+            --template-body "file://${policy_template}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM
+        aws cloudformation wait stack-create-complete --stack-name "$policy_stack" || {
+            print_error "Policy stack creation failed."
+            return 1
+        }
+    fi
+
+    policy_arn="$(aws cloudformation describe-stacks --stack-name "$policy_stack" --query 'Stacks[0].Outputs[?OutputKey==`PolicyArn`].OutputValue' --output text)"
+    if [[ -z "$policy_arn" ]]; then
+        print_error "Could not get PolicyArn output from stack ${policy_stack}"
+        return 1
+    fi
+
+    print_step "Deploying management account admin user stack..."
+    param_file="$(mktemp)"
+    trap "rm -f $param_file" RETURN
+    cat > "$param_file" <<EOF
+[
+  {"ParameterKey": "ProjectName", "ParameterValue": "${PROJECT_NAME}"},
+  {"ParameterKey": "AssumeOrgAccessPolicyArn", "ParameterValue": "${policy_arn}"}
+]
+EOF
+
+    if aws cloudformation describe-stacks --stack-name "$user_stack" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
+        local update_out
+        update_out="$(aws cloudformation update-stack \
+            --stack-name "$user_stack" \
+            --template-body "file://${user_template}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM 2>&1)" || true
+        if echo "$update_out" | grep -q "No updates are to be performed"; then
+            print_info "User stack already up to date."
+        elif echo "$update_out" | grep -q "ValidationError\|Failed"; then
+            print_warning "User stack update failed: $update_out"
+        else
+            aws cloudformation wait stack-update-complete --stack-name "$user_stack" || true
+        fi
+    else
+        aws cloudformation create-stack \
+            --stack-name "$user_stack" \
+            --template-body "file://${user_template}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM
+        aws cloudformation wait stack-create-complete --stack-name "$user_stack" || {
+            print_error "User stack creation failed."
+            return 1
+        }
+    fi
+
+    local username
+    username="$(aws cloudformation describe-stacks --stack-name "$user_stack" --query 'Stacks[0].Outputs[?OutputKey==`UserName`].OutputValue' --output text)"
+    print_info "IAM user created/updated: ${username} (can assume ${ORG_ACCESS_ROLE_NAME} in dev, staging, prod)"
+    print_info "Create access keys in the IAM console for this user, or: aws iam create-access-key --user-name ${username}"
+
+    # Optional: set console sign-in password so the user can sign in to the AWS Console
+    if [[ "${SET_CONSOLE_PASSWORD:-0}" -eq 1 ]]; then
+        local console_password console_password_confirm change_choice has_profile
+        has_profile=0
+        if aws iam get-login-profile --user-name "$username" >/dev/null 2>&1; then
+            has_profile=1
+        fi
+        if [[ $has_profile -eq 1 ]] && [[ -t 0 ]]; then
+            read -p "User already has console access. Set new password? (y/N): " change_choice
+            case "$change_choice" in
+                y|Y|yes|YES) ;;
+                *) print_info "Skipping console password update."; return 0 ;;
+            esac
+        fi
+        if [[ ! -t 0 ]]; then
+            print_warning "Not a terminal. Skipping console password. Re-run with --set-console-password in a terminal to set a password."
+            return 0
+        fi
+        while true; do
+            read -s -p "Console password for ${username}: " console_password
+            echo
+            read -s -p "Confirm password: " console_password_confirm
+            echo
+            if [[ "$console_password" != "$console_password_confirm" ]]; then
+                print_error "Passwords do not match. Try again."
+                continue
+            fi
+            if [[ ${#console_password} -lt 8 ]]; then
+                print_error "Password must be at least 8 characters (per IAM default policy). Try again."
+                continue
+            fi
+            break
+        done
+        if aws iam get-login-profile --user-name "$username" >/dev/null 2>&1; then
+            aws iam update-login-profile --user-name "$username" --password "$console_password"
+            print_info "Console sign-in password updated for ${username}."
+        else
+            aws iam create-login-profile --user-name "$username" --password "$console_password"
+            print_info "Console sign-in enabled for ${username}. Sign in at https://console.aws.amazon.com/ with account ${MANAGEMENT_ACCOUNT_ID} and user ${username}, then use Switch Role to access dev/staging/prod."
+        fi
+    else
+        print_info "To enable console sign-in, set a password in IAM for ${username}, or re-run without --no-console-password to be prompted."
+    fi
+}
+
 # Account names
 DEV_NAME="${PROJECT_NAME}-dev"
 STAGING_NAME="${PROJECT_NAME}-staging"
@@ -422,6 +605,17 @@ EOF
     print_info "Also wrote: ${OUT_JSON}"
 fi
 
+if [[ "${SKIP_IAM_USER}" -eq 0 ]]; then
+    print_step "Setting up IAM user in management account (can assume member-account roles)..."
+    if setup_management_account_iam_user; then
+        print_complete "Management account IAM user setup complete."
+    else
+        print_warning "Management account IAM user setup failed or skipped. Use --skip-iam-user to skip this step."
+    fi
+else
+    print_info "Skipping IAM user setup (--skip-iam-user)."
+fi
+
 print_header "Done. Updated: infra/infra.yaml"
 print_info "Dev:     ${DEV_ACCOUNT_ID} (${DEV_NAME})"
 print_info "Staging: ${STAGING_ACCOUNT_ID} (${STAGING_NAME})"
@@ -436,4 +630,5 @@ else
     print_info "Budgets skipped (set budgets.budget_email in infra.yaml or --budget-alert-email to enable)."
 fi
 
-print_info "To assume the role in a member account: aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/${ORG_ACCESS_ROLE_NAME} --role-session-name <name>"
+print_info "To assume the role in a member account (as the new IAM user): aws sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/${ORG_ACCESS_ROLE_NAME} --role-session-name <name>"
+print_info "Example dev: aws sts assume-role --role-arn arn:aws:iam::${DEV_ACCOUNT_ID}:role/${ORG_ACCESS_ROLE_NAME} --role-session-name dev"
