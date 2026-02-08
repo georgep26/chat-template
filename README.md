@@ -1,6 +1,6 @@
 # RAG Chat Application
 
-A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities.
+A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities. The quickest way to get started is to use the /intro command with an AI agent like Cursor, GitHub Copilot, or Claude Code. Alternatively, you can follow the setup instructions below.
 
 ## Features
 
@@ -24,7 +24,7 @@ See below for detailed setup instructions.
 
 ### Local Environment Setup
 
-The full environment setup process is handled by the `scripts/setup_env.sh` script. This script will:
+The full environment setup process is handled by the `scripts/setup/setup_local_dev_env.sh` script. This script will:
 - Detect your operating system (macOS, Linux, or Windows)
 - Check if conda is already installed
 - Install Miniconda if it's not installed (with OS-specific installation methods)
@@ -33,7 +33,7 @@ The full environment setup process is handled by the `scripts/setup_env.sh` scri
 
 **Note**: The conda environment created from `environment.yml` is intended for **local development and testing**. It contains the same dependencies as the application's Lambda functions, allowing you to test the application locally before deploying to AWS. This ensures that your local development environment matches the production runtime environment.
 
-**Note**: The `setup_env.sh` script automatically configures `PYTHONPATH` to point to the project root directory. This is done via an activation script that runs whenever you activate the conda environment, ensuring that Python can find the project modules without additional configuration.
+**Note**: The `setup_local_dev_env.sh` script automatically configures `PYTHONPATH` to point to the project root directory. This is done via an activation script that runs whenever you activate the conda environment, ensuring that Python can find the project modules without additional configuration.
 
 ### Quick Start
 
@@ -46,10 +46,10 @@ make dev-env
 Alternatively, you can run the setup script directly:
 
 ```bash
-bash scripts/setup_env.sh
+bash scripts/setup/setup_local_dev_env.sh
 ```
 
-**Important**: After running `make dev-env` or `bash scripts/setup_env.sh`, you **must manually activate** the conda environment before using the application:
+**Important**: After running `make dev-env` or `bash scripts/setup/setup_local_dev_env.sh`, you **must manually activate** the conda environment before using the application:
 
 ```bash
 conda activate chat-template-env
@@ -96,7 +96,7 @@ make branch-protection
 Alternatively, you can run the setup script directly:
 
 ```bash
-bash scripts/setup_branch_protection.sh
+bash scripts/setup/setup_branch_protection.sh
 ```
 
 ### What It Does
@@ -292,7 +292,10 @@ chat-template/
 │   │   ├── deploy_s3_bucket.sh
 │   │   ├── NETWORK_DEPLOYMENT.md
 │   │   └── README.md
-│   └── setup_env.sh     # Environment setup script
+│   └── setup/           # Setup scripts (local dev, branch protection, etc.)
+│       ├── setup_local_dev_env.sh
+│       ├── setup_branch_protection.sh
+│       └── ...
 ├── src/                 # Source code for the application
 │   ├── rag_lambda/      # RAG Lambda function package
 │   │   ├── api/         # API models (ChatRequest, ChatResponse)
@@ -345,7 +348,7 @@ chat-template/
 
 - **scripts/**: Utility scripts for automation, deployment, and environment setup.
   - `deploy/`: Deployment automation scripts for infrastructure components
-  - `setup_env.sh`: Environment setup script that creates the conda environment
+  - `setup/`: Setup scripts including `setup_local_dev_env.sh` (conda/local dev) and `setup_branch_protection.sh`
 
 - **src/**: Main source code directory. Contains the core application logic and modules.
   - `rag_lambda/`: RAG Lambda function package containing the main application code
