@@ -2,8 +2,9 @@
 
 # Branch Protection Setup Script
 # This script sets up branch protection rules for the main branch using GitHub CLI
-# It reads settings from infra/infra.yaml (github.github_repo, github.solo_mode) first,
-# then CLI overrides, then falls back to git remote auto-detect.
+# It reads settings from infra/infra.yaml (github.github_repo, github.solo_mode,
+# github.branch_protection) first, then CLI overrides, then falls back to git remote.
+# Branch protection rules are read from github.branch_protection when yq is available.
 #
 # Usage:
 #   ./scripts/setup/setup_branch_protection.sh
@@ -59,6 +60,56 @@ read_infra_config() {
     [[ -n "$CONFIG_REPO" ]]
 }
 
+# Output branch protection JSON. Reads from infra/infra.yaml github.branch_protection when yq
+# is available; otherwise uses built-in defaults. Injects required_approving_review_count from
+# current SOLO_MODE (0 if solo, 1 otherwise). Call with project_root as first argument.
+get_protection_json() {
+    local project_root="$1"
+    local infra_file="${project_root}/infra/infra.yaml"
+    local required_reviews=$([[ "$SOLO_MODE" -eq 1 ]] && echo "0" || echo "1")
+
+    if command -v yq &> /dev/null && [[ -f "$infra_file" ]]; then
+        if yq -e '.github.branch_protection' "$infra_file" &> /dev/null; then
+            local json
+            json=$(yq -o=json '.github.branch_protection' "$infra_file" 2>/dev/null)
+            if [[ -n "$json" ]]; then
+                # Inject required_approving_review_count (from solo_mode)
+                if command -v jq &> /dev/null; then
+                    echo "$json" | jq --argjson n "$required_reviews" \
+                        '.required_pull_request_reviews += { required_approving_review_count: $n }'
+                    return
+                fi
+                # yq only: merge required_approving_review_count into required_pull_request_reviews
+                echo "$json" | yq -o=json ".required_pull_request_reviews.required_approving_review_count = $required_reviews"
+                return
+            fi
+        fi
+    fi
+
+    # Fallback: inline default (same as previous script behavior)
+    cat <<EOF
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["Run Tests"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": ${required_reviews},
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": true,
+  "lock_branch": false,
+  "allow_fork_syncing": false
+}
+EOF
+}
+
 # Function to show usage
 show_usage() {
     echo "Branch Protection Setup Script"
@@ -71,7 +122,7 @@ show_usage() {
     echo "  -y, --yes              - Non-interactive: skip confirmation prompt"
     echo "  --help, -h             - Show this help message"
     echo ""
-    echo "Config precedence: CLI args > infra/infra.yaml (github.github_repo, github.solo_mode) > git remote"
+    echo "Config precedence: CLI args > infra/infra.yaml (github.github_repo, github.solo_mode, github.branch_protection) > git remote"
     echo ""
     echo "This script sets up branch protection for the 'main' branch:"
     echo "  - Requires pull requests before merging"
@@ -170,9 +221,11 @@ print_summary() {
 }
 
 # Set up branch protection rules
+# Args: repo, auto_yes, project_root (for reading infra/infra.yaml branch_protection)
 setup_branch_protection() {
     local repo=$1
     local auto_yes=${2:-0}
+    local project_root=${3:-$(get_project_root)}
 
     print_header "Setting up branch protection for 'main' branch in ${repo}..."
     
@@ -201,45 +254,10 @@ setup_branch_protection() {
     if [[ "$SOLO_MODE" -eq 1 ]]; then
         print_info "Solo mode: PRs required but no reviewer approval needed."
     fi
-    
-    # Required approving review count: 0 for solo mode, 1 otherwise
-    local required_reviews=$([[ "$SOLO_MODE" -eq 1 ]] && echo "0" || echo "1")
-    
-    # Set up branch protection
-    # Note: This allows PRs from any branch (including hotfix branches)
-    # Standard process is PRs from development, but hotfix branches are allowed for quick fixes
-    # Requires 1 approval (2 recommended for standard releases); use --solo for 0 approvals
-    
-    # Construct JSON payload for branch protection
-    # The "Run Tests" context is manually reported by the report-test-status job
-    # in pull_request.yml. This is a workaround for reusable workflows not properly
-    # reporting status checks for branch protection.
-    # See: https://github.com/orgs/community/discussions/8512
-    local protection_json=$(cat <<EOF
-{
-  "required_status_checks": {
-    "strict": true,
-    "contexts": ["Run Tests"]
-  },
-  "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": ${required_reviews},
-    "dismiss_stale_reviews": true,
-    "require_code_owner_reviews": false
-  },
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false,
-  "block_creations": false,
-  "required_conversation_resolution": true,
-  "lock_branch": false,
-  "allow_fork_syncing": false
-}
-EOF
-)
-    
-    # Apply branch protection using JSON payload
-    echo "$protection_json" | gh api "repos/${repo}/branches/main/protection" \
+
+    # JSON from infra/infra.yaml github.branch_protection (when yq available) or built-in defaults
+    # required_approving_review_count is injected from solo_mode
+    get_protection_json "$project_root" | gh api "repos/${repo}/branches/main/protection" \
         --method PUT \
         --input - \
         --silent
@@ -294,7 +312,7 @@ main() {
 
     check_gh_cli
 
-    setup_branch_protection "$repo" "$AUTO_YES"
+    setup_branch_protection "$repo" "$AUTO_YES" "$project_root"
 
     print_step "Branch protection setup complete!"
     print_info "Summary:"
