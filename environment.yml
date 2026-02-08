@@ -12,4 +12,4 @@ dependencies:
     - -r src/rag_lambda/requirements.txt
     - -r evals/requirements.txt
 # Note: PYTHONPATH is automatically set to the project root via an activation script
-# created by scripts/setup_env.sh when the environment is created/updated
+# created by scripts/setup/setup_local_dev_env.sh when the environment is created/updated

@@ -1,10 +1,10 @@
 .PHONY: dev-env install lint test clean all eval branch-protection
 
 dev-env:
-	@bash scripts/setup_env.sh
+	@bash scripts/setup/setup_local_dev_env.sh
 
 branch-protection:
-	@bash scripts/setup_branch_protection.sh
+	@bash scripts/setup/setup_branch_protection.sh
 
 lint:
 	ruff .
