@@ -200,6 +200,13 @@ Thumbs.db
 secrets.yaml
 .secrets/
 
+# Infrastructure secrets (keep template, ignore environment-specific)
+infra/secrets/*_secrets.yaml
+!infra/secrets/template.secrets.yaml
+
+# Infrastructure settings
+infra.yaml
+
 # Monitoring and profiling
 *.prof
 *.profile
