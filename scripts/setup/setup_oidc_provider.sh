@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # GitHub OIDC Provider Setup Script
-# This script creates the GitHub OIDC identity provider in AWS for GitHub Actions authentication
-# All configuration is read from infra.yaml
+# This script creates the GitHub OIDC identity provider in AWS for GitHub Actions authentication.
+# It uses the CLI role profile for the target environment (e.g. chat-template-dev-cli) so the
+# provider is created in that account. All configuration is read from infra.yaml.
 #
 # Usage Examples:
 #   # Set up OIDC provider in dev account
@@ -51,7 +52,7 @@ show_usage() {
     echo "Options:"
     echo "  -y, --yes   - Skip confirmation prompt"
     echo ""
-    echo "Note: All configuration is read from infra/infra.yaml"
+    echo "Note: Uses CLI role profile per environment (infra.yaml cli_profile_name). Config from infra/infra.yaml"
 }
 
 # =============================================================================
@@ -108,10 +109,10 @@ print_step "Loading configuration for $ENVIRONMENT environment"
 load_infra_config || exit 1
 validate_config "$ENVIRONMENT" || exit 1
 
-# Get values from config
+# Get values from config (use CLI role profile to create OIDC provider in this account)
 PROJECT_NAME=$(get_project_name)
 AWS_REGION=$(get_environment_region "$ENVIRONMENT")
-AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+AWS_PROFILE=$(get_environment_cli_profile_name "$ENVIRONMENT")
 [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
 
 ACCOUNT_ID=$(get_environment_account_id "$ENVIRONMENT")
@@ -197,7 +198,7 @@ create_provider() {
         print_info "Provider ARN: $arn"
         echo ""
         print_info "Next steps:"
-        print_info "  1. Run setup_deployer_roles.sh to create deployer roles"
+        print_info "  1. Run deploy_deployer_github_action_role.sh to create deployer roles (e.g. ./scripts/deploy/deploy_deployer_github_action_role.sh dev deploy)"
         print_info "  2. Configure GitHub Actions to use the role"
     else
         print_error "Failed to create OIDC provider: $arn"
