@@ -4,7 +4,7 @@ dev-env:
 	@bash scripts/setup/setup_local_dev_env.sh
 
 branch-protection:
-	@bash scripts/setup/setup_branch_protection.sh
+	@bash scripts/setup/setup_github.sh
 
 lint:
 	ruff .
