@@ -4,111 +4,64 @@
 # This script deploys IAM policies and the GitHub Actions role for OIDC authentication
 # to enable GitHub Actions workflows to perform evaluations on AWS resources.
 #
-# PREREQUISITE: GitHub OIDC Identity Provider
-# The GitHub OIDC identity provider must be created in your AWS account BEFORE using
-# this script. See docs/oidc_github_identity_provider_setup.md for setup steps.
-# You must pass the provider ARN with --oidc-provider-arn when deploying or updating.
+# Reads configuration from infra/infra.yaml and uses the CLI role profile per environment
+# to assume into the target account. GitHub org/repo come from infra (github.github_repo);
+# use --github-org/--github-repo to override. OIDC provider is discovered in the account
+# when not passed via --oidc-provider-arn.
 #
-# IMPORTANT: Environment-Specific Permissions
-# The role deployed by this script is scoped to the environment you specify. GitHub Actions
-# will only have permissions to access resources in that specific environment. For example:
-# - If you deploy to "staging", GitHub Actions can only access staging resources (staging
-#   Lambda functions, staging S3 buckets, staging Bedrock endpoints, etc.)
-# - If you deploy to "dev", GitHub Actions can only access dev resources
-# - If you deploy to "prod", GitHub Actions can only access production resources
-#
-# This ensures that evaluation workflows running in CI/CD can only interact with the
-# environment they are intended to test, providing better security and isolation.
+# PREREQUISITE: GitHub OIDC Identity Provider must exist in the target account (e.g. via
+# setup_oidc_provider.sh). See docs/oidc_github_identity_provider_setup.md.
 #
 # It first deploys the required policies, then the role that uses them.
 #
 # Usage Examples:
-#   # Deploy to development environment (OIDC provider ARN required)
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
+#   # Deploy to dev (uses infra.yaml + CLI profile for dev)
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy -y
 #
-#   # Deploy to staging with custom branch
-#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
-#     --github-source-branch main
+#   # Override GitHub org/repo or pass OIDC ARN
+#   ./scripts/deploy/deploy_evals_github_action_role.sh staging deploy --github-org myorg --github-repo myrepo
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/...
 #
-#   # Deploy with Lambda policy (for lambda mode evaluations)
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
-#     --include-lambda-policy
+#   # Optional: Lambda policy, Bedrock knowledge base, branches
+#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy --include-lambda-policy --knowledge-base-id ID
 #
-#   # Deploy with Bedrock knowledge base scoped to this environment (recommended for same-account multi-env)
-#   ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
-#     --aws-account-id 123456789012 \
-#     --github-org myorg \
-#     --github-repo chat-template \
-#     --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com \
-#     --knowledge-base-id YOUR_KB_ID
-#
-#   # Validate templates before deployment
+#   # Validate or status
 #   ./scripts/deploy/deploy_evals_github_action_role.sh dev validate
-#
-#   # Check stack status
 #   ./scripts/deploy/deploy_evals_github_action_role.sh dev status
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
 source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
 show_usage() {
-    echo "GitHub Actions IAM Role Deployment Script"
+    echo "GitHub Actions Evals Role Deployment Script"
     echo ""
-    echo "PREREQUISITE: Create the GitHub OIDC identity provider in AWS before using this script."
-    echo "See docs/oidc_github_identity_provider_setup.md for setup steps."
+    echo "Reads infra/infra.yaml and uses CLI role profile per environment."
+    echo "GitHub org/repo from github.github_repo; OIDC provider discovered if not passed."
     echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
-    echo "Environments:"
-    echo "  dev       - Development environment (default)"
-    echo "  staging   - Staging environment"
-    echo "  prod      - Production environment"
+    echo "Environments: dev, staging, prod"
+    echo "Actions: deploy (default), update, delete, validate, status"
     echo ""
-    echo "Actions:"
-    echo "  deploy    - Deploy the stacks (default)"
-    echo "  update    - Update the stacks"
-    echo "  delete    - Delete the stacks"
-    echo "  validate  - Validate the templates"
-    echo "  status    - Show stack status"
+    echo "Options (override infra when provided):"
+    echo "  --github-org <org>            - Override GitHub org"
+    echo "  --github-repo <repo>          - Override GitHub repo"
+    echo "  --oidc-provider-arn <arn>      - Override OIDC provider (default: discover in account)"
+    echo "  --github-source-branch <branch> - Source branch for PRs (default: development)"
+    echo "  --github-target-branch <branch>  - Target branch for PRs (default: main)"
+    echo "  --region <region>             - Override AWS region"
+    echo "  --project-name <name>         - Override project name"
+    echo "  --include-lambda-policy      - Include Lambda invoke policy"
+    echo "  --knowledge-base-id <id>      - Bedrock knowledge base ID for this environment"
+    echo "  -y, --yes                     - Skip confirmation prompt"
     echo ""
-    echo "Required Options (for deploy/update):"
-    echo "  --aws-account-id <id>        - AWS Account ID (12 digits)"
-    echo "  --github-org <org>            - GitHub organization or username"
-    echo "  --github-repo <repo>          - GitHub repository name"
-    echo "  --oidc-provider-arn <arn>      - ARN of GitHub OIDC identity provider (create first; see docs/oidc_github_identity_provider_setup.md)"
-    echo ""
-    echo "Optional Options:"
-    echo "  --github-source-branch <branch> - GitHub source branch for PRs (default: development)"
-    echo "  --github-target-branch <branch>  - GitHub target branch for PRs (default: main)"
-    echo "  --region <region>                - AWS region (default: us-east-1)"
-    echo "  --include-lambda-policy        - Include Lambda invoke policy (for lambda mode)"
-    echo "  --knowledge-base-id <id>      - Bedrock knowledge base ID for this environment (recommended for same-account multi-env)"
-    echo "  --project-name <name>          - Project name (default: chat-template)"
-    echo "  -y, --yes                        - Skip confirmation prompt (deploy/update/delete)"
-    echo ""
-    echo "Examples:"
-    echo "  $0 dev deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
-    echo "  $0 staging deploy --aws-account-id 123456789012 --github-org myorg --github-repo chat-template --oidc-provider-arn arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com --github-source-branch main"
-    echo "  $0 dev status"
-    echo ""
-    echo "Note: This script deploys policies first, then the role that uses them."
-    echo "      The role ARN will be printed at the end for use in GitHub secrets."
+    echo "Example: $0 dev deploy -y"
 }
 
 # Check if environment is provided
@@ -118,33 +71,32 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-ENVIRONMENT=${1:-dev}
-ACTION=${2:-deploy}
-PROJECT_NAME="chat-template"
-AWS_REGION="us-east-1"
+ENVIRONMENT=$1
+shift
+
+# Parse action (optional second arg)
+ACTION="deploy"
+if [[ $# -gt 0 && "$1" =~ ^(deploy|update|delete|validate|status)$ ]]; then
+    ACTION=$1
+    shift
+fi
+
+# Defaults (overridden by infra or flags)
 GITHUB_SOURCE_BRANCH="development"
 GITHUB_TARGET_BRANCH="main"
 INCLUDE_LAMBDA_POLICY=false
 OIDC_PROVIDER_ARN=""
 KNOWLEDGE_BASE_ID=""
-AWS_ACCOUNT_ID=""
 GITHUB_ORG=""
 GITHUB_REPO=""
-
-PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-cd "$PROJECT_ROOT"
 AUTO_CONFIRM=false
 
-shift 1  # Remove environment from arguments
+# Parse options
 while [[ $# -gt 0 ]]; do
     case $1 in
         -y|--yes)
             AUTO_CONFIRM=true
             shift
-            ;;
-        --aws-account-id)
-            AWS_ACCOUNT_ID="$2"
-            shift 2
             ;;
         --github-org)
             GITHUB_ORG="$2"
@@ -163,7 +115,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --region)
-            AWS_REGION="$2"
+            AWS_REGION_OVERRIDE="$2"
             shift 2
             ;;
         --include-lambda-policy)
@@ -179,86 +131,90 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --project-name)
-            PROJECT_NAME="$2"
+            PROJECT_NAME_OVERRIDE="$2"
             shift 2
             ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
         *)
-            # If it's not a recognized option, it might be the action
-            if [[ "$ACTION" == "deploy" && "$1" != "deploy" && "$1" != "update" && "$1" != "delete" && "$1" != "validate" && "$1" != "status" ]]; then
-                ACTION="$1"
-            fi
-            shift
+            print_error "Unknown option: $1"
+            show_usage
+            exit 1
             ;;
     esac
 done
 
-print_step "Starting GitHub Actions role deployment for evaluations in $ENVIRONMENT environment"
-
-if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
-    print_info "Environment: $ENVIRONMENT | Region: $AWS_REGION"
-    if [ "$AUTO_CONFIRM" = false ]; then
-        confirm_deployment "Proceed with $ACTION evals role?" || exit 0
-    fi
-fi
-
 # Validate environment
-case $ENVIRONMENT in
-    dev|staging|prod)
-        print_info "Using environment: $ENVIRONMENT"
-        ;;
-    *)
-        print_error "Invalid environment: $ENVIRONMENT"
-        show_usage
-        exit 1
-        ;;
-esac
+validate_environment "$ENVIRONMENT" || exit 1
 
-# Validate required parameters for deploy/update actions
-if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
-    if [ -z "$AWS_ACCOUNT_ID" ]; then
-        print_error "AWS Account ID is required (--aws-account-id)"
-        show_usage
-        exit 1
-    fi
-    
-    if [ -z "$GITHUB_ORG" ]; then
-        print_error "GitHub organization is required (--github-org)"
-        show_usage
-        exit 1
-    fi
-    
-    if [ -z "$GITHUB_REPO" ]; then
-        print_error "GitHub repository is required (--github-repo)"
-        show_usage
-        exit 1
-    fi
-    
-    # Validate AWS Account ID format (12 digits)
-    if ! [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
-        print_error "Invalid AWS Account ID format. Must be 12 digits."
-        exit 1
-    fi
+# Load configuration from infra.yaml
+PROJECT_ROOT=$(get_project_root)
+cd "$PROJECT_ROOT"
+load_infra_config || exit 1
+validate_config "$ENVIRONMENT" || exit 1
 
-    if [ -z "$OIDC_PROVIDER_ARN" ]; then
-        print_error "OIDC provider ARN is required (--oidc-provider-arn). Create the GitHub OIDC identity provider first; see docs/oidc_github_identity_provider_setup.md"
-        show_usage
-        exit 1
-    fi
-fi
+# Load from infra (overridable by flags)
+PROJECT_NAME=$(get_project_name)
+[ -n "${PROJECT_NAME_OVERRIDE:-}" ] && PROJECT_NAME="$PROJECT_NAME_OVERRIDE"
+AWS_REGION=$(get_environment_region "$ENVIRONMENT")
+[ -n "${AWS_REGION_OVERRIDE:-}" ] && AWS_REGION="$AWS_REGION_OVERRIDE"
+AWS_PROFILE=$(get_environment_cli_profile_name "$ENVIRONMENT")
+[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+[ -z "$GITHUB_ORG" ] && GITHUB_ORG=$(get_github_org 2>/dev/null || echo "")
+[ -z "$GITHUB_REPO" ] && GITHUB_REPO=$(get_github_repo 2>/dev/null || echo "")
 
-# Stack names
+# Role stack and template from infra
+ROLE_STACK=$(get_role_stack_name "evals" "$ENVIRONMENT")
+ROLE_TEMPLATE=$(get_role_template "evals")
+
+# Policy stack names and template paths (not in infra; use project root)
 SECRETS_MANAGER_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-secrets-manager-policy"
 S3_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-s3-evaluation-policy"
 BEDROCK_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-bedrock-evaluation-policy"
 LAMBDA_POLICY_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-lambda-invoke-policy"
-ROLE_STACK="${PROJECT_NAME}-${ENVIRONMENT}-evals-github-actions-role"
+SECRETS_MANAGER_POLICY_TEMPLATE="$PROJECT_ROOT/infra/policies/evals_secrets_manager_policy.yaml"
+S3_POLICY_TEMPLATE="$PROJECT_ROOT/infra/policies/evals_s3_policy.yaml"
+BEDROCK_POLICY_TEMPLATE="$PROJECT_ROOT/infra/policies/evals_bedrock_policy.yaml"
+LAMBDA_POLICY_TEMPLATE="$PROJECT_ROOT/infra/policies/evals_lambda_policy.yaml"
 
-# Template files
-SECRETS_MANAGER_POLICY_TEMPLATE="infra/policies/evals_secrets_manager_policy.yaml"
-S3_POLICY_TEMPLATE="infra/policies/evals_s3_policy.yaml"
-BEDROCK_POLICY_TEMPLATE="infra/policies/evals_bedrock_policy.yaml"
-LAMBDA_POLICY_TEMPLATE="infra/policies/evals_lambda_policy.yaml"
-ROLE_TEMPLATE="infra/roles/evals_github_action_role.yaml"
+# AWS CLI helper (uses CLI profile and region from config)
+aws_cmd() {
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+    else
+        aws --region "$AWS_REGION" "$@"
+    fi
+}
+
+# Discover OIDC provider in account when not provided
+get_oidc_provider_arn() {
+    aws_cmd iam list-open-id-connect-providers \
+        --query "OpenIDConnectProviderList[?ends_with(Arn, 'token.actions.githubusercontent.com')].Arn" \
+        --output text 2>/dev/null
+}
+
+# For deploy/update: validate required params and discover OIDC if needed
+if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
+    if [ -z "$GITHUB_ORG" ] || [ -z "$GITHUB_REPO" ]; then
+        print_error "GitHub org and repo are required. Set github.github_repo in infra/infra.yaml or use --github-org and --github-repo"
+        exit 1
+    fi
+    if [ -z "$OIDC_PROVIDER_ARN" ]; then
+        OIDC_PROVIDER_ARN=$(get_oidc_provider_arn)
+        if [ -z "$OIDC_PROVIDER_ARN" ] || [ "$OIDC_PROVIDER_ARN" = "None" ]; then
+            print_error "GitHub OIDC provider not found in account. Run setup_oidc_provider.sh first or pass --oidc-provider-arn"
+            exit 1
+        fi
+        print_info "Using OIDC provider: $OIDC_PROVIDER_ARN"
+    fi
+    if [ "$AUTO_CONFIRM" = false ]; then
+        print_step "Evals role deployment for $ENVIRONMENT (profile: ${AWS_PROFILE:-default})"
+        print_info "Environment: $ENVIRONMENT | Region: $AWS_REGION"
+        confirm_deployment "Proceed with $ACTION evals role?" || exit 0
+    fi
+fi
 
 # Function to validate template
 validate_template() {
@@ -266,7 +222,7 @@ validate_template() {
     local stack_name=$2
     
     print_info "Validating CloudFormation template: $template_file"
-    if aws cloudformation validate-template --template-body file://$template_file --region $AWS_REGION >/dev/null 2>&1; then
+    if aws_cmd cloudformation validate-template --template-body "file://$template_file" >/dev/null 2>&1; then
         print_info "Template validation successful: $stack_name"
     else
         print_error "Template validation failed: $template_file"
@@ -277,9 +233,8 @@ validate_template() {
 # Function to check stack status and print errors
 check_stack_status() {
     local stack_name=$1
-    local stack_status=$(aws cloudformation describe-stacks \
+    local stack_status=$(aws_cmd cloudformation describe-stacks \
         --stack-name $stack_name \
-        --region $AWS_REGION \
         --query 'Stacks[0].StackStatus' \
         --output text 2>/dev/null)
     
@@ -293,9 +248,8 @@ check_stack_status() {
             echo ""
             
             # Get stack status reason
-            local status_reason=$(aws cloudformation describe-stacks \
+            local status_reason=$(aws_cmd cloudformation describe-stacks \
                 --stack-name $stack_name \
-                --region $AWS_REGION \
                 --query 'Stacks[0].StackStatusReason' \
                 --output text 2>/dev/null)
             
@@ -307,9 +261,8 @@ check_stack_status() {
             # Get recent stack events with errors
             print_error "Recent stack events with errors:"
             echo ""
-            aws cloudformation describe-stack-events \
+            aws_cmd cloudformation describe-stack-events \
                 --stack-name $stack_name \
-                --region $AWS_REGION \
                 --max-items 20 \
                 --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
                 --output table 2>/dev/null || true
@@ -333,9 +286,8 @@ check_stack_status() {
 get_stack_output() {
     local stack_name=$1
     local output_key=$2
-    aws cloudformation describe-stacks \
+    aws_cmd cloudformation describe-stacks \
         --stack-name $stack_name \
-        --region $AWS_REGION \
         --query "Stacks[0].Outputs[?OutputKey=='${output_key}'].OutputValue" \
         --output text 2>/dev/null
 }
@@ -350,21 +302,19 @@ deploy_policy_stack() {
     
     # Get current stack status before attempting update
     local initial_status=""
-    if aws cloudformation describe-stacks --stack-name $stack_name --region $AWS_REGION >/dev/null 2>&1; then
-        initial_status=$(aws cloudformation describe-stacks \
+    if aws_cmd cloudformation describe-stacks --stack-name $stack_name >/dev/null 2>&1; then
+        initial_status=$(aws_cmd cloudformation describe-stacks \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null)
         print_info "Current stack status: $initial_status"
         print_warning "Stack $stack_name already exists. Attempting update..."
         
-        local update_output=$(aws cloudformation update-stack \
+        local update_output=$(aws_cmd cloudformation update-stack \
             --stack-name $stack_name \
-            --template-body file://$template_file \
-            --parameters file://$param_file \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region $AWS_REGION 2>&1)
+            --template-body "file://$template_file" \
+            --parameters "file://$param_file" \
+            --capabilities CAPABILITY_NAMED_IAM 2>&1)
         local result=$?
         
         # Check output for "No updates are to be performed" regardless of exit code
@@ -387,9 +337,8 @@ deploy_policy_stack() {
         sleep 3
         
         # Check stack status
-        local verify_status=$(aws cloudformation describe-stacks \
+        local verify_status=$(aws_cmd cloudformation describe-stacks \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null)
         
@@ -397,23 +346,20 @@ deploy_policy_stack() {
         
         # Check the most recent stack event to see if an update was actually initiated
         # Look for UPDATE_IN_PROGRESS event for the stack itself (not resources)
-        local event_status=$(aws cloudformation describe-stack-events \
+        local event_status=$(aws_cmd cloudformation describe-stack-events \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --max-items 1 \
             --query 'StackEvents[0].ResourceStatus' \
             --output text 2>/dev/null)
         
-        local event_type=$(aws cloudformation describe-stack-events \
+        local event_type=$(aws_cmd cloudformation describe-stack-events \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --max-items 1 \
             --query 'StackEvents[0].ResourceType' \
             --output text 2>/dev/null)
         
-        local event_time=$(aws cloudformation describe-stack-events \
+        local event_time=$(aws_cmd cloudformation describe-stack-events \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --max-items 1 \
             --query 'StackEvents[0].Timestamp' \
             --output text 2>/dev/null)
@@ -434,9 +380,8 @@ deploy_policy_stack() {
             print_warning "Waiting to see if update starts..."
             sleep 5
             
-            verify_status=$(aws cloudformation describe-stacks \
+            verify_status=$(aws_cmd cloudformation describe-stacks \
                 --stack-name $stack_name \
-                --region $AWS_REGION \
                 --query 'Stacks[0].StackStatus' \
                 --output text 2>/dev/null)
             
@@ -461,12 +406,11 @@ deploy_policy_stack() {
         fi
     else
         print_info "Creating new stack: $stack_name"
-        aws cloudformation create-stack \
+        aws_cmd cloudformation create-stack \
             --stack-name $stack_name \
-            --template-body file://$template_file \
-            --parameters file://$param_file \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region $AWS_REGION
+            --template-body "file://$template_file" \
+            --parameters "file://$param_file" \
+            --capabilities CAPABILITY_NAMED_IAM
     fi
     
     print_info "Waiting for stack $stack_name to complete..."
@@ -485,9 +429,8 @@ deploy_policy_stack() {
     
     # Poll until stack reaches a terminal state
     while [ $elapsed_time -lt $max_wait_time ]; do
-        stack_status=$(aws cloudformation describe-stacks \
+        stack_status=$(aws_cmd cloudformation describe-stacks \
             --stack-name $stack_name \
-            --region $AWS_REGION \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null)
         
@@ -545,10 +488,9 @@ show_status() {
     stacks+=("$ROLE_STACK")
     
     for stack in "${stacks[@]}"; do
-        if aws cloudformation describe-stacks --stack-name $stack --region $AWS_REGION >/dev/null 2>&1; then
-            local status=$(aws cloudformation describe-stacks \
+        if aws_cmd cloudformation describe-stacks --stack-name $stack >/dev/null 2>&1; then
+            local status=$(aws_cmd cloudformation describe-stacks \
                 --stack-name $stack \
-                --region $AWS_REGION \
                 --query 'Stacks[0].StackStatus' \
                 --output text)
             print_info "$stack: $status"
@@ -582,19 +524,19 @@ delete_stacks() {
     print_step "Deleting stacks in reverse order..."
 
     # Delete role first (depends on policies)
-    if aws cloudformation describe-stacks --stack-name $ROLE_STACK --region $AWS_REGION >/dev/null 2>&1; then
+    if aws_cmd cloudformation describe-stacks --stack-name $ROLE_STACK >/dev/null 2>&1; then
         print_info "Deleting role stack: $ROLE_STACK"
-        aws cloudformation delete-stack --stack-name $ROLE_STACK --region $AWS_REGION
-        aws cloudformation wait stack-delete-complete --stack-name $ROLE_STACK --region $AWS_REGION
+        aws_cmd cloudformation delete-stack --stack-name $ROLE_STACK
+        aws_cmd cloudformation wait stack-delete-complete --stack-name $ROLE_STACK
     fi
     
     # Delete policies
     local policy_stacks=("$LAMBDA_POLICY_STACK" "$BEDROCK_POLICY_STACK" "$S3_POLICY_STACK" "$SECRETS_MANAGER_POLICY_STACK")
     for stack in "${policy_stacks[@]}"; do
-        if aws cloudformation describe-stacks --stack-name $stack --region $AWS_REGION >/dev/null 2>&1; then
+        if aws_cmd cloudformation describe-stacks --stack-name $stack >/dev/null 2>&1; then
             print_info "Deleting policy stack: $stack"
-            aws cloudformation delete-stack --stack-name $stack --region $AWS_REGION
-            aws cloudformation wait stack-delete-complete --stack-name $stack --region $AWS_REGION
+            aws_cmd cloudformation delete-stack --stack-name $stack
+            aws_cmd cloudformation wait stack-delete-complete --stack-name $stack
         fi
     done
     

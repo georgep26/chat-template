@@ -28,6 +28,9 @@
 #
 #   # Enable console sign-in for the org-admin IAM user (prompts for password)
 #   ./scripts/setup/setup_accounts.sh --set-console-password
+#
+#   # Skip CLI role setup and AWS config/credentials updates
+#   ./scripts/setup/setup_accounts.sh --skip-cli-roles
 
 set -euo pipefail
 
@@ -65,6 +68,7 @@ show_usage() {
     echo "  --poll-sleep-seconds <n>      - Seconds between status polls (default: 15)"
     echo "  --poll-max-minutes <n>        - Max minutes to wait per account (default: 20)"
     echo "  --skip-iam-user               - Do not create the management-account IAM user for assuming member roles"
+    echo "  --skip-cli-roles              - Do not deploy CLI roles or update ~/.aws/config and ~/.aws/credentials"
     echo "  --set-console-password        - Prompt to set or update console sign-in password (default)"
     echo "  --no-console-password         - Do not prompt for console password"
     echo "  -y, --yes                     - Skip confirmation prompt"
@@ -73,7 +77,7 @@ show_usage() {
     echo "Environment variables (override options):"
     echo "  PROJECT_NAME, DEV_EMAIL, STAGING_EMAIL, PROD_EMAIL"
     echo "  BUDGET_ALERT_EMAIL, DEV_BUDGET_USD, STAGING_BUDGET_USD, PROD_BUDGET_USD"
-    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES, SKIP_IAM_USER, SET_CONSOLE_PASSWORD"
+    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES, SKIP_IAM_USER, SKIP_CLI_ROLES, SET_CONSOLE_PASSWORD"
 }
 
 # Load infra config and read defaults from infra.yaml (before CLI overrides)
@@ -123,6 +127,7 @@ ENV_OUT_JSON="${OUT_JSON:-}"
 ENV_POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-}"
 ENV_POLL_MAX_MINUTES="${POLL_MAX_MINUTES:-}"
 ENV_SKIP_IAM_USER="${SKIP_IAM_USER:-}"
+ENV_SKIP_CLI_ROLES="${SKIP_CLI_ROLES:-}"
 ENV_SET_CONSOLE_PASSWORD="${SET_CONSOLE_PASSWORD:-}"
 ENV_AUTO_CONFIRM="${AUTO_CONFIRM:-}"
 
@@ -140,6 +145,7 @@ OUT_JSON=""
 POLL_SLEEP_SECONDS="15"
 POLL_MAX_MINUTES="20"
 SKIP_IAM_USER="0"
+SKIP_CLI_ROLES="0"
 SET_CONSOLE_PASSWORD="1"
 AUTO_CONFIRM="0"
 
@@ -171,6 +177,7 @@ read_defaults_from_infra
 [[ -n "$ENV_POLL_SLEEP_SECONDS" ]] && POLL_SLEEP_SECONDS="$ENV_POLL_SLEEP_SECONDS"
 [[ -n "$ENV_POLL_MAX_MINUTES" ]] && POLL_MAX_MINUTES="$ENV_POLL_MAX_MINUTES"
 [[ -n "$ENV_SKIP_IAM_USER" ]] && SKIP_IAM_USER="$ENV_SKIP_IAM_USER"
+[[ -n "$ENV_SKIP_CLI_ROLES" ]] && SKIP_CLI_ROLES="$ENV_SKIP_CLI_ROLES"
 [[ -n "$ENV_SET_CONSOLE_PASSWORD" ]] && SET_CONSOLE_PASSWORD="$ENV_SET_CONSOLE_PASSWORD"
 [[ -n "$ENV_AUTO_CONFIRM" ]] && AUTO_CONFIRM="$ENV_AUTO_CONFIRM"
 
@@ -230,6 +237,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-iam-user)
             SKIP_IAM_USER=1
+            shift
+            ;;
+        --skip-cli-roles)
+            SKIP_CLI_ROLES=1
             shift
             ;;
         --set-console-password)
@@ -558,6 +569,190 @@ EOF
     fi
 }
 
+# Deploy CLI role in one member account by assuming OrganizationAccountAccessRole (no profile saved).
+# Uses current (management-account) credentials to assume the org role, then runs CloudFormation.
+deploy_cli_role_via_assumed_org() {
+    local env="$1"
+    local account_id="$2"
+    local infra_dir region stack_name template_file param_file role_arn
+    local org_role_arn creds_json wait_cmd stack_exists=false
+
+    infra_dir="$(dirname "$INFRA_YAML")"
+    region="$(yq -r '.project.default_region' "$INFRA_YAML")"
+    stack_name="${PROJECT_NAME}-cli-role-${env}"
+    template_file="${infra_dir}/roles/admin_cli_role.yaml"
+
+    if [[ ! -f "$template_file" ]]; then
+        print_error "CLI role template not found: $template_file"
+        return 1
+    fi
+
+    org_role_arn="arn:aws:iam::${account_id}:role/${ORG_ACCESS_ROLE_NAME}"
+    print_step "Assuming ${ORG_ACCESS_ROLE_NAME} in ${env} (${account_id}) to deploy CLI role stack..."
+    creds_json="$(aws sts assume-role \
+        --role-arn "$org_role_arn" \
+        --role-session-name "setup-cli-role-${env}" \
+        --query 'Credentials' \
+        --output json 2>/dev/null)" || {
+        print_error "Failed to assume ${ORG_ACCESS_ROLE_NAME} in account ${account_id}. Ensure current credentials can assume this role."
+        return 1
+    }
+
+    export AWS_ACCESS_KEY_ID
+    export AWS_SECRET_ACCESS_KEY
+    export AWS_SESSION_TOKEN
+    AWS_ACCESS_KEY_ID="$(echo "$creds_json" | yq -r '.AccessKeyId')"
+    AWS_SECRET_ACCESS_KEY="$(echo "$creds_json" | yq -r '.SecretAccessKey')"
+    AWS_SESSION_TOKEN="$(echo "$creds_json" | yq -r '.SessionToken')"
+    export AWS_REGION="$region"
+
+    param_file="$(mktemp)"
+    trap "rm -f $param_file; unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN 2>/dev/null" RETURN
+    cat > "$param_file" <<EOF
+[
+  {"ParameterKey": "ProjectName", "ParameterValue": "${PROJECT_NAME}"},
+  {"ParameterKey": "Environment", "ParameterValue": "${env}"}
+]
+EOF
+
+    if aws cloudformation describe-stacks --stack-name "$stack_name" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
+        stack_exists=true
+        local update_out
+        update_out="$(aws cloudformation update-stack \
+            --stack-name "$stack_name" \
+            --template-body "file://${template_file}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM 2>&1)" || true
+        if echo "$update_out" | grep -q "No updates are to be performed"; then
+            print_info "CLI role stack ${stack_name} already up to date."
+        elif echo "$update_out" | grep -q "ValidationError\|Failed"; then
+            print_warning "CLI role stack update failed: $update_out"
+        else
+            aws cloudformation wait stack-update-complete --stack-name "$stack_name" || true
+        fi
+    else
+        aws cloudformation create-stack \
+            --stack-name "$stack_name" \
+            --template-body "file://${template_file}" \
+            --parameters "file://${param_file}" \
+            --capabilities CAPABILITY_NAMED_IAM
+        aws cloudformation wait stack-create-complete --stack-name "$stack_name" || {
+            print_error "CLI role stack creation failed: $stack_name"
+            return 1
+        }
+    fi
+
+    print_complete "CLI role deployed in ${env} (${stack_name})"
+    return 0
+}
+
+# Deploy CLI roles in all member accounts by dynamically assuming org role each time.
+deploy_cli_roles_in_member_accounts() {
+    print_step "Deploying CLI roles in dev, staging, prod (assuming OrganizationAccountAccessRole per account)..."
+    deploy_cli_role_via_assumed_org dev     "$DEV_ACCOUNT_ID"     || return 1
+    deploy_cli_role_via_assumed_org staging "$STAGING_ACCOUNT_ID" || return 1
+    deploy_cli_role_via_assumed_org prod    "$PROD_ACCOUNT_ID"    || return 1
+    print_complete "All CLI role stacks deployed."
+}
+
+# Return 0 if the given [profile name] or [profile name] block exists in AWS config.
+config_profile_exists() {
+    local config_file="${1:-$HOME/.aws/config}"
+    local profile_name="$2"
+    [[ -f "$config_file" ]] && grep -qE '^\s*\[profile\s+'"$(sed 's/[.[\*^$()+?{|]/\\&/g' <<< "$profile_name")"'\s*\]' "$config_file"
+}
+
+# Return 0 if the given [section] exists in AWS credentials file.
+credentials_section_exists() {
+    local creds_file="${1:-$HOME/.aws/credentials}"
+    local section_name="$2"
+    [[ -f "$creds_file" ]] && grep -qE '^\s*\['"$(sed 's/[.[\*^$()+?{|]/\\&/g' <<< "$section_name")"'\s*\]' "$creds_file"
+}
+
+# Append CLI role profiles and (optionally) management profile to ~/.aws/config and credentials.
+# Only appends blocks for profiles/sections that do not already exist; never overwrites existing content.
+write_aws_cli_config_and_credentials() {
+    local config_file="${AWS_CONFIG_FILE:-$HOME/.aws/config}"
+    local creds_file="${AWS_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
+    local region management_username management_profile cli_script_path
+    local access_key_id secret_key
+
+    region="$(yq -r '.project.default_region' "$INFRA_YAML")"
+    management_profile="${PROJECT_NAME}-management-admin"
+    cli_script_path="$(cd "$SCRIPT_DIR/.." && pwd)/utils/assume_role_for_cli.sh"
+
+    # Ensure config/credentials files exist (create empty if not)
+    mkdir -p "$(dirname "$config_file")" "$(dirname "$creds_file")"
+    [[ -f "$config_file" ]] || touch "$config_file"
+    [[ -f "$creds_file" ]] || touch "$creds_file"
+
+    # Create access key for management user and add to credentials (only if section does not exist)
+    if [[ "${SKIP_IAM_USER}" -eq 0 ]]; then
+        management_username="$(aws cloudformation describe-stacks \
+            --stack-name "${PROJECT_NAME}-management-admin-user" \
+            --query 'Stacks[0].Outputs[?OutputKey==`UserName`].OutputValue' \
+            --output text 2>/dev/null)" || true
+        if [[ -n "$management_username" && "$management_username" != "None" ]]; then
+            if ! credentials_section_exists "$creds_file" "$management_profile"; then
+                print_step "Creating access key for ${management_username} and adding to ${creds_file}..."
+                creds_json="$(aws iam create-access-key --user-name "$management_username" --output json 2>/dev/null)" || {
+                    print_warning "Could not create access key for ${management_username} (e.g. limit reached). Add credentials manually for profile ${management_profile}."
+                }
+                if [[ -n "$creds_json" ]]; then
+                    access_key_id="$(echo "$creds_json" | yq -r '.AccessKey.AccessKeyId')"
+                    secret_key="$(echo "$creds_json" | yq -r '.AccessKey.SecretAccessKey')"
+                    {
+                        echo ""
+                        echo "# Added by setup_accounts.sh for ${PROJECT_NAME}"
+                        echo "[${management_profile}]"
+                        echo "aws_access_key_id = ${access_key_id}"
+                        echo "aws_secret_access_key = ${secret_key}"
+                    } >> "$creds_file"
+                    print_info "Appended [${management_profile}] to ${creds_file}"
+                fi
+            else
+                print_info "Credentials section [${management_profile}] already exists; skipping."
+            fi
+        fi
+    fi
+
+    # Append management profile to config if missing
+    if ! config_profile_exists "$config_file" "$management_profile"; then
+        {
+            echo ""
+            echo "# Added by setup_accounts.sh for ${PROJECT_NAME}"
+            echo "[profile ${management_profile}]"
+            echo "region = ${region}"
+        } >> "$config_file"
+        print_info "Appended [profile ${management_profile}] to ${config_file}"
+    else
+        print_info "Config profile [profile ${management_profile}] already exists; skipping."
+    fi
+
+    # Source profile for credential_process: use management profile if we have it, else default
+    local source_profile_for_cli="$management_profile"
+    [[ "${SKIP_IAM_USER}" -eq 1 ]] && source_profile_for_cli="default"
+
+    # Append CLI role profiles (credential_process) if missing
+    for env in dev staging prod; do
+        local profile_name="${PROJECT_NAME}-${env}-cli"
+        if config_profile_exists "$config_file" "$profile_name"; then
+            print_info "Config profile [profile ${profile_name}] already exists; skipping."
+        else
+            {
+                echo ""
+                echo "# Added by setup_accounts.sh for ${PROJECT_NAME} (CLI role in ${env})"
+                echo "[profile ${profile_name}]"
+                echo "region = ${region}"
+                echo "credential_process = \"${cli_script_path}\" ${env} cli ${source_profile_for_cli}"
+            } >> "$config_file"
+            print_info "Appended [profile ${profile_name}] to ${config_file}"
+        fi
+    done
+
+    print_complete "AWS CLI config and credentials updated. Use: aws --profile ${PROJECT_NAME}-dev-cli <command>"
+}
+
 # Account names
 DEV_NAME="${PROJECT_NAME}-dev"
 STAGING_NAME="${PROJECT_NAME}-staging"
@@ -579,14 +774,20 @@ yq -i ".environments.dev.account_id = \"${DEV_ACCOUNT_ID}\"" "$INFRA_YAML"
 yq -i ".environments.dev.account_name = \"${DEV_NAME}\"" "$INFRA_YAML"
 yq -i ".environments.dev.email = \"${DEV_EMAIL}\"" "$INFRA_YAML"
 yq -i ".environments.dev.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.dev.cli_role_name = \"${PROJECT_NAME}-dev-admin-cli-role\"" "$INFRA_YAML"
+yq -i ".environments.dev.cli_profile_name = \"${PROJECT_NAME}-dev-cli\"" "$INFRA_YAML"
 yq -i ".environments.staging.account_id = \"${STAGING_ACCOUNT_ID}\"" "$INFRA_YAML"
 yq -i ".environments.staging.account_name = \"${STAGING_NAME}\"" "$INFRA_YAML"
 yq -i ".environments.staging.email = \"${STAGING_EMAIL}\"" "$INFRA_YAML"
 yq -i ".environments.staging.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.staging.cli_role_name = \"${PROJECT_NAME}-staging-admin-cli-role\"" "$INFRA_YAML"
+yq -i ".environments.staging.cli_profile_name = \"${PROJECT_NAME}-staging-cli\"" "$INFRA_YAML"
 yq -i ".environments.prod.account_id = \"${PROD_ACCOUNT_ID}\"" "$INFRA_YAML"
 yq -i ".environments.prod.account_name = \"${PROD_NAME}\"" "$INFRA_YAML"
 yq -i ".environments.prod.email = \"${PROD_EMAIL}\"" "$INFRA_YAML"
 yq -i ".environments.prod.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
+yq -i ".environments.prod.cli_role_name = \"${PROJECT_NAME}-prod-admin-cli-role\"" "$INFRA_YAML"
+yq -i ".environments.prod.cli_profile_name = \"${PROJECT_NAME}-prod-cli\"" "$INFRA_YAML"
 
 # Optional: also write JSON if requested
 if [[ -n "${OUT_JSON}" ]]; then
@@ -614,6 +815,17 @@ if [[ "${SKIP_IAM_USER}" -eq 0 ]]; then
     fi
 else
     print_info "Skipping IAM user setup (--skip-iam-user)."
+fi
+
+if [[ "${SKIP_CLI_ROLES}" -eq 0 ]]; then
+    print_step "Deploying CLI roles in each account and updating AWS CLI config/credentials..."
+    if deploy_cli_roles_in_member_accounts; then
+        write_aws_cli_config_and_credentials
+    else
+        print_warning "CLI role deployment failed. Skipping config/credentials update. Re-run with --skip-cli-roles to skip this step next time."
+    fi
+else
+    print_info "Skipping CLI role setup (--skip-cli-roles)."
 fi
 
 print_header "Done. Updated: infra/infra.yaml"
