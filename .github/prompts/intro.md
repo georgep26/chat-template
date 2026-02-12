@@ -27,8 +27,8 @@ Act as a helpful mentor and guide. Be thorough but concise, and encourage questi
 - Mention the PR template and issue templates in .github/
 
 ### 4. Environment Setup
-- Explain the environment setup process using scripts/setup_env.sh
-- Walk through the quick start: `make install` or `bash scripts/setup_env.sh`
+- Explain the environment setup process using scripts/setup/setup_local_dev_env.sh
+- Walk through the quick start: `make install` or `bash scripts/setup/setup_local_dev_env.sh`
 - Explain the conda environment setup and why it's used
 - Mention the importance of updating the environment name in environment.yml
 - Show how to activate the environment after setup
