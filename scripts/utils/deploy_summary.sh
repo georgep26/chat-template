@@ -57,10 +57,11 @@ draw_box_row_centered() {
     local content=$1
     local width=${2:-64}
     local content_len=${#content}
-    local total_padding=$((width - 4 - content_len))
+    local inner_width=$((width - 2))  # subtract 2 for ║...║ borders
+    local total_padding=$((inner_width - content_len))
     local left_padding=$((total_padding / 2))
     local right_padding=$((total_padding - left_padding))
-    printf "║%*s%s%*s║\n" "$((left_padding + 2))" "" "$content" "$((right_padding + 2))" ""
+    printf "║%*s%s%*s║\n" "$left_padding" "" "$content" "$right_padding" ""
 }
 
 # =============================================================================
@@ -76,8 +77,13 @@ print_resource_summary() {
     
     ensure_config_loaded || return 1
     
+    # Get config path (ensure it's set)
+    local config_path="${INFRA_CONFIG_PATH:-$(get_infra_yaml_path)}"
+    
     local project_name=$(get_project_name)
     local account_id=$(get_environment_account_id "$env")
+    local account_name=$(yq ".environments.${env}.account_name" "$config_path" 2>/dev/null || echo "")
+    [ "$account_name" = "null" ] && account_name=""
     local region=$(get_environment_region "$env")
     local profile=$(get_environment_profile "$env")
     local stack_name=$(get_resource_stack_name "$resource_name" "$env")
@@ -89,13 +95,17 @@ print_resource_summary() {
     draw_box_separator $width
     draw_box_row "Environment:  $env" $width
     draw_box_row "Region:       $region" $width
-    draw_box_row "Account:      $account_id" $width
+    if [ -n "$account_name" ] && [ "$account_name" != "null" ]; then
+        draw_box_row "Account:      $account_name ($account_id)" $width
+    else
+        draw_box_row "Account:      $account_id" $width
+    fi
     [ "$profile" != "null" ] && draw_box_row "Profile:      $profile" $width
     draw_box_separator $width
     draw_box_row "Resource:     $resource_name" $width
     draw_box_row "Stack:        $stack_name" $width
     [ -n "$template" ] && draw_box_row "Template:     ${template##*/}" $width
-    draw_box_row "Action:       ${action^^}" $width
+    draw_box_row "Action:       $(echo "$action" | tr '[:lower:]' '[:upper:]')" $width
     draw_box_bottom $width
     echo ""
 }

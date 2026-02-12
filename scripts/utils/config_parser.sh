@@ -73,6 +73,24 @@ get_default_region() {
     yq '.project.default_region' "$INFRA_CONFIG_PATH"
 }
 
+# Get GitHub org from infra (github.github_repo is "org/repo")
+get_github_org() {
+    ensure_config_loaded || return 1
+    local repo=$(yq -r '.github.github_repo // ""' "$INFRA_CONFIG_PATH")
+    if [ -n "$repo" ] && [[ "$repo" == *"/"* ]]; then
+        echo "${repo%%/*}"
+    fi
+}
+
+# Get GitHub repo name from infra (github.github_repo is "org/repo")
+get_github_repo() {
+    ensure_config_loaded || return 1
+    local repo=$(yq -r '.github.github_repo // ""' "$INFRA_CONFIG_PATH")
+    if [ -n "$repo" ] && [[ "$repo" == *"/"* ]]; then
+        echo "${repo#*/}"
+    fi
+}
+
 # =============================================================================
 # Environment Configuration
 # =============================================================================
@@ -103,6 +121,32 @@ get_environment_profile() {
     yq ".environments.${env}.deployer_profile" "$INFRA_CONFIG_PATH"
 }
 
+# Get environment CLI role name (IAM role in the account)
+get_environment_cli_role_name() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local name=$(yq ".environments.${env}.cli_role_name" "$INFRA_CONFIG_PATH")
+    if [ "$name" = "null" ] || [ -z "$name" ]; then
+        local project_name=$(get_project_name)
+        echo "${project_name}-${env}-admin-cli-role"
+    else
+        echo "$name"
+    fi
+}
+
+# Get environment CLI profile name (AWS CLI profile in ~/.aws/config)
+get_environment_cli_profile_name() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local name=$(yq ".environments.${env}.cli_profile_name" "$INFRA_CONFIG_PATH")
+    if [ "$name" = "null" ] || [ -z "$name" ]; then
+        local project_name=$(get_project_name)
+        echo "${project_name}-${env}-cli"
+    else
+        echo "$name"
+    fi
+}
+
 # Get environment secrets file path
 get_environment_secrets_file() {
     local env=$1
@@ -110,6 +154,24 @@ get_environment_secrets_file() {
     local project_root=$(get_project_root)
     local secrets_path=$(yq ".environments.${env}.secrets_file" "$INFRA_CONFIG_PATH")
     echo "$project_root/infra/$secrets_path"
+}
+
+# Get environment VPC ID
+get_environment_vpc_id() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local vpc_id=$(yq ".environments.${env}.vpc_id" "$INFRA_CONFIG_PATH")
+    [ "$vpc_id" = "null" ] && vpc_id=""
+    echo "$vpc_id"
+}
+
+# Get environment subnet IDs
+get_environment_subnet_ids() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local subnet_ids=$(yq ".environments.${env}.subnet_ids" "$INFRA_CONFIG_PATH")
+    [ "$subnet_ids" = "null" ] && subnet_ids=""
+    echo "$subnet_ids"
 }
 
 # Check if environment exists in config
