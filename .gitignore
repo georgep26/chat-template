@@ -286,3 +286,6 @@ app_config.yaml
 
 # Security reports 
 docs/security_reports/
+
+# Plans
+.cursor/plans/
