@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # ECR Repository Deployment Script
-# This script deploys the ECR repository for Lambda container images
+# This script deploys the ECR repository for Lambda container images.
+# Uses the deployer profile for local runs (role created by deploy_deployer_github_action_role.sh).
+# In CI (GitHub Actions), the deployer role is assumed via OIDC automatically.
 # All configuration is read from infra.yaml
 #
 # Usage Examples:
@@ -116,8 +118,12 @@ validate_config "$ENVIRONMENT" || exit 1
 # Get values from config
 PROJECT_NAME=$(get_project_name)
 AWS_REGION=$(get_environment_region "$ENVIRONMENT")
-AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
-[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+# Use deployer profile for local runs. In CI, the deployer role is assumed via OIDC automatically.
+if [ -z "$AWS_PROFILE" ] && [ -z "$AWS_SESSION_TOKEN" ]; then
+    AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+    [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+    [ -n "$AWS_PROFILE" ] && print_info "Using deployer profile: $AWS_PROFILE"
+fi
 
 STACK_NAME=$(get_resource_stack_name "$RESOURCE_NAME" "$ENVIRONMENT")
 TEMPLATE_FILE=$(get_resource_template "$RESOURCE_NAME")

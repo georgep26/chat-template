@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # S3 Bucket Deployment Script for Knowledge Base Documents
-# This script deploys the S3 bucket CloudFormation stack
+# This script deploys the S3 bucket CloudFormation stack.
+# Uses the CLI admin profile for local runs. In CI (GitHub Actions), env credentials
+# via OIDC are detected automatically and no profile override is applied.
 # All configuration is read from infra.yaml
 #
 # Usage Examples:
@@ -119,7 +121,11 @@ validate_config "$ENVIRONMENT" || exit 1
 # Get values from config
 PROJECT_NAME=$(get_project_name)
 AWS_REGION=$(get_environment_region "$ENVIRONMENT")
-AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+# Use CLI admin profile by default for local runs. In CI, env creds (OIDC) are used automatically.
+if [ -z "$AWS_PROFILE" ] && [ -z "$AWS_SESSION_TOKEN" ]; then
+    AWS_PROFILE=$(get_environment_cli_profile_name "$ENVIRONMENT")
+    print_info "Using CLI admin profile: $AWS_PROFILE"
+fi
 [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
 
 STACK_NAME=$(get_resource_stack_name "$RESOURCE_NAME" "$ENVIRONMENT")
@@ -161,10 +167,36 @@ do_validate_template() {
         exit 1
     fi
     
-    if aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" >/dev/null 2>&1; then
+    # Test AWS credentials before validation (catches credential_process errors early)
+    if [ -n "$AWS_PROFILE" ]; then
+        print_info "Testing AWS credentials with profile: $AWS_PROFILE"
+        local caller_identity
+        if caller_identity=$(aws_cmd sts get-caller-identity 2>&1); then
+            local assumed_arn
+            assumed_arn=$(echo "$caller_identity" | grep -o '"Arn"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+            print_info "Authenticated as: $assumed_arn"
+        else
+            print_error "Failed to get AWS credentials using profile '$AWS_PROFILE'"
+            echo "$caller_identity" | sed 's/^/  /'
+            print_info ""
+            print_info "Common issues:"
+            print_info "  - yq is not installed (required by credential_process): brew install yq"
+            print_info "  - Source profile cannot assume OrganizationAccountAccessRole"
+            print_info "  - Deployer role does not exist yet (run deploy_deployer_github_action_role.sh first)"
+            print_info "  - Try --use-cli-role to use the CLI admin profile instead"
+            exit 1
+        fi
+    fi
+    
+    local validation_output
+    validation_output=$(aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" 2>&1)
+    local validation_exit=$?
+    
+    if [ $validation_exit -eq 0 ]; then
         print_complete "Template validation successful"
     else
         print_error "Template validation failed"
+        echo "$validation_output" | sed 's/^/  /'
         exit 1
     fi
 }
@@ -321,10 +353,27 @@ EOF
             fi
         fi
         
+        # Create config folder and upload app_config.yaml
+        # Read from local config/<env>/app_config.yaml, upload to s3://bucket/config/app_config.yaml
+        local config_path="config/${ENVIRONMENT}/app_config.yaml"
+        local s3_config_key="config/app_config.yaml"
+        
+        if [ -f "$PROJECT_ROOT/$config_path" ]; then
+            print_info "Uploading app config to s3://$actual_bucket/$s3_config_key..."
+            if aws_cmd s3 cp "$PROJECT_ROOT/$config_path" "s3://$actual_bucket/$s3_config_key" >/dev/null 2>&1; then
+                print_complete "Uploaded app config: s3://$actual_bucket/$s3_config_key"
+            else
+                print_warning "Failed to upload app config (continuing anyway)"
+            fi
+        else
+            print_warning "App config file not found: $config_path (skipping upload)"
+        fi
+        
         print_complete "$RESOURCE_DISPLAY_NAME deployment finished"
         echo ""
         print_info "Bucket Name: $actual_bucket"
         print_info "Upload documents to: s3://$actual_bucket/kb_sources/"
+        print_info "App config: s3://$actual_bucket/$s3_config_key"
     fi
 }
 

@@ -122,16 +122,47 @@ AWS_REGION=$(get_environment_region "$ENVIRONMENT")
 AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
 [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
 
-STACK_NAME=$(get_resource_stack_name "$RESOURCE_NAME" "$ENVIRONMENT")
-TEMPLATE_FILE=$(get_resource_template "$RESOURCE_NAME")
+STACK_NAME=$(get_resource_stack_name "$RESOURCE_NAME" "$ENVIRONMENT") || true
+TEMPLATE_FILE=$(get_resource_template "$RESOURCE_NAME") || true
 
-# Get config values
-VPC_CIDR=$(get_resource_config "$RESOURCE_NAME" "vpc_cidr")
-ENABLE_NAT_GATEWAY=$(get_resource_config "$RESOURCE_NAME" "enable_nat_gateway")
+# use_defaults is under resources.network (not under config)
+USE_DEFAULTS=$(yq '.resources.network.use_defaults // false' "$INFRA_CONFIG_PATH")
+# Normalize use_defaults (yq may return true/false or null)
+[ "$USE_DEFAULTS" = "true" ] || USE_DEFAULTS=false
+[ "$USE_DEFAULTS" != "false" ] && USE_DEFAULTS=true
+
+# Custom network config (only used when use_defaults is false)
+VPC_CIDR=$(get_resource_config "$RESOURCE_NAME" "vpc_cidr" "$ENVIRONMENT")
+ENABLE_NAT_GATEWAY=$(get_resource_config "$RESOURCE_NAME" "enable_nat_gateway" "$ENVIRONMENT")
+[ "$VPC_CIDR" = "null" ] || [ -z "$VPC_CIDR" ] && VPC_CIDR="10.0.0.0/16"
+[ "$ENABLE_NAT_GATEWAY" = "null" ] || [ -z "$ENABLE_NAT_GATEWAY" ] && ENABLE_NAT_GATEWAY=false
+
+# When use_defaults is true: optional existing VPC to use (if no AWS default VPC in region)
+EXISTING_VPC_ID=$(get_resource_config "$RESOURCE_NAME" "vpc_id" "$ENVIRONMENT")
+[ "$EXISTING_VPC_ID" = "null" ] || [ -z "$EXISTING_VPC_ID" ] && EXISTING_VPC_ID=""
+
+# When use_defaults is true we only read VPC/subnets; use CLI profile so we use the same account as the console (deployer profile can point at a different account or fail to assume).
+if [ "$USE_DEFAULTS" = "true" ]; then
+    AWS_PROFILE=$(get_environment_cli_profile_name "$ENVIRONMENT")
+    [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+fi
 
 # Change to project root
 PROJECT_ROOT=$(get_project_root)
 cd "$PROJECT_ROOT"
+
+# Defaults when template/stack_name are commented out (e.g. when using use_defaults)
+[ -z "$STACK_NAME" ] || [ "$STACK_NAME" = "null" ] && STACK_NAME="$(get_project_name)-vpc-${ENVIRONMENT}"
+[ -z "$TEMPLATE_FILE" ] || [ "$TEMPLATE_FILE" = "null" ] && TEMPLATE_FILE="${PROJECT_ROOT}/infra/resources/vpc_template.yaml"
+
+if [ "$USE_DEFAULTS" = "true" ]; then
+    if [ -n "$EXISTING_VPC_ID" ]; then
+        print_info "Using existing VPC (use_defaults: true, network.config.vpc_id set). No CloudFormation stack will be deployed; script will verify VPC and subnets exist."
+    else
+        print_info "Using default VPC (use_defaults: true). No CloudFormation stack will be deployed; script will verify default VPC, subnets, and security group exist."
+    fi
+    echo ""
+fi
 
 # =============================================================================
 # AWS CLI Helper
@@ -146,6 +177,152 @@ aws_cmd() {
 }
 
 # =============================================================================
+# Default VPC / Subnets / Security Group Check (when use_defaults: true)
+# =============================================================================
+
+# Verifies that a given VPC exists and has at least two subnets (and default SG when check_sg=true).
+# Prints IDs and returns 0 on success; prints errors and returns 1 on failure.
+# Usage: check_existing_vpc_resources <vpc_id> [check_sg]
+check_existing_vpc_resources() {
+    local vpc_id=$1
+    local check_sg=${2:-true}
+    print_step "Checking VPC $vpc_id and subnets in region $AWS_REGION"
+    
+    local vpc_exists aws_stderr
+    aws_stderr=$(mktemp)
+    vpc_exists=$(aws_cmd ec2 describe-vpcs \
+        --vpc-ids "$vpc_id" \
+        --query 'Vpcs[0].VpcId' \
+        --output text 2>"$aws_stderr") || true
+    if [ -z "$vpc_exists" ] || [ "$vpc_exists" = "None" ]; then
+        if [ -s "$aws_stderr" ]; then
+            print_error "AWS error while describing VPC:"
+            sed 's/^/  /' < "$aws_stderr" >&2
+        fi
+        rm -f "$aws_stderr"
+        print_error "VPC $vpc_id not found in region $AWS_REGION. Check the ID, ensure the profile targets the correct account (use_defaults uses CLI profile), or set network.config.vpc_id in infra/infra.yaml."
+        rm -f "$aws_stderr"
+        return 1
+    fi
+    rm -f "$aws_stderr"
+    print_info "VPC: $vpc_id"
+    
+    local subnet_ids
+    subnet_ids=$(aws_cmd ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query 'Subnets[*].SubnetId' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$subnet_ids" ]; then
+        print_error "No subnets found for VPC $vpc_id."
+        return 1
+    fi
+    
+    local subnet_count
+    subnet_count=$(echo "$subnet_ids" | wc -w | tr -d ' ')
+    if [ "$subnet_count" -lt 2 ]; then
+        print_error "VPC $vpc_id has only $subnet_count subnet(s). At least 2 subnets (in different AZs) are required for Aurora."
+        return 1
+    fi
+    print_info "Subnets ($subnet_count): $subnet_ids"
+    
+    if [ "$check_sg" = "true" ]; then
+        local sg_id
+        sg_id=$(aws_cmd ec2 describe-security-groups \
+            --filters "Name=vpc-id,Values=$vpc_id" "Name=group-name,Values=default" \
+            --query 'SecurityGroups[0].GroupId' \
+            --output text 2>/dev/null)
+        
+        if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
+            print_error "Default security group not found for VPC $vpc_id."
+            return 1
+        fi
+        print_info "Default security group: $sg_id"
+    fi
+    
+    print_complete "VPC resources are present and valid"
+    echo ""
+    print_info "Use the VPC ID and subnet IDs above when deploying the DB (e.g. deploy_chat_template_db.sh --vpc-id $vpc_id --subnet-ids <comma-separated>)."
+    return 0
+}
+
+# Verifies that the AWS default VPC, at least two subnets, and the default security group exist in the region.
+# Prints IDs and returns 0 on success; prints errors and returns 1 on failure.
+check_default_vpc_resources() {
+    print_step "Checking default VPC, subnets, and security group in region $AWS_REGION"
+    
+    local vpc_id
+    vpc_id=$(aws_cmd ec2 describe-vpcs \
+        --filters "Name=is-default,Values=true" \
+        --query 'Vpcs[0].VpcId' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$vpc_id" ] || [ "$vpc_id" = "None" ]; then
+        print_error "No default VPC found in region $AWS_REGION. Set network.config.vpc_id in infra/infra.yaml to your existing VPC ID, or set use_defaults to false and deploy the network stack."
+        return 1
+    fi
+    print_info "Default VPC: $vpc_id"
+    
+    local subnet_ids
+    subnet_ids=$(aws_cmd ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query 'Subnets[*].SubnetId' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$subnet_ids" ]; then
+        print_error "No subnets found for default VPC $vpc_id."
+        return 1
+    fi
+    
+    local subnet_count
+    subnet_count=$(echo "$subnet_ids" | wc -w | tr -d ' ')
+    if [ "$subnet_count" -lt 2 ]; then
+        print_error "Default VPC has only $subnet_count subnet(s). At least 2 subnets (in different AZs) are required for Aurora."
+        return 1
+    fi
+    print_info "Default subnets ($subnet_count): $subnet_ids"
+    
+    local sg_id
+    sg_id=$(aws_cmd ec2 describe-security-groups \
+        --filters "Name=vpc-id,Values=$vpc_id" "Name=group-name,Values=default" \
+        --query 'SecurityGroups[0].GroupId' \
+        --output text 2>/dev/null)
+    
+    if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
+        print_error "Default security group not found for VPC $vpc_id."
+        return 1
+    fi
+    print_info "Default security group: $sg_id"
+    
+    print_complete "Default VPC resources are present and valid"
+    echo ""
+    print_info "Default VPC is in use and has been verified. Use the VPC ID and subnet IDs above when deploying the DB (e.g. to default VPC). Lambda can be deployed without VPC when using aurora_data_api."
+    return 0
+}
+
+# Run the appropriate VPC check when use_defaults is true (existing VPC ID or default VPC).
+run_use_defaults_vpc_check() {
+    if [ -n "$EXISTING_VPC_ID" ]; then
+        check_existing_vpc_resources "$EXISTING_VPC_ID"
+    else
+        check_default_vpc_resources
+    fi
+}
+
+# Show default/existing VPC details (for status action when use_defaults: true)
+show_default_vpc_status() {
+    if [ -n "$EXISTING_VPC_ID" ]; then
+        print_step "Existing VPC status (use_defaults: true, vpc_id=$EXISTING_VPC_ID, no stack deployed)"
+    else
+        print_step "Default VPC status (use_defaults: true, no stack deployed)"
+    fi
+    if run_use_defaults_vpc_check; then
+        echo ""
+        print_info "No CloudFormation stack is used when use_defaults is true. Other resources (e.g. DB) can use the VPC and subnets listed above."
+    fi
+}
+
+# =============================================================================
 # Template Validation
 # =============================================================================
 
@@ -156,11 +333,19 @@ do_validate_template() {
         print_error "Template file not found: $TEMPLATE_FILE"
         exit 1
     fi
+    print_info "Template: $TEMPLATE_FILE"
     
-    if aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" >/dev/null 2>&1; then
+    local validate_out validate_rc
+    set +e
+    validate_out=$(aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" 2>&1)
+    validate_rc=$?
+    set -e
+    if [ "$validate_rc" -eq 0 ]; then
         print_complete "Template validation successful"
     else
         print_error "Template validation failed"
+        [ -n "$validate_out" ] && echo "$validate_out" | sed 's/^/  /'
+        print_info "To use the account's default VPC instead of deploying a custom network, set network.use_defaults to true in infra/infra.yaml"
         exit 1
     fi
 }
@@ -217,6 +402,22 @@ show_status() {
 deploy_stack() {
     # Show deploy summary
     print_resource_summary "$RESOURCE_NAME" "$ENVIRONMENT" "$ACTION"
+    
+    if [ "$USE_DEFAULTS" = "true" ]; then
+        if [ -n "$EXISTING_VPC_ID" ]; then
+            print_step "Verifying existing VPC $EXISTING_VPC_ID (no stack deployment)"
+        else
+            print_step "Verifying default VPC (no stack deployment)"
+        fi
+        if run_use_defaults_vpc_check; then
+            echo ""
+            print_complete "VPC is in use and has been verified. No network stack deployed."
+            return 0
+        else
+            exit 1
+        fi
+    fi
+    
     print_info "VPC CIDR: $VPC_CIDR"
     print_info "NAT Gateway: $ENABLE_NAT_GATEWAY"
     
@@ -326,6 +527,11 @@ EOF
 # =============================================================================
 
 delete_stack() {
+    if [ "$USE_DEFAULTS" = "true" ]; then
+        print_info "use_defaults: true — no CloudFormation stack is deployed; nothing to delete."
+        return 0
+    fi
+    
     print_warning "This will delete:"
     print_warning "  - VPC and all subnets"
     print_warning "  - Internet Gateway"
@@ -364,14 +570,26 @@ delete_stack() {
 
 case $ACTION in
     validate)
-        do_validate_template
+        if [ "$USE_DEFAULTS" = "true" ]; then
+            run_use_defaults_vpc_check || exit 1
+        else
+            do_validate_template
+        fi
         ;;
     status)
-        show_status
+        if [ "$USE_DEFAULTS" = "true" ]; then
+            show_default_vpc_status
+        else
+            show_status
+        fi
         ;;
     deploy|update)
-        do_validate_template
-        deploy_stack
+        if [ "$USE_DEFAULTS" = "true" ]; then
+            deploy_stack
+        else
+            do_validate_template
+            deploy_stack
+        fi
         ;;
     delete)
         delete_stack
