@@ -16,7 +16,7 @@ Parameters:
   RepositoryName:
     Type: String
     Default: 'rag-lambda'
-    Description: 'Base name for the ECR repository'
+    Description: 'Full name for the ECR repository (including environment suffix if desired)'
 
   MaxImageCount:
     Type: Number
@@ -27,12 +27,22 @@ Resources:
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: !Sub '${RepositoryName}-${Environment}'
+      RepositoryName: !Ref RepositoryName
       ImageScanningConfiguration:
         ScanOnPush: true
       EncryptionConfiguration:
         EncryptionType: AES256
       ImageTagMutability: MUTABLE
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LambdaECRImageRetrievalPolicy
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
       LifecyclePolicy:
         LifecyclePolicyText: !Sub |
           {
@@ -53,7 +63,7 @@ Resources:
           }
       Tags:
         - Key: Name
-          Value: !Sub '${RepositoryName}-${Environment}'
+          Value: !Ref RepositoryName
         - Key: Environment
           Value: !Ref Environment
         - Key: Project
