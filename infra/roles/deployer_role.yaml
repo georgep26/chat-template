@@ -44,6 +44,12 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:${Environment}'
+          # Allow OrganizationAccountAccessRole in the same account to assume this role
+          # (enables local CLI deployments using the same deployer role as GitHub Actions)
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action: sts:AssumeRole
       Policies:
         - PolicyName: DeployerPolicy
           PolicyDocument:
@@ -78,15 +84,28 @@ Resources:
                   - iam:GetRole
                   - iam:PassRole
                   - iam:PutRolePolicy
+                  - iam:GetRolePolicy
                   - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
                   - iam:CreatePolicy
+                  - iam:DeletePolicy
                   - iam:GetPolicy
                   - iam:GetPolicyVersion
+                  - iam:ListPolicyVersions
+                  - iam:DeletePolicyVersion
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:ListRoleTags
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                  - iam:ListPolicyTags
                 Resource:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-*-${Environment}*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-kb-service-role-${Environment}'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${ProjectName}-*-${Environment}*'
               # EC2: VPC, subnets, security groups, NAT, endpoints (deploy_network, light_db SG)
               - Sid: EC2Network
@@ -211,6 +230,17 @@ Resources:
                   - bedrock:StartIngestionJob
                   - bedrock:GetIngestionJob
                   - bedrock:ListIngestionJobs
+                  - bedrock:StopIngestionJob
+                  - bedrock:TagResource
+                  - bedrock:UntagResource
+                  - bedrock:ListTagsForResource
+                Resource: '*'
+              # Bedrock: Foundation model access (required for knowledge base embedding models)
+              - Sid: BedrockFoundationModels
+                Effect: Allow
+                Action:
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
                 Resource: '*'
               # Lambda: function scoped to project and environment (e.g. chat-template-dev-rag-chat)
               - Sid: LambdaDeployment
@@ -226,6 +256,9 @@ Resources:
                   - lambda:AddPermission
                   - lambda:RemovePermission
                   - lambda:ListVersionsByFunction
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
               # CloudWatch Logs: log group for Lambda scoped to project and environment
               - Sid: LogsDeployment
@@ -236,26 +269,43 @@ Resources:
                   - logs:PutRetentionPolicy
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-*'
-              # ECR: repo for Lambda container image (rag-lambda-${Environment}); GetAuthorizationToken is account-level
+              # ECR: GetAuthorizationToken is account-level (no resource scoping)
+              - Sid: ECRGlobal
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:DescribeRepositories
+                Resource: '*'
+              # ECR: repo management and image push scoped to project repos
               - Sid: ECRDeployment
                 Effect: Allow
                 Action:
                   - ecr:CreateRepository
-                  - ecr:DescribeRepositories
+                  - ecr:DeleteRepository
                   - ecr:PutLifecyclePolicy
-                  - ecr:GetAuthorizationToken
-                Resource: '*'
-              - Sid: ECRPushImage
-                Effect: Allow
-                Action:
+                  - ecr:GetLifecyclePolicy
+                  - ecr:TagResource
+                  - ecr:UntagResource
+                  - ecr:ListTagsForResource
                   - ecr:BatchCheckLayerAvailability
                   - ecr:PutImage
                   - ecr:InitiateLayerUpload
                   - ecr:UploadLayerPart
                   - ecr:CompleteLayerUpload
                   - ecr:BatchGetImage
-                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/rag-lambda-${Environment}'
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchDeleteImage
+                  - ecr:ListImages
+                  - ecr:SetRepositoryPolicy
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DeleteRepositoryPolicy
+                  - ecr:PutImageTagMutability
+                  - ecr:PutImageScanningConfiguration
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-rag-lambda-${Environment}'
               # Cost Explorer: cost allocation tags (deploy_cost_analysis_tags)
               - Sid: CostExplorerTags
                 Effect: Allow
