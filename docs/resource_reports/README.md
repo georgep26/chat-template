@@ -1,0 +1,1 @@
+# Resource Reports\n\nThis directory contains generated reports of deployed AWS resources.\n\nReports are generated using the Cursor command: `/deployed-resources`\n\nFiles:\n- `deployed_resources_dev.md` - Development environment\n- `deployed_resources_staging.md` - Staging environment\n- `deployed_resources_prod.md` - Production environment
