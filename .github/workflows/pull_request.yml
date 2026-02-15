@@ -81,17 +81,15 @@ jobs:
       contents: read
 
   # Deploy Lambda only to staging so PRs can be validated against a live environment.
+  # Uses --only-app defaults from deploy.yml (infra steps already skipped by default).
   deploy-staging-lambda:
     name: Deploy Lambda to Staging
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: staging
-      skip_network: true
-      skip_s3: true
-      skip_db: true
       skip_kb: true
+      skip_ecr: true
       skip_lambda: false
-      skip_cost_tags: true
     secrets: inherit
 
