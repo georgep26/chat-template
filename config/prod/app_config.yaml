@@ -1,0 +1,89 @@
+# Application Configuration - Production
+# Sensitive values (knowledge_base_id, db_cluster_arn, db_credentials_secret_arn) are injected at runtime via hydrate_configs.sh.
+#
+# This file contains configuration settings for the application, including logging configuration.
+
+rag_chat:
+  rewrite: # Query rewrite settings
+    model: # Model to use for rewriting queries
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0 # Temperature for the rewrite model
+      region: "us-east-1" # Region for the rewrite model
+  clarify: # Query clarification settings
+    model: # Model to use for clarification
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0 # Temperature for the clarify model
+      region: "us-east-1" # Region for the clarify model
+  split: # Query splitting settings
+    model: # Model to use for splitting queries
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0 # Temperature for the split model
+      region: "us-east-1" # Region for the split model
+  retrieval: # Retrieval settings for the knowledge base
+    region: "us-east-1" # Region for the retrieval model (defaults to the region of the database)
+    knowledge_base_id: "${KNOWLEDGE_BASE_ID}"
+    number_of_results: 10 # Number of results to retrieve from the knowledge base
+  generation: # Generation settings for the answer
+    model: # Model to use for generation
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0 # Temperature for the generation model
+      region: "us-east-1" # Region for the generation model (defaults to the region of the database)
+  chat_history_store: # History of the conversation settings
+    memory_backend_type: "aurora_data_api" # Options: postgres, aurora_data_api, dynamo, vector, local_sqlite
+    # Configuration for "postgres" backend (requires VPC):
+    # db_connection_secret_name: "chat-template-db-connection-dev"  # Secret name for the database connection
+    # table_name: "chat_history"  # Postgres table name for chat history
+    # Configuration for "aurora_data_api" backend (no VPC required)
+    db_cluster_arn: "${DB_CLUSTER_ARN}"
+    db_credentials_secret_arn: "${DB_CREDENTIALS_SECRET_ARN}"
+    database_name: "chat_template_db"
+    table_name: "chat_history"
+    region: "us-east-1" # Optional, defaults to retrieval.region
+  summarization: # Summarization settings for when the conversation is too long
+    summarization_threshold: 20 # Number of messages before summarization
+    model: # Model to use for summarization
+      id: "amazon.nova-micro-v1:0"
+      temperature: 0.0 # Temperature for the summarization model
+      region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
+api:
+  host: "0.0.0.0"
+  port: 8000
+  timeout: 30
+# Logging Configuration
+logging:
+  version: 1
+  disable_existing_loggers: false
+  formatters:
+    standard:
+      format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+    detailed:
+      format: '%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s'
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: standard
+      stream: ext://sys.stdout
+    file:
+      class: logging.handlers.RotatingFileHandler
+      level: DEBUG
+      formatter: detailed
+      filename: logs/app.log
+      maxBytes: 10485760 # 10MB
+      backupCount: 5
+  root:
+    level: INFO
+    handlers: [console, file]
+  loggers:
+    app:
+      level: DEBUG
+      handlers: [console, file]
+      propagate: false
+# Environment-specific overrides
+environments:
+  development:
+    debug: true
+    log_level: "DEBUG"
+  production:
+    debug: false
+    log_level: "WARNING"
