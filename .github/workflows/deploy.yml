@@ -148,9 +148,6 @@ jobs:
           LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
           MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
           MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
-          VPC_ID: ${{ secrets.VPC_ID }}
-          SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
-          SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
         run: |
           # Base command: deploy with auto-confirm
           CMD="./scripts/deploy/deploy_all.sh ${ENVIRONMENT} -y"
@@ -164,14 +161,13 @@ jobs:
           if [ "${{ inputs.skip_lambda }}" == "true" ]; then CMD="$CMD --skip-lambda"; fi
           if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then CMD="$CMD --skip-cost-tags"; fi
           
-          # Pass-through overrides from GitHub secrets (only if set)
+          # Pass-through overrides from GitHub secrets (only if set).
+          # VPC/subnet/security-group are not passed here so Lambda deploys without VPC.
+          # DB and network still get VPC from hydrated infra (Hydrate configs step writes secrets.VPC_ID/SUBNET_IDS into environments.<env> in infra.yaml).
           if [ -n "$S3_APP_CONFIG_URI" ]; then CMD="$CMD --s3-app-config-uri $S3_APP_CONFIG_URI"; fi
           if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"; fi
           if [ -n "$MASTER_DB_USERNAME" ]; then CMD="$CMD --master-username $MASTER_DB_USERNAME"; fi
           if [ -n "$MASTER_DB_PASSWORD" ]; then CMD="$CMD --master-password $MASTER_DB_PASSWORD"; fi
-          if [ -n "$VPC_ID" ]; then CMD="$CMD --vpc-id $VPC_ID"; fi
-          if [ -n "$SUBNET_IDS" ]; then CMD="$CMD --subnet-ids $SUBNET_IDS"; fi
-          if [ -n "$SECURITY_GROUP_IDS" ]; then CMD="$CMD --security-group-ids $SECURITY_GROUP_IDS"; fi
           
           echo "command<<EOF" >> $GITHUB_OUTPUT
           echo "$CMD" >> $GITHUB_OUTPUT
