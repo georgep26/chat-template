@@ -2,11 +2,10 @@
 # This file is safe to commit publicly. Do NOT put real account IDs, ARNs, or resource IDs here.
 #
 # Usage:
-# - Copy to config/app_config.yml locally (which is gitignored), OR
-# - Upload your real config to S3 and deploy the Lambda with --s3_app_config_uri
-#
-# This file is an exact copy of config/app_config.yml, except that identifying values
-# (Knowledge Base ID, ARNs/account IDs) are replaced with placeholders.
+# - The live templates are config/<env>/app_config.yaml (dev, staging, prod); they use
+#   ${PLACEHOLDER} syntax and are hydrated at deploy time by scripts/utils/hydrate_configs.sh.
+# - This file is a reference copy with the same structure. Sensitive fields use ${PLACEHOLDER}
+#   to match the live templates; values are injected from infra/secrets or GitHub secrets.
 rag_chat:
   rewrite: # Query rewrite settings
     model: # Model to use for rewriting queries
@@ -25,7 +24,7 @@ rag_chat:
       region: "us-east-1" # Region for the split model
   retrieval: # Retrieval settings for the knowledge base
     region: "us-east-1" # Region for the retrieval model (defaults to the region of the database)
-    knowledge_base_id: "your-knowledge-base-id-here" # Knowledge base ID to use for retrieval
+    knowledge_base_id: "${KNOWLEDGE_BASE_ID}" # Knowledge base ID to use for retrieval
     number_of_results: 10 # Number of results to retrieve from the knowledge base
   generation: # Generation settings for the answer
     model: # Model to use for generation
@@ -38,8 +37,8 @@ rag_chat:
     # db_connection_secret_name: "chat-template-db-connection-dev"  # Secret name for the database connection
     # table_name: "chat_history"  # Postgres table name for chat history
     # Configuration for "aurora_data_api" backend (no VPC required):
-    db_cluster_arn: "arn:aws:rds:<region>:<account-id>:cluster:<cluster-name>"
-    db_credentials_secret_arn: "arn:aws:secretsmanager:<region>:<account-id>:secret:<secret-name>"
+    db_cluster_arn: "${DB_CLUSTER_ARN}"
+    db_credentials_secret_arn: "${DB_CREDENTIALS_SECRET_ARN}"
     database_name: "chat_template_db"
     table_name: "chat_history"
     region: "us-east-1"  # Optional, defaults to retrieval.region
