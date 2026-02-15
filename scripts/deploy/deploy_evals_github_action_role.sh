@@ -35,6 +35,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/common.sh"
 source "$SCRIPT_DIR/../utils/config_parser.sh"
+source "$SCRIPT_DIR/../utils/github_repo.sh"
 source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
@@ -164,6 +165,13 @@ AWS_PROFILE=$(get_environment_cli_profile_name "$ENVIRONMENT")
 [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
 [ -z "$GITHUB_ORG" ] && GITHUB_ORG=$(get_github_org 2>/dev/null || echo "")
 [ -z "$GITHUB_REPO" ] && GITHUB_REPO=$(get_github_repo 2>/dev/null || echo "")
+if [ -z "$GITHUB_ORG" ] || [ -z "$GITHUB_REPO" ]; then
+    if resolve_github_org_repo; then
+        [ -z "$GITHUB_ORG" ] && GITHUB_ORG="$RESOLVED_GITHUB_ORG"
+        [ -z "$GITHUB_REPO" ] && GITHUB_REPO="$RESOLVED_GITHUB_REPO"
+        print_info "GitHub org/repo from git remote: ${GITHUB_ORG}/${GITHUB_REPO}"
+    fi
+fi
 
 # Role stack and template from infra
 ROLE_STACK=$(get_role_stack_name "evals" "$ENVIRONMENT")
@@ -198,11 +206,11 @@ get_oidc_provider_arn() {
 # For deploy/update: validate required params and discover OIDC if needed
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
     if [ -z "$GITHUB_ORG" ] || [ -z "$GITHUB_REPO" ]; then
-        print_error "GitHub org and repo are required. Set github.github_repo in infra/infra.yaml or use --github-org and --github-repo"
+        print_error "GitHub org and repo are required. Set github.github_repo in infra/infra.yaml, run from a repo with origin pointing at GitHub, or use --github-org and --github-repo"
         exit 1
     fi
     if [ -z "$OIDC_PROVIDER_ARN" ]; then
-        OIDC_PROVIDER_ARN=$(get_oidc_provider_arn)
+        OIDC_PROVIDER_ARN=$(get_oidc_provider_arn) || true
         if [ -z "$OIDC_PROVIDER_ARN" ] || [ "$OIDC_PROVIDER_ARN" = "None" ]; then
             print_error "GitHub OIDC provider not found in account. Run setup_oidc_provider.sh first or pass --oidc-provider-arn"
             exit 1
