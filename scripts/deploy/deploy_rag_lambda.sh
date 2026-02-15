@@ -258,6 +258,21 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
     print_info "App config S3 URI: $APP_CONFIG_S3_URI"
 fi
 
+# Require Docker early for build or deploy/update (when not skipping build), so we never hang after user confirmation
+if [[ "$ACTION" == "build" ]] || { [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]] && [ "$SKIP_BUILD" = false ]; }; then
+    if ! docker info >/dev/null 2>&1; then
+        echo ""
+        print_warning "Docker does not appear to be running."
+        echo "Please start Docker, then press Enter to continue."
+        read -r
+        echo ""
+        if ! docker info >/dev/null 2>&1; then
+            print_error "Docker is still not running. Please start Docker and re-run this script."
+            exit 1
+        fi
+    fi
+fi
+
 # =============================================================================
 # AWS CLI Helper
 # =============================================================================
