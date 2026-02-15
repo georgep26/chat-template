@@ -424,6 +424,21 @@ deploy_env_secrets() {
         fi
     done
 
+    # 3) Sync config_secrets map (for hydrate_configs.sh)
+    if yq -e '.config_secrets | keys | length > 0' "$secrets_file" &>/dev/null; then
+        local keys
+        keys=$(yq -r '.config_secrets | keys[]' "$secrets_file" 2>/dev/null || true)
+        while IFS= read -r key; do
+            [[ -z "$key" ]] && continue
+            local value
+            value=$(yq -r ".config_secrets[\"$key\"]" "$secrets_file" 2>/dev/null || true)
+            [[ "$value" = "null" ]] && value=""
+            if ! set_github_secret "$env" "$key" "$value" "$repo"; then
+                failed=$((failed + 1))
+            fi
+        done <<< "$keys"
+    fi
+
     [[ $failed -gt 0 ]] && return 1
     return 0
 }
@@ -535,7 +550,7 @@ main() {
     if [[ -n "$REPO_OVERRIDE" ]]; then
         repo="$REPO_OVERRIDE"
         print_info "Repository from CLI: ${repo}"
-    elif [[ -n "$CONFIG_REPO" ]]; then
+    elif [[ -n "$CONFIG_REPO" ]] && [[ "$CONFIG_REPO" != *'${'* ]]; then
         repo="$CONFIG_REPO"
         print_info "Repository from infra/infra.yaml: ${repo}"
     elif repo=$(get_repository_from_git); then
