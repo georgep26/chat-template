@@ -20,6 +20,7 @@ jobs:
     permissions:
       checks: write
       contents: read
+      pull-requests: write
 
   deploy-prod:
     name: Deploy to Prod
