@@ -1,7 +1,11 @@
-.PHONY: dev-env install lint test clean all eval branch-protection
+.PHONY: dev-env initial-deployment install lint test clean all eval branch-protection
 
 dev-env:
 	@bash scripts/setup/setup_local_dev_env.sh
+
+initial-deployment:
+	@bash scripts/setup/setup_all.sh dev
+	@bash scripts/deploy/deploy_all.sh dev
 
 branch-protection:
 	@bash scripts/setup/setup_github.sh
