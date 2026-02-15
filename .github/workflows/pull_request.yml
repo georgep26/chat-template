@@ -1,7 +1,7 @@
 name: Pull Request Workflow
 
-# PRs from development → main: run all tests + evals, then deploy to staging.
-# PRs to development: run tests and path-filtered evals only (no staging deploy).
+# PRs from development → main: run tests, deploy to staging, then run evals in staging.
+# PRs to development: run tests, then path-filtered evals only (no staging deploy).
 on:
   pull_request:
     branches: [main, development]
@@ -82,9 +82,10 @@ jobs:
             echo "should-run=${{ steps.filter.outputs.evals }}" >> $GITHUB_OUTPUT
           fi
 
+  # Run evals after deploy so they run within the newly deployed environment.
   run-evaluations:
     name: Run Evaluations
-    needs: [run-tests, check-eval-paths]
+    needs: [run-tests, check-eval-paths, deploy-staging-lambda]
     if: needs.check-eval-paths.outputs.should-run == 'true'
     uses: ./.github/workflows/run-evals.yml
     with:
@@ -94,11 +95,11 @@ jobs:
       id-token: write
       contents: read
 
-  # Deploy to staging only for PRs from development → main, after tests and evals pass.
+  # Deploy to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
     name: Deploy Lambda to Staging
     if: github.base_ref == 'main'
-    needs: [run-tests, run-evaluations]
+    needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: staging
