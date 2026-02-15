@@ -20,6 +20,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/common.sh"
 source "$SCRIPT_DIR/../utils/config_parser.sh"
+source "$SCRIPT_DIR/../utils/github_repo.sh"
 
 # Solo mode: 1 = no reviewer required, 0 = require 1 approval (default)
 # AUTO_YES: 1 = skip confirmation prompts
@@ -173,22 +174,6 @@ check_gh_cli() {
         exit 1
     fi
     print_info "GitHub CLI is installed and authenticated."
-}
-
-get_repository_from_git() {
-    if command -v git &> /dev/null && git rev-parse --git-dir &> /dev/null; then
-        local remote_url
-        remote_url=$(git remote get-url origin 2>/dev/null || echo "")
-        if [[ -n "$remote_url" ]]; then
-            local repo
-            repo=$(echo "$remote_url" | sed -E 's|.*github\.com[:/]([^/]+/[^/]+)(\.git)?$|\1|' | sed 's|\.git$||')
-            if [[ -n "$repo" ]]; then
-                echo "$repo"
-                return 0
-            fi
-        fi
-    fi
-    return 1
 }
 
 parse_cli_args() {
