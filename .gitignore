@@ -204,8 +204,8 @@ secrets.yaml
 infra/secrets/*_secrets.yaml
 !infra/secrets/template.secrets.yaml
 
-# Infrastructure settings
-infra.yaml
+# Infrastructure settings (templated version is tracked; hydrate_configs.sh injects secrets at runtime)
+!infra/infra.yaml
 
 # Monitoring and profiling
 *.prof
@@ -278,8 +278,8 @@ evals/eval_outputs/
 docs/working_notes.md
 docs/working_notes.rtf
 
-# Local configuration
-app_config.yaml
+# Local configuration (templated env configs are tracked; hydrate_configs.sh injects secrets at runtime)
+!config/*/app_config.yaml
 
 # Environment files
 *.env
