@@ -4,7 +4,9 @@
 # Deploys the IAM role used by the deploy workflow (.github/workflows/deploy.yml) for OIDC.
 # Reads infra/infra.yaml and uses the CLI role profile per environment. GitHub org/repo
 # from github.github_repo; OIDC provider discovered in account when not passed.
-# On successful deploy, writes the role ARN to infra.yaml (environments.<env>.github_actions_deployer_role_arn).
+# On successful deploy, by default writes the role ARN to the environment's secrets file
+# (github_environment_secrets.AWS_DEPLOYER_ROLE_ARN and config_secrets.DEPLOYER_ROLE_ARN).
+# Use --write-to-infra to also (or instead) write to infra/infra.yaml.
 #
 # Usage Examples:
 #   ./scripts/deploy/deploy_deployer_github_action_role.sh dev deploy
@@ -36,6 +38,7 @@ show_usage() {
     echo "  --region <region>        - Override AWS region"
     echo "  --project-name <name>    - Override project name"
     echo "  -y, --yes                - Skip confirmation prompt"
+    echo "  --write-to-infra         - Also write role ARN to infra/infra.yaml (default: write to env secrets file only)"
     echo ""
     echo "Example: $0 dev deploy -y"
 }
@@ -59,11 +62,16 @@ OIDC_PROVIDER_ARN=""
 GITHUB_ORG=""
 GITHUB_REPO=""
 AUTO_CONFIRM=false
+WRITE_TO_INFRA=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -y|--yes)
             AUTO_CONFIRM=true
+            shift
+            ;;
+        --write-to-infra)
+            WRITE_TO_INFRA=true
             shift
             ;;
         --github-org)
@@ -469,9 +477,18 @@ EOF
     deploy_stack "$ROLE_STACK" "$ROLE_TEMPLATE" "$role_params_file"
     local ROLE_ARN=$(get_stack_output "$ROLE_STACK" "RoleArn")
 
-    # Write role ARN to infra.yaml so setup_github and secrets stay in sync
-    if [ -n "$ROLE_ARN" ] && [ -n "${INFRA_CONFIG_PATH:-}" ] && [ -f "$INFRA_CONFIG_PATH" ]; then
-        if command -v yq &>/dev/null; then
+    # Write role ARN: default to environment secrets file; optionally to infra.yaml
+    if [ -n "$ROLE_ARN" ] && command -v yq &>/dev/null; then
+        local secrets_file
+        secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null)
+        if [ -n "$secrets_file" ] && [ -f "$secrets_file" ]; then
+            yq -i ".github_environment_secrets.AWS_DEPLOYER_ROLE_ARN = \"${ROLE_ARN}\"" "$secrets_file"
+            yq -i ".config_secrets.DEPLOYER_ROLE_ARN = \"${ROLE_ARN}\"" "$secrets_file"
+            print_info "Updated $secrets_file with AWS_DEPLOYER_ROLE_ARN and DEPLOYER_ROLE_ARN for $ENVIRONMENT"
+        elif [ "$WRITE_TO_INFRA" = false ]; then
+            print_warning "Secrets file not found for $ENVIRONMENT; role ARN not persisted. Add it to your env secrets file or run with --write-to-infra."
+        fi
+        if [ "$WRITE_TO_INFRA" = true ] && [ -n "${INFRA_CONFIG_PATH:-}" ] && [ -f "$INFRA_CONFIG_PATH" ]; then
             yq -i ".environments.${ENVIRONMENT}.github_actions_deployer_role_arn = \"${ROLE_ARN}\"" "$INFRA_CONFIG_PATH"
             print_info "Updated infra/infra.yaml with github_actions_deployer_role_arn for $ENVIRONMENT"
         fi
