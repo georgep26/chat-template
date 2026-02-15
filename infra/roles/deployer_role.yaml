@@ -153,6 +153,8 @@ Resources:
                   - ec2:DescribeTags
                 Resource: '*'
               # S3: chat-template buckets for this environment (KB bucket, app config)
+              # - *-${Environment}: e.g. chat-template-kb-dev, chat-template-*-dev
+              # - ${Environment}-s3-bucket: app config bucket e.g. chat-template-dev-s3-bucket
               - Sid: S3Deployment
                 Effect: Allow
                 Action:
@@ -174,6 +176,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}'
                   - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}/*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-s3-bucket'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-s3-bucket/*'
               # RDS: Aurora cluster and instance scoped to project and environment
               - Sid: RDSDeployment
                 Effect: Allow
