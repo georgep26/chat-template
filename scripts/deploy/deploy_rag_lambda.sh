@@ -665,8 +665,16 @@ build_and_push_image() {
     print_info "Dockerfile: src/rag_lambda/Dockerfile" >&2
     print_info "Platform: linux/amd64 (x86_64)" >&2
 
-    # Build the image for x86_64 architecture (Lambda default)
-    docker build --platform linux/amd64 -f src/rag_lambda/Dockerfile -t rag-lambda:latest .
+    # Build a single image manifest (no index). Lambda does not support OCI image indexes
+    # or attestation manifests; --provenance=false and --sbom=false avoid creating them
+    # (e.g. on GitHub Actions where buildx is the default). --load writes the image to
+    # the local daemon so we can tag and push a single manifest.
+    if docker buildx version >/dev/null 2>&1; then
+        docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            -f src/rag_lambda/Dockerfile -t rag-lambda:latest --load .
+    else
+        docker build --platform linux/amd64 -f src/rag_lambda/Dockerfile -t rag-lambda:latest .
+    fi
 
     if [ $? -ne 0 ]; then
         print_error "Docker build failed" >&2
