@@ -1,6 +1,12 @@
 # Sensitive values are read from environment secrets (per-environment: dev/staging/prod).
 # Set these in GitHub: Settings → Environments → <env> → Environment secrets.
 # See docs/github_environment_secrets.md for secret names (S3_APP_CONFIG_URI, MASTER_DB_PASSWORD, etc.).
+#
+# Role Strategy:
+#   The deployer role (assumed via OIDC) has permissions for application resources only:
+#   knowledge base, ECR, and Lambda. Infrastructure resources (network, S3, DB) require
+#   the CLI admin role and should be skipped in CI (they default to skipped).
+#   To deploy infrastructure via CI, override the skip flags and use an admin role.
 name: Deploy Application
 
 on:
@@ -14,23 +20,30 @@ on:
           - dev
           - staging
           - prod
+      # Infrastructure resources (default: skip - deployer role cannot deploy these)
       skip_network:
-        description: 'Skip network deployment'
+        description: 'Skip network deployment (requires admin role)'
         required: false
-        default: false
+        default: true
         type: boolean
       skip_s3:
-        description: 'Skip S3 bucket deployment'
+        description: 'Skip S3 bucket deployment (requires admin role)'
         required: false
-        default: false
+        default: true
         type: boolean
       skip_db:
-        description: 'Skip database deployment'
+        description: 'Skip database deployment (requires admin role)'
+        required: false
+        default: true
+        type: boolean
+      # Application resources (default: deploy - deployer role handles these)
+      skip_kb:
+        description: 'Skip knowledge base deployment'
         required: false
         default: false
         type: boolean
-      skip_kb:
-        description: 'Skip knowledge base deployment'
+      skip_ecr:
+        description: 'Skip ECR repo deployment'
         required: false
         default: false
         type: boolean
@@ -42,7 +55,7 @@ on:
       skip_cost_tags:
         description: 'Skip cost allocation tags activation'
         required: false
-        default: false
+        default: true
         type: boolean
   workflow_call:
     inputs:
@@ -51,17 +64,21 @@ on:
         type: string
       skip_network:
         required: false
-        default: false
+        default: true
         type: boolean
       skip_s3:
         required: false
-        default: false
+        default: true
         type: boolean
       skip_db:
         required: false
-        default: false
+        default: true
         type: boolean
       skip_kb:
+        required: false
+        default: false
+        type: boolean
+      skip_ecr:
         required: false
         default: false
         type: boolean
@@ -71,7 +88,7 @@ on:
         type: boolean
       skip_cost_tags:
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -99,90 +116,45 @@ jobs:
         env:
           AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
-      - name: Validate inputs
+      - name: Install yq
         run: |
-          if [ -z "${{ inputs.environment }}" ]; then
-            echo "Error: environment is required"
-            exit 1
-          fi
-          
-          if [ "${{ inputs.skip_lambda }}" != "true" ] && [ -z "${{ secrets.S3_APP_CONFIG_URI }}" ]; then
-            echo "Error: S3_APP_CONFIG_URI secret is required when deploying Lambda"
-            exit 1
-          fi
-          
-          if [ "${{ inputs.skip_network }}" == "true" ] && [ "${{ inputs.skip_db }}" != "true" ]; then
-            if [ -z "${{ secrets.VPC_ID }}" ] || [ -z "${{ secrets.SUBNET_IDS }}" ]; then
-              echo "Error: VPC_ID and SUBNET_IDS secrets are required when skip_network is true and skip_db is false"
-              exit 1
-            fi
-          fi
-          
-          echo "Validating deployment inputs..."
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       - name: Build deployment command
         id: build-cmd
         env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          # Secrets from GitHub environment
           S3_APP_CONFIG_URI: ${{ secrets.S3_APP_CONFIG_URI }}
           LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
           MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
           MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
           VPC_ID: ${{ secrets.VPC_ID }}
           SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
           SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
         run: |
-          REGION="${AWS_REGION:-us-east-1}"
-          CMD="./scripts/deploy/deploy_all.sh ${{ inputs.environment }}"
-          if [ -n "$S3_APP_CONFIG_URI" ]; then
-            CMD="$CMD --s3-app-config-uri $S3_APP_CONFIG_URI"
-          fi
-          CMD="$CMD --region $REGION"
+          # Base command: deploy with auto-confirm
+          CMD="./scripts/deploy/deploy_all.sh ${ENVIRONMENT} -y"
           
-          if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then
-            CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"
-          fi
+          # Skip flags
+          if [ "${{ inputs.skip_network }}" == "true" ]; then CMD="$CMD --skip-network"; fi
+          if [ "${{ inputs.skip_s3 }}" == "true" ]; then CMD="$CMD --skip-s3"; fi
+          if [ "${{ inputs.skip_db }}" == "true" ]; then CMD="$CMD --skip-db"; fi
+          if [ "${{ inputs.skip_kb }}" == "true" ]; then CMD="$CMD --skip-kb"; fi
+          if [ "${{ inputs.skip_ecr }}" == "true" ]; then CMD="$CMD --skip-ecr"; fi
+          if [ "${{ inputs.skip_lambda }}" == "true" ]; then CMD="$CMD --skip-lambda"; fi
+          if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then CMD="$CMD --skip-cost-tags"; fi
           
-          if [ -n "$MASTER_DB_USERNAME" ]; then
-            CMD="$CMD --master-username $MASTER_DB_USERNAME"
-          fi
-          if [ -n "$MASTER_DB_PASSWORD" ]; then
-            CMD="$CMD --master-password $MASTER_DB_PASSWORD"
-          fi
-          
-          if [ "${{ inputs.skip_network }}" == "true" ]; then
-            CMD="$CMD --skip-network"
-          fi
-          
-          if [ "${{ inputs.skip_s3 }}" == "true" ]; then
-            CMD="$CMD --skip-s3"
-          fi
-          
-          if [ "${{ inputs.skip_db }}" == "true" ]; then
-            CMD="$CMD --skip-db"
-          fi
-          
-          if [ "${{ inputs.skip_kb }}" == "true" ]; then
-            CMD="$CMD --skip-kb"
-          fi
-          
-          if [ "${{ inputs.skip_lambda }}" == "true" ]; then
-            CMD="$CMD --skip-lambda"
-          fi
-          
-          if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then
-            CMD="$CMD --skip-cost-tags"
-          fi
-          
-          if [ -n "$VPC_ID" ]; then
-            CMD="$CMD --vpc-id $VPC_ID"
-          fi
-          if [ -n "$SUBNET_IDS" ]; then
-            CMD="$CMD --subnet-ids $SUBNET_IDS"
-          fi
-          if [ -n "$SECURITY_GROUP_IDS" ]; then
-            CMD="$CMD --security-group-ids $SECURITY_GROUP_IDS"
-          fi
+          # Pass-through overrides from GitHub secrets (only if set)
+          if [ -n "$S3_APP_CONFIG_URI" ]; then CMD="$CMD --s3-app-config-uri $S3_APP_CONFIG_URI"; fi
+          if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"; fi
+          if [ -n "$MASTER_DB_USERNAME" ]; then CMD="$CMD --master-username $MASTER_DB_USERNAME"; fi
+          if [ -n "$MASTER_DB_PASSWORD" ]; then CMD="$CMD --master-password $MASTER_DB_PASSWORD"; fi
+          if [ -n "$VPC_ID" ]; then CMD="$CMD --vpc-id $VPC_ID"; fi
+          if [ -n "$SUBNET_IDS" ]; then CMD="$CMD --subnet-ids $SUBNET_IDS"; fi
+          if [ -n "$SECURITY_GROUP_IDS" ]; then CMD="$CMD --security-group-ids $SECURITY_GROUP_IDS"; fi
           
           echo "command<<EOF" >> $GITHUB_OUTPUT
           echo "$CMD" >> $GITHUB_OUTPUT
@@ -198,9 +170,8 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.deploy.outcome }}" == "success" ]; then
-            echo "✅ Deployment completed successfully!"
+            echo "✅ Deployment to ${{ inputs.environment }} completed successfully!"
           else
-            echo "❌ Deployment failed. Check logs above for details."
+            echo "❌ Deployment to ${{ inputs.environment }} failed. Check logs above for details."
             exit 1
           fi
-
