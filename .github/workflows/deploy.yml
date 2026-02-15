@@ -122,6 +122,23 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
+      - name: Hydrate configs
+        if: vars.HYDRATE_CONFIGS != 'false'
+        env:
+          MANAGEMENT_ACCOUNT_ID: ${{ secrets.MANAGEMENT_ACCOUNT_ID }}
+          BUDGET_EMAIL: ${{ secrets.BUDGET_EMAIL }}
+          REPO: ${{ secrets.REPO }}
+          ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+          EMAIL: ${{ secrets.EMAIL }}
+          DEPLOYER_ROLE_ARN: ${{ secrets.DEPLOYER_ROLE_ARN }}
+          VPC_ID: ${{ secrets.VPC_ID }}
+          SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
+          KNOWLEDGE_BASE_ID: ${{ secrets.KNOWLEDGE_BASE_ID }}
+          DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
+          DB_CREDENTIALS_SECRET_ARN: ${{ secrets.DB_CREDENTIALS_SECRET_ARN }}
+        run: |
+          ./scripts/utils/hydrate_configs.sh ${{ inputs.environment }}
+
       - name: Build deployment command
         id: build-cmd
         env:
