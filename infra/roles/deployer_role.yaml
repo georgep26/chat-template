@@ -313,6 +313,19 @@ Resources:
                   - ce:ListCostAllocationTags
                   - ce:UpdateCostAllocationTagsStatus
                 Resource: '*'
+              # EventBridge Schemas: Lambda shareable test events (lambda-testevent-schemas registry)
+              - Sid: EventBridgeSchemasTestEvents
+                Effect: Allow
+                Action:
+                  - schemas:CreateRegistry
+                  - schemas:DescribeRegistry
+                  - schemas:CreateSchema
+                  - schemas:UpdateSchema
+                  - schemas:DescribeSchema
+                  - schemas:ListSchemas
+                Resource:
+                  - !Sub 'arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/lambda-testevent-schemas'
+                  - !Sub 'arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/lambda-testevent-schemas/schema/*'
               # STS: get caller identity (deploy_rag_lambda account id)
               - Sid: STS
                 Effect: Allow
