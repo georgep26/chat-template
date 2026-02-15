@@ -25,6 +25,8 @@ jobs:
     name: Run Evaluations
     needs: [run-tests]
     uses: ./.github/workflows/run-evals.yml
+    with:
+      environment: prod
     secrets: inherit
     permissions:
       id-token: write
