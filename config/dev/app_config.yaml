@@ -1,11 +1,6 @@
-# Application Configuration (TEMPLATE)
-# This file is safe to commit publicly. Do NOT put real account IDs, ARNs, or resource IDs here.
-#
-# Usage:
-# - The live templates are config/<env>/app_config.yaml (dev, staging, prod); they use
-#   ${PLACEHOLDER} syntax and are hydrated at deploy time by scripts/utils/hydrate_configs.sh.
-# - This file is a reference copy with the same structure. Sensitive fields use ${PLACEHOLDER}
-#   to match the live templates; values are injected from infra/secrets or GitHub secrets.
+# Application Configuration
+# This file contains configuration settings for the application, including logging configuration
+
 rag_chat:
   rewrite: # Query rewrite settings
     model: # Model to use for rewriting queries
@@ -99,4 +94,3 @@ environments:
   production:
     debug: false
     log_level: "WARNING"
-

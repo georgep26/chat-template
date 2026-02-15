@@ -4,15 +4,17 @@
 # This script deploys the knowledge base CloudFormation stack for different environments
 # The knowledge base connects to the PostgreSQL database deployed via deploy_chat_template_db.sh
 #
+# Reads configuration from infra/infra.yaml and uses the deployer role profile per environment
+# to assume into the target account. All command line flags are optional and override infra.yaml values.
+#
 # Usage Examples:
-#   # Deploy to development environment (default region: us-east-1)
-#   ./scripts/deploy/deploy_knowledge_base.sh dev deploy --s3-bucket my-kb-documents-bucket
+#   # Deploy to development environment (uses infra.yaml + deployer profile for dev)
+#   ./scripts/deploy/deploy_knowledge_base.sh dev deploy
+#   ./scripts/deploy/deploy_knowledge_base.sh dev deploy -y
 #
-#   # Deploy to staging with custom region and S3 prefix
-#   ./scripts/deploy/deploy_knowledge_base.sh staging deploy --s3-bucket my-kb-documents-bucket --s3-prefix staging-docs/ --region us-west-2
-#
-#   # Deploy to production with custom S3 bucket
-#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --s3-bucket my-kb-documents-bucket
+#   # Override S3 bucket or other parameters
+#   ./scripts/deploy/deploy_knowledge_base.sh staging deploy --s3-bucket my-kb-documents-bucket --s3-prefix staging-docs/
+#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --region us-west-2
 #
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_knowledge_base.sh dev validate
@@ -31,67 +33,37 @@
 #       2. An S3 bucket with documents for the knowledge base (deploy via deploy_s3_bucket.sh)
 #       It runs sql/embeddings_table_setup.sql via RDS Data API before deploying the KB stack.
 #       It will automatically retrieve DB stack outputs and S3 bucket name (if S3 stack exists).
+#       After deployment, it syncs the data source to start ingestion.
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_header() {
-    echo -e "${BLUE}[KNOWLEDGE BASE]${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 # Function to show usage
 show_usage() {
     echo "AWS Bedrock Knowledge Base Deployment Script"
     echo ""
+    echo "Reads infra/infra.yaml and uses deployer role profile per environment."
+    echo "All options override infra.yaml values when provided."
+    echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
-    echo "Environments:"
-    echo "  dev       - Development environment"
-    echo "  staging   - Staging environment"
-    echo "  prod      - Production environment"
+    echo "Environments: dev, staging, prod"
+    echo "Actions: deploy (default), update, delete, validate, status"
     echo ""
-    echo "Actions:"
-    echo "  deploy    - Deploy the stack (default)"
-    echo "  update    - Update the stack"
-    echo "  delete    - Delete the stack"
-    echo "  validate  - Validate the template"
-    echo "  status    - Show stack status"
+    echo "Options (override infra.yaml when provided):"
+    echo "  --db-stack-name <name>          - Database stack name"
+    echo "  --embedding-model <model-id>    - Embedding model ID"
+    echo "  --table-name <name>             - PostgreSQL table name for embeddings"
+    echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents"
+    echo "  --s3-prefix <prefix>            - S3 key prefix for documents"
+    echo "  --region <region>               - AWS region"
+    echo "  -y, --yes                        - Skip confirmation prompt"
     echo ""
-    echo "Options:"
-    echo "  --db-stack-name <name>          - Database stack name (default: chat-template-light-db-<env>)"
-    echo "  --embedding-model <model-id>    - Embedding model ID (default: amazon.titan-embed-text-v2:0)"
-    echo "  --table-name <name>             - PostgreSQL table name for embeddings (default: bedrock_integration.bedrock_kb)"
-    echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents (auto-detected from S3 stack if not provided)"
-    echo "  --s3-prefix <prefix>            - S3 key prefix for documents (default: kb_sources/)"
-    echo "  --region <region>               - AWS region (default: us-east-1)"
-    echo ""
-    echo "Examples:"
-    echo "  $0 dev deploy --s3-bucket my-kb-documents-bucket"
-    echo "  $0 staging deploy --s3-bucket my-kb-documents-bucket --s3-prefix staging-docs/"
-    echo "  $0 prod status"
-    echo ""
-    echo "Note: The database stack must be deployed before deploying the knowledge base."
-    echo "      The script runs sql/embeddings_table_setup.sql via RDS Data API before deploying."
-    echo "      The caller needs rds-data:ExecuteStatement and rds:DescribeDBClusters IAM permissions."
+    echo "Example: $0 dev deploy -y"
 }
 
 # Check if environment is provided
@@ -102,27 +74,31 @@ if [ $# -lt 1 ]; then
 fi
 
 ENVIRONMENT=$1
-ACTION=${2:-deploy}
-STACK_NAME="chat-template-knowledge-base-${ENVIRONMENT}"
-TEMPLATE_FILE="infra/resources/knowledge_base_template.yaml"
-DB_STACK_NAME="chat-template-light-db-${ENVIRONMENT}"
-PROJECT_NAME="chat-template"
-AWS_REGION="us-east-1"  # Default AWS region
-EMBEDDING_MODEL="amazon.titan-embed-text-v2:0"
-TABLE_NAME="bedrock_integration.bedrock_kb"
+shift
+
+# Parse action (optional second arg)
+ACTION="deploy"
+if [[ $# -gt 0 && "$1" =~ ^(deploy|update|delete|validate|status)$ ]]; then
+    ACTION=$1
+    shift
+fi
+
+# Defaults (overridden by infra or flags)
+DB_STACK_NAME=""
+EMBEDDING_MODEL=""
+TABLE_NAME=""
 S3_BUCKET_NAME=""
-S3_INCLUSION_PREFIX="kb_sources/"
+S3_INCLUSION_PREFIX=""
+AWS_REGION_OVERRIDE=""
+AUTO_CONFIRM=false
 
-# Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-
-# Change to project root directory
-cd "$PROJECT_ROOT"
-
-shift 1  # Remove environment from arguments
+# Parse options
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
         --db-stack-name)
             DB_STACK_NAME="$2"
             shift 2
@@ -144,32 +120,76 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --region)
-            AWS_REGION="$2"
+            AWS_REGION_OVERRIDE="$2"
             shift 2
             ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
         *)
-            # If it's not a recognized option, it might be the action
-            if [[ "$ACTION" == "deploy" && "$1" != "deploy" && "$1" != "update" && "$1" != "delete" && "$1" != "validate" && "$1" != "status" ]]; then
-                ACTION="$1"
-            fi
-            shift
+            print_error "Unknown option: $1"
+            show_usage
+            exit 1
             ;;
     esac
 done
 
-print_header "Starting Knowledge Base deployment for $ENVIRONMENT environment"
-
 # Validate environment
-case $ENVIRONMENT in
-    dev|staging|prod)
-        print_status "Using environment: $ENVIRONMENT"
-        ;;
-    *)
-        print_error "Invalid environment: $ENVIRONMENT"
-        show_usage
-        exit 1
-        ;;
-esac
+validate_environment "$ENVIRONMENT" || exit 1
+
+# Load configuration from infra.yaml
+PROJECT_ROOT=$(get_project_root)
+cd "$PROJECT_ROOT"
+load_infra_config || exit 1
+validate_config "$ENVIRONMENT" || exit 1
+
+# Load from infra (overridable by flags)
+PROJECT_NAME=$(get_project_name)
+AWS_REGION=$(get_environment_region "$ENVIRONMENT")
+[ -n "${AWS_REGION_OVERRIDE:-}" ] && AWS_REGION="$AWS_REGION_OVERRIDE"
+AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+
+# Get stack name and template from infra
+STACK_NAME=$(get_resource_stack_name "rag_knowledge_base" "$ENVIRONMENT")
+TEMPLATE_FILE=$(get_resource_template "rag_knowledge_base")
+
+# Load defaults from infra.yaml (overridable by flags)
+[ -z "$DB_STACK_NAME" ] && DB_STACK_NAME=$(get_resource_config "rag_knowledge_base" "db_stack_name" "$ENVIRONMENT")
+[ -z "$EMBEDDING_MODEL" ] && EMBEDDING_MODEL=$(get_resource_config "rag_knowledge_base" "embedding_model_id" "$ENVIRONMENT")
+[ -z "$TABLE_NAME" ] && TABLE_NAME=$(get_resource_config "rag_knowledge_base" "table_name" "$ENVIRONMENT")
+[ -z "$S3_BUCKET_NAME" ] && S3_BUCKET_NAME=$(get_resource_config "rag_knowledge_base" "s3_bucket_name" "$ENVIRONMENT")
+[ -z "$S3_INCLUSION_PREFIX" ] && S3_INCLUSION_PREFIX=$(get_resource_config "rag_knowledge_base" "s3_inclusion_prefix" "$ENVIRONMENT")
+
+# AWS CLI helper (uses deployer profile and region from config)
+aws_cmd() {
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+    else
+        aws --region "$AWS_REGION" "$@"
+    fi
+}
+
+# Write knowledge_base_id to infra.yaml under environments.<env>
+write_kb_outputs_to_infra_yaml() {
+    local kb_id=$1
+    if [ -z "$kb_id" ] || [ "$kb_id" = "None" ]; then
+        return 1
+    fi
+    ensure_config_loaded || return 1
+    yq -i ".environments.${ENVIRONMENT}.knowledge_base_id = \"${kb_id}\"" "$INFRA_CONFIG_PATH"
+    print_complete "Wrote knowledge_base_id to infra.yaml (environments.$ENVIRONMENT)"
+    return 0
+}
+
+# For deploy/update: show summary and confirm
+if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
+    print_resource_summary "rag_knowledge_base" "$ENVIRONMENT" "$ACTION"
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_deployment "Proceed with $ACTION?" || exit 0
+    fi
+fi
 
 # Check if template file exists
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -179,37 +199,34 @@ fi
 
 # Function to get DB stack outputs
 get_db_stack_outputs() {
-    print_status "Retrieving database stack outputs from: $DB_STACK_NAME" >&2
+    print_info "Retrieving database stack outputs from: $DB_STACK_NAME" >&2
     
     # Check if DB stack exists
-    if ! aws cloudformation describe-stacks --stack-name "$DB_STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+    if ! aws_cmd cloudformation describe-stacks --stack-name "$DB_STACK_NAME" >/dev/null 2>&1; then
         print_error "Database stack $DB_STACK_NAME does not exist in region $AWS_REGION" >&2
         print_error "Please deploy the database stack first using deploy_chat_template_db.sh" >&2
         return 1
     fi
     
     # Get DB cluster identifier
-    local db_cluster_id=$(aws cloudformation describe-stacks \
+    local db_cluster_id=$(aws_cmd cloudformation describe-stacks \
         --stack-name "$DB_STACK_NAME" \
-        --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`DBClusterIdentifier`].OutputValue' \
         --output text 2>/dev/null)
     
     # Get database name
-    local db_name=$(aws cloudformation describe-stacks \
+    local db_name=$(aws_cmd cloudformation describe-stacks \
         --stack-name "$DB_STACK_NAME" \
-        --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`DatabaseName`].OutputValue' \
         --output text 2>/dev/null)
     
     # Get secret ARN from secret stack
-    local secret_stack_name="chat-template-db-secret-${ENVIRONMENT}"
+    local secret_stack_name=$(get_resource_stack_name "chat_db" "$ENVIRONMENT" "secret_stack_name")
     local secret_arn=""
     
-    if aws cloudformation describe-stacks --stack-name "$secret_stack_name" --region "$AWS_REGION" >/dev/null 2>&1; then
-        secret_arn=$(aws cloudformation describe-stacks \
+    if aws_cmd cloudformation describe-stacks --stack-name "$secret_stack_name" >/dev/null 2>&1; then
+        secret_arn=$(aws_cmd cloudformation describe-stacks \
             --stack-name "$secret_stack_name" \
-            --region "$AWS_REGION" \
             --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
             --output text 2>/dev/null)
     fi
@@ -223,8 +240,8 @@ get_db_stack_outputs() {
         local secret_name4="python-template-chat-template-db-connection-${ENVIRONMENT}"
 
         for name in "$secret_name1" "$secret_name2" "$secret_name3" "$secret_name4"; do
-            if aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" >/dev/null 2>&1; then
-                secret_arn=$(aws secretsmanager describe-secret --secret-id "$name" --region "$AWS_REGION" \
+            if aws_cmd secretsmanager describe-secret --secret-id "$name" >/dev/null 2>&1; then
+                secret_arn=$(aws_cmd secretsmanager describe-secret --secret-id "$name" \
                     --query 'ARN' --output text 2>/dev/null)
                 break
             fi
@@ -251,20 +268,19 @@ get_db_stack_outputs() {
 
 # Function to get S3 bucket name from S3 bucket stack
 get_s3_bucket_name() {
-    local s3_stack_name="chat-template-s3-bucket-${ENVIRONMENT}"
-    print_status "Retrieving S3 bucket name from stack: $s3_stack_name" >&2
+    local s3_stack_name=$(get_resource_stack_name "s3_bucket" "$ENVIRONMENT")
+    print_info "Retrieving S3 bucket name from stack: $s3_stack_name" >&2
     
     # Check if S3 stack exists
-    if ! aws cloudformation describe-stacks --stack-name "$s3_stack_name" --region "$AWS_REGION" >/dev/null 2>&1; then
+    if ! aws_cmd cloudformation describe-stacks --stack-name "$s3_stack_name" >/dev/null 2>&1; then
         print_warning "S3 bucket stack $s3_stack_name does not exist in region $AWS_REGION" >&2
         print_warning "You can deploy it using deploy_s3_bucket.sh or provide --s3-bucket parameter" >&2
         return 1
     fi
     
     # Get bucket name from stack outputs
-    local bucket_name=$(aws cloudformation describe-stacks \
+    local bucket_name=$(aws_cmd cloudformation describe-stacks \
         --stack-name "$s3_stack_name" \
-        --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' \
         --output text 2>/dev/null)
     
@@ -294,11 +310,10 @@ run_embeddings_sql_via_data_api() {
         return 1
     fi
 
-    print_status "Resolving cluster ARN for RDS Data API..."
+    print_info "Resolving cluster ARN for RDS Data API..."
     local db_cluster_arn
-    db_cluster_arn=$(aws rds describe-db-clusters \
+    db_cluster_arn=$(aws_cmd rds describe-db-clusters \
         --db-cluster-identifier "$db_cluster_id" \
-        --region "$AWS_REGION" \
         --query 'DBClusters[0].DBClusterArn' \
         --output text 2>/dev/null)
 
@@ -307,7 +322,7 @@ run_embeddings_sql_via_data_api() {
         return 1
     fi
 
-    print_status "Running embeddings table setup via RDS Data API (sql/embeddings_table_setup.sql)..."
+    print_info "Running embeddings table setup via RDS Data API (sql/embeddings_table_setup.sql)..."
     # Strip full-line comments and empty lines, strip inline -- comments, normalize whitespace, split by ;
     local content
     content=$(grep -v '^[[:space:]]*--' "$sql_file" | grep -v '^[[:space:]]*$' | sed 's/--.*$//' | tr '\n' ' ' | sed 's/;[[:space:]]*/;/g')
@@ -323,20 +338,19 @@ run_embeddings_sql_via_data_api() {
             statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             [ -z "$statement" ] && continue
             count=$((count + 1))
-            print_status "Executing statement $count..."
-            if ! aws rds-data execute-statement \
+            print_info "Executing statement $count..."
+            if ! aws_cmd rds-data execute-statement \
                 --resource-arn "$db_cluster_arn" \
                 --secret-arn "$secret_arn" \
                 --database "$db_name" \
-                --sql "$statement" \
-                --region "$AWS_REGION" >/dev/null 2>&1; then
+                --sql "$statement" >/dev/null 2>&1; then
                 failed_statement=$count
                 break
             fi
         done < <(printf '%s;' "$content")
 
         if [ "$failed_statement" -eq 0 ]; then
-            print_status "Embeddings table setup completed ($count statements)."
+            print_info "Embeddings table setup completed ($count statements)."
             return 0
         fi
 
@@ -348,15 +362,15 @@ run_embeddings_sql_via_data_api() {
         print_warning "Statement $failed_statement failed (database may be starting from 0 ACU). Waiting ${DB_STARTUP_WAIT_SECONDS}s for Aurora to become available..."
         sleep "$DB_STARTUP_WAIT_SECONDS"
         waited_for_db=true
-        print_status "Retrying embeddings table setup..."
+        print_info "Retrying embeddings table setup..."
     done
 }
 
 # Function to validate template
 validate_template() {
-    print_status "Validating CloudFormation template..."
-    if aws cloudformation validate-template --template-body file://$TEMPLATE_FILE --region $AWS_REGION >/dev/null 2>&1; then
-        print_status "Template validation successful"
+    print_info "Validating CloudFormation template..."
+    if aws_cmd cloudformation validate-template --template-body "file://$TEMPLATE_FILE" >/dev/null 2>&1; then
+        print_info "Template validation successful"
     else
         print_error "Template validation failed"
         exit 1
@@ -365,9 +379,8 @@ validate_template() {
 
 # Function to check stack status and detect errors
 check_stack_status() {
-    local stack_status=$(aws cloudformation describe-stacks \
+    local stack_status=$(aws_cmd cloudformation describe-stacks \
         --stack-name $STACK_NAME \
-        --region $AWS_REGION \
         --query 'Stacks[0].StackStatus' \
         --output text 2>/dev/null)
     
@@ -382,9 +395,8 @@ check_stack_status() {
             echo ""
             
             # Get stack status reason
-            local status_reason=$(aws cloudformation describe-stacks \
+            local status_reason=$(aws_cmd cloudformation describe-stacks \
                 --stack-name $STACK_NAME \
-                --region $AWS_REGION \
                 --query 'Stacks[0].StackStatusReason' \
                 --output text 2>/dev/null)
             
@@ -396,9 +408,8 @@ check_stack_status() {
             # Get recent stack events with errors
             print_error "Recent stack events with errors:"
             echo ""
-            aws cloudformation describe-stack-events \
+            aws_cmd cloudformation describe-stack-events \
                 --stack-name $STACK_NAME \
-                --region $AWS_REGION \
                 --max-items 20 \
                 --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
                 --output table 2>/dev/null || true
@@ -421,12 +432,12 @@ check_stack_status() {
 
 # Function to show stack status
 show_status() {
-    print_status "Checking stack status: $STACK_NAME"
-    if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
-        aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
+    print_info "Checking stack status: $STACK_NAME"
+    if aws_cmd cloudformation describe-stacks --stack-name $STACK_NAME >/dev/null 2>&1; then
+        aws_cmd cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].{StackName:StackName,StackStatus:StackStatus,CreationTime:CreationTime,LastUpdatedTime:LastUpdatedTime}'
         echo ""
-        print_status "Stack outputs:"
-        aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs'
+        print_info "Stack outputs:"
+        aws_cmd cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs'
     else
         print_warning "Stack $STACK_NAME does not exist"
     fi
@@ -434,7 +445,7 @@ show_status() {
 
 # Function to deploy stack
 deploy_stack() {
-    print_status "Deploying CloudFormation stack: $STACK_NAME"
+    print_info "Deploying CloudFormation stack: $STACK_NAME"
     
     # Get DB stack outputs
     local db_outputs=$(get_db_stack_outputs)
@@ -447,9 +458,9 @@ deploy_stack() {
     local db_name=$(echo "$db_outputs" | cut -d'|' -f2)
     local secret_arn=$(echo "$db_outputs" | cut -d'|' -f3)
     
-    print_status "Using DB Cluster ID: $db_cluster_id"
-    print_status "Using Database Name: $db_name"
-    print_status "Using Secret ARN: $secret_arn"
+    print_info "Using DB Cluster ID: $db_cluster_id"
+    print_info "Using Database Name: $db_name"
+    print_info "Using Secret ARN: $secret_arn"
     
     # Run embeddings table setup SQL via RDS Data API before deploying the KB stack
     if ! run_embeddings_sql_via_data_api "$db_cluster_id" "$db_name" "$secret_arn"; then
@@ -460,20 +471,26 @@ deploy_stack() {
     # Get S3 bucket name - try auto-detection first, then use default pattern
     if [ -z "$S3_BUCKET_NAME" ]; then
         # Try to auto-detect from S3 bucket stack first
-        print_status "S3 bucket name not provided, attempting to retrieve from S3 bucket stack..."
+        print_info "S3 bucket name not provided, attempting to retrieve from S3 bucket stack..."
         local retrieved_bucket=$(get_s3_bucket_name)
         if [ $? -eq 0 ] && [ -n "$retrieved_bucket" ]; then
             S3_BUCKET_NAME="$retrieved_bucket"
-            print_status "Auto-detected S3 bucket from stack: $S3_BUCKET_NAME"
+            print_info "Auto-detected S3 bucket from stack: $S3_BUCKET_NAME"
         else
-            # Use default bucket name pattern (matches deploy_s3_bucket.sh)
-            S3_BUCKET_NAME="chat-template-s3-bucket-${ENVIRONMENT}"
-            print_status "Using default S3 bucket name: $S3_BUCKET_NAME"
+            # Use default bucket name pattern from infra.yaml if available
+            local default_bucket=$(get_resource_config "s3_bucket" "bucket_name" "$ENVIRONMENT")
+            if [ -n "$default_bucket" ] && [ "$default_bucket" != "null" ]; then
+                S3_BUCKET_NAME="$default_bucket"
+                print_info "Using S3 bucket name from infra.yaml: $S3_BUCKET_NAME"
+            else
+                print_error "S3 bucket name is required. Provide --s3-bucket or deploy s3_bucket resource first."
+                exit 1
+            fi
         fi
     fi
     
-    print_status "Using S3 Bucket: $S3_BUCKET_NAME"
-    print_status "Using S3 Prefix: $S3_INCLUSION_PREFIX"
+    print_info "Using S3 Bucket: $S3_BUCKET_NAME"
+    print_info "Using S3 Prefix: $S3_INCLUSION_PREFIX"
     
     # Create a temporary parameters file
     local param_file=$(mktemp)
@@ -507,20 +524,19 @@ deploy_stack() {
     local stack_operation_result=0
     local no_updates=false
     
-    if aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION >/dev/null 2>&1; then
+    if aws_cmd cloudformation describe-stacks --stack-name $STACK_NAME >/dev/null 2>&1; then
         print_warning "Stack $STACK_NAME already exists. Updating..."
-        local update_output=$(aws cloudformation update-stack \
+        local update_output=$(aws_cmd cloudformation update-stack \
             --stack-name $STACK_NAME \
-            --template-body file://$TEMPLATE_FILE \
-            --parameters file://$param_file \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region $AWS_REGION 2>&1)
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters "file://$param_file" \
+            --capabilities CAPABILITY_NAMED_IAM 2>&1)
         stack_operation_result=$?
         
         # Check if the error is "No updates are to be performed"
         if [ $stack_operation_result -ne 0 ]; then
             if echo "$update_output" | grep -q "No updates are to be performed"; then
-                print_status "No updates needed for stack $STACK_NAME. Stack is already up to date."
+                print_info "No updates needed for stack $STACK_NAME. Stack is already up to date."
                 no_updates=true
                 stack_operation_result=0  # Treat as success
             else
@@ -529,32 +545,31 @@ deploy_stack() {
             fi
         fi
     else
-        print_status "Creating new stack: $STACK_NAME"
-        aws cloudformation create-stack \
+        print_info "Creating new stack: $STACK_NAME"
+        aws_cmd cloudformation create-stack \
             --stack-name $STACK_NAME \
-            --template-body file://$TEMPLATE_FILE \
-            --parameters file://$param_file \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region $AWS_REGION
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters "file://$param_file" \
+            --capabilities CAPABILITY_NAMED_IAM
         stack_operation_result=$?
     fi
     
     if [ $stack_operation_result -eq 0 ]; then
         if [ "$no_updates" = false ]; then
-            print_status "Stack operation initiated successfully"
-            print_status "Waiting for stack to be ready..."
+            print_info "Stack operation initiated successfully"
+            print_info "Waiting for stack to be ready..."
             
             # Wait for stack to be in a stable state
-            print_status "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
+            print_info "Waiting for stack to reach CREATE_COMPLETE or UPDATE_COMPLETE state..."
             
             # Try waiting for create first, then update
             local wait_result=0
-            aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
+            aws_cmd cloudformation wait stack-create-complete --stack-name $STACK_NAME 2>/dev/null
             wait_result=$?
             
             if [ $wait_result -ne 0 ]; then
                 # If create wait failed, try update wait
-                aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null
+                aws_cmd cloudformation wait stack-update-complete --stack-name $STACK_NAME 2>/dev/null
                 wait_result=$?
             fi
             
@@ -565,7 +580,7 @@ deploy_stack() {
             fi
             
             if [ $wait_result -eq 0 ]; then
-                print_status "Stack operation completed successfully"
+                print_info "Stack operation completed successfully"
             else
                 # Wait command timed out or failed, but check if stack is actually in a good state
                 if ! check_stack_status; then
@@ -580,23 +595,134 @@ deploy_stack() {
                 print_error "Stack is in a failed state. See errors above."
                 exit 1
             fi
-            print_status "Stack is up to date and ready."
+            print_info "Stack is up to date and ready."
         fi
         
-        # Get and display Knowledge Base ID
-        local kb_id=$(aws cloudformation describe-stacks \
+        # Get Knowledge Base ID
+        local kb_id=$(aws_cmd cloudformation describe-stacks \
             --stack-name $STACK_NAME \
-            --region $AWS_REGION \
             --query 'Stacks[0].Outputs[?OutputKey==`KnowledgeBaseId`].OutputValue' \
             --output text 2>/dev/null)
         
-        if [ -n "$kb_id" ] && [ "$kb_id" != "None" ]; then
-            print_status "Knowledge Base ID: $kb_id"
-            print_status "You can use this ID in your application configuration."
-        fi
+        # Get Data Source ID
+        # CloudFormation !Ref on AWS::Bedrock::DataSource returns "KBId|DataSourceId",
+        # so we split on '|' and take the second part.
+        local raw_data_source_id=$(aws_cmd cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].Outputs[?OutputKey==`DataSourceId`].OutputValue' \
+            --output text 2>/dev/null)
+        local data_source_id="${raw_data_source_id##*|}"
         
-        print_status "You can monitor the progress in the AWS Console or with:"
-        print_status "aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION"
+        if [ -n "$kb_id" ] && [ "$kb_id" != "None" ]; then
+            print_info "Knowledge Base ID: $kb_id"
+            print_info "You can use this ID in your application configuration."
+            write_kb_outputs_to_infra_yaml "$kb_id" || true
+
+            # Sync the data source to start ingestion
+            if [ -n "$data_source_id" ] && [ "$data_source_id" != "None" ] && [ "$data_source_id" != "$kb_id" ]; then
+                print_info "Data Source ID: $data_source_id"
+                print_step "Starting data source sync to ingest documents..."
+                
+                local ingestion_output
+                ingestion_output=$(aws_cmd bedrock-agent start-ingestion-job \
+                    --knowledge-base-id "$kb_id" \
+                    --data-source-id "$data_source_id" \
+                    2>&1)
+                local ingestion_result=$?
+                
+                if [ $ingestion_result -ne 0 ]; then
+                    print_error "Failed to start ingestion job (exit code: $ingestion_result)"
+                    print_error "$ingestion_output"
+                    print_info "You can start it manually with:"
+                    print_info "aws bedrock-agent start-ingestion-job --knowledge-base-id $kb_id --data-source-id $data_source_id --region $AWS_REGION"
+                else
+                    # Parse job ID from JSON response (try jq, then grep)
+                    # API field is "ingestionJobId" not "jobId"
+                    local ingestion_job_id=""
+                    if command -v jq &> /dev/null; then
+                        ingestion_job_id=$(echo "$ingestion_output" | jq -r '.ingestionJob.ingestionJobId // empty' 2>/dev/null)
+                    fi
+                    if [ -z "$ingestion_job_id" ]; then
+                        ingestion_job_id=$(echo "$ingestion_output" | grep -o '"ingestionJobId"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+                    fi
+                    
+                    if [ -n "$ingestion_job_id" ]; then
+                        print_info "Ingestion job started: $ingestion_job_id"
+                        
+                        # Poll until ingestion completes
+                        local ingestion_status="STARTING"
+                        local poll_interval=10
+                        local elapsed=0
+                        local max_wait=1800  # 30 minutes
+                        
+                        while [ $elapsed -lt $max_wait ]; do
+                            local job_output=$(aws_cmd bedrock-agent get-ingestion-job \
+                                --knowledge-base-id "$kb_id" \
+                                --data-source-id "$data_source_id" \
+                                --ingestion-job-id "$ingestion_job_id" \
+                                2>/dev/null)
+                            
+                            # Parse status
+                            if command -v jq &> /dev/null; then
+                                ingestion_status=$(echo "$job_output" | jq -r '.ingestionJob.status // empty' 2>/dev/null)
+                            else
+                                ingestion_status=$(echo "$job_output" | grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+                            fi
+                            
+                            case "$ingestion_status" in
+                                COMPLETE)
+                                    print_info "Ingestion job completed successfully."
+                                    # Print stats if available
+                                    if command -v jq &> /dev/null; then
+                                        local docs_scanned=$(echo "$job_output" | jq -r '.ingestionJob.statistics.numberOfDocumentsScanned // "N/A"' 2>/dev/null)
+                                        local docs_indexed=$(echo "$job_output" | jq -r '.ingestionJob.statistics.numberOfNewDocumentsIndexed // "N/A"' 2>/dev/null)
+                                        local docs_modified=$(echo "$job_output" | jq -r '.ingestionJob.statistics.numberOfModifiedDocumentsIndexed // "N/A"' 2>/dev/null)
+                                        local docs_failed=$(echo "$job_output" | jq -r '.ingestionJob.statistics.numberOfDocumentsFailed // "N/A"' 2>/dev/null)
+                                        print_info "  Documents scanned: $docs_scanned"
+                                        print_info "  Documents indexed (new): $docs_indexed"
+                                        print_info "  Documents indexed (modified): $docs_modified"
+                                        print_info "  Documents failed: $docs_failed"
+                                    fi
+                                    break
+                                    ;;
+                                FAILED)
+                                    print_error "Ingestion job failed."
+                                    if command -v jq &> /dev/null; then
+                                        local fail_reasons=$(echo "$job_output" | jq -r '.ingestionJob.failureReasons // [] | .[]' 2>/dev/null)
+                                        if [ -n "$fail_reasons" ]; then
+                                            echo "$fail_reasons" | while IFS= read -r reason; do
+                                                print_error "  Reason: $reason"
+                                            done
+                                        fi
+                                    fi
+                                    break
+                                    ;;
+                                IN_PROGRESS|STARTING)
+                                    if [ $((elapsed % 30)) -eq 0 ]; then
+                                        print_info "Ingestion in progress... (${elapsed}s elapsed)"
+                                    fi
+                                    ;;
+                                *)
+                                    print_warning "Unexpected ingestion status: $ingestion_status"
+                                    ;;
+                            esac
+                            
+                            sleep $poll_interval
+                            elapsed=$((elapsed + poll_interval))
+                        done
+                        
+                        if [ $elapsed -ge $max_wait ]; then
+                            print_warning "Timed out waiting for ingestion job after ${max_wait}s."
+                            print_info "Monitor with: aws bedrock-agent get-ingestion-job --knowledge-base-id $kb_id --data-source-id $data_source_id --ingestion-job-id $ingestion_job_id --region $AWS_REGION"
+                        fi
+                    else
+                        print_info "Ingestion job started (could not parse job ID from response)."
+                    fi
+                fi
+            else
+                print_warning "Could not determine Data Source ID from stack outputs (raw value: ${raw_data_source_id:-empty}). Skipping sync."
+            fi
+        fi
     else
         print_error "Stack operation failed to initiate"
         exit 1
@@ -605,25 +731,16 @@ deploy_stack() {
 
 # Function to delete stack
 delete_stack() {
-    print_warning "Deleting CloudFormation stack: $STACK_NAME"
-    print_warning "This will delete:"
-    print_warning "  - AWS Bedrock Knowledge Base"
-    print_warning "  - Knowledge Base Data Source"
-    print_warning "  - IAM roles and policies"
-    print_warning "Note: This does NOT delete the Aurora PostgreSQL database or S3 bucket"
-    read -p "Are you sure you want to delete these resources? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        aws cloudformation delete-stack --stack-name $STACK_NAME --region $AWS_REGION
-        if [ $? -eq 0 ]; then
-            print_status "Stack deletion initiated"
-            print_status "This may take several minutes to complete."
-        else
-            print_error "Failed to initiate stack deletion"
-            exit 1
-        fi
+    if [ "$AUTO_CONFIRM" = false ]; then
+        confirm_destructive_action "$ENVIRONMENT" "delete Knowledge Base stack ($STACK_NAME)" || exit 0
+    fi
+    aws_cmd cloudformation delete-stack --stack-name $STACK_NAME
+    if [ $? -eq 0 ]; then
+        print_info "Stack deletion initiated"
+        print_info "This may take several minutes to complete."
     else
-        print_status "Stack deletion cancelled"
+        print_error "Failed to initiate stack deletion"
+        exit 1
     fi
 }
 
@@ -649,5 +766,5 @@ case $ACTION in
         ;;
 esac
 
-print_status "Knowledge Base operation completed successfully"
+print_info "Knowledge Base operation completed successfully"
 

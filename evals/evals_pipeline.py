@@ -264,7 +264,12 @@ async def run_evaluation(config: dict, notes: Optional[str] = None):
     log.info(f"Evaluation completed: {evaluation_run_name}")
 
 
-def main(eval_config: str, output_type: Optional[str], notes: Optional[str] = None):
+def main(
+    eval_config: str,
+    output_type: Optional[str],
+    notes: Optional[str] = None,
+    environment: Optional[str] = None,
+):
     config = read_config(eval_config)
     
     # Apply defaults (previously in load_config)
@@ -278,7 +283,12 @@ def main(eval_config: str, output_type: Optional[str], notes: Optional[str] = No
         config["outputs"]["types"] = [
             s.strip() for s in output_type.split(",") if s.strip()
         ]
-    
+
+    # Override Lambda function name when --environment is set (e.g. from CI: dev, staging, prod)
+    if environment:
+        config.setdefault("rag_app", {})
+        config["rag_app"]["lambda_function_name"] = f"chat-template-{environment}-rag-chat"
+
     asyncio.run(run_evaluation(config=config, notes=notes))
 
 
@@ -303,6 +313,13 @@ if __name__ == "__main__":
         default=None,
         help="Notes to include in the evaluation run summary (will appear in summary.json under 'run.notes')"
     )
+    parser.add_argument(
+        "--environment",
+        type=str,
+        default=None,
+        choices=["dev", "staging", "prod"],
+        help="Environment (dev, staging, prod). When set, overrides rag_app.lambda_function_name to chat-template-<env>-rag-chat."
+    )
     args = parser.parse_args()
-    main(args.config, args.output_type, args.notes)
+    main(args.config, args.output_type, args.notes, args.environment)
 

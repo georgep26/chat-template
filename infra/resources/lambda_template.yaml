@@ -63,7 +63,7 @@ Parameters:
   
   AppConfigPath:
     Type: String
-    Default: 'config/app_config.yml'
+    Default: 'config/app_config.yaml'
     Description: 'Path to app config file (local path or S3 URI like s3://bucket/key)'
   
   ConfigS3Bucket:

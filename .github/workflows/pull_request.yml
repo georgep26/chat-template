@@ -1,5 +1,7 @@
 name: Pull Request Workflow
 
+# PRs from development → main: run tests, deploy to staging, then run evals in staging.
+# PRs to development: run tests, then path-filtered evals only (no staging deploy).
 on:
   pull_request:
     branches: [main, development]
@@ -53,7 +55,7 @@ jobs:
     name: Check if evaluations needed
     runs-on: ubuntu-latest
     outputs:
-      should-run: ${{ steps.filter.outputs.evals }}
+      should-run: ${{ steps.set-should-run.outputs.should-run }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,28 +72,39 @@ jobs:
               - 'evals/evals_config.yaml'
               - '.github/workflows/run-evals.yml'
 
+      # For PRs targeting main (development → main), always run evals. Otherwise use path filter.
+      - name: Set whether to run evals
+        id: set-should-run
+        run: |
+          if [ "${{ github.base_ref }}" == "main" ]; then
+            echo "should-run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-run=${{ steps.filter.outputs.evals }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Run evals after deploy so they run within the newly deployed environment.
   run-evaluations:
     name: Run Evaluations
-    needs: [run-tests, check-eval-paths]
+    needs: [run-tests, check-eval-paths, deploy-staging-lambda]
     if: needs.check-eval-paths.outputs.should-run == 'true'
     uses: ./.github/workflows/run-evals.yml
+    with:
+      environment: staging
     secrets: inherit
     permissions:
       id-token: write
       contents: read
 
-  # Deploy Lambda only to staging so PRs can be validated against a live environment.
+  # Deploy to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
     name: Deploy Lambda to Staging
+    if: github.base_ref == 'main'
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: staging
-      skip_network: true
-      skip_s3: true
-      skip_db: true
       skip_kb: true
+      skip_ecr: true
       skip_lambda: false
-      skip_cost_tags: true
     secrets: inherit
 

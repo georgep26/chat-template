@@ -91,6 +91,25 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-config'
         
+        # ECR permissions for Lambda to pull container images
+        - PolicyName: ECRPullAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowECRGetToken
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: AllowECRPullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWSRegion}:${AWS::AccountId}:repository/${ProjectName}-rag-lambda-${Environment}'
+        
         # RDS Data API permissions for Aurora Data API access (allows Lambda outside VPC)
         - PolicyName: RDSDataApiAccessPolicy
           PolicyDocument:

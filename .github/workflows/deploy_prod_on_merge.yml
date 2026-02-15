@@ -1,0 +1,45 @@
+# On merge to main (push to main): run tests; if pass, deploy to prod; then run evals in prod.
+# Keeps main in sync with production.
+name: Deploy to Prod on Merge to Main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  checks: write
+  contents: read
+  id-token: write
+  statuses: write
+
+jobs:
+  run-tests:
+    name: Run Tests
+    uses: ./.github/workflows/test.yml
+    secrets: inherit
+    permissions:
+      checks: write
+      contents: read
+
+  deploy-prod:
+    name: Deploy to Prod
+    needs: [run-tests]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      skip_kb: true
+      skip_ecr: true
+      skip_lambda: false
+    secrets: inherit
+
+  # Run evals after deploy so they run within the newly deployed prod environment.
+  run-evaluations:
+    name: Run Evaluations
+    needs: [deploy-prod]
+    uses: ./.github/workflows/run-evals.yml
+    with:
+      environment: prod
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read

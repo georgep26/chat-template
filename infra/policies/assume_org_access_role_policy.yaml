@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM policy allowing management account principals to assume OrganizationAccountAccessRole in member accounts'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  DevAccountId:
+    Type: String
+    Description: 'AWS account ID of the dev member account'
+
+  StagingAccountId:
+    Type: String
+    Description: 'AWS account ID of the staging member account'
+
+  ProdAccountId:
+    Type: String
+    Description: 'AWS account ID of the prod member account'
+
+  OrgAccessRoleName:
+    Type: String
+    Default: 'OrganizationAccountAccessRole'
+    Description: 'Name of the role created by AWS Organizations in each member account'
+
+Resources:
+  AssumeOrgAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-assume-org-access-role-policy'
+      Description: 'Allows assuming OrganizationAccountAccessRole in dev, staging, and prod member accounts'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AssumeOrgAccessRole
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - !Sub 'arn:aws:iam::${DevAccountId}:role/${OrgAccessRoleName}'
+              - !Sub 'arn:aws:iam::${StagingAccountId}:role/${OrgAccessRoleName}'
+              - !Sub 'arn:aws:iam::${ProdAccountId}:role/${OrgAccessRoleName}'
+
+Outputs:
+  PolicyArn:
+    Description: 'ARN of the assume-org-access-role managed policy'
+    Value: !Ref AssumeOrgAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-PolicyArn'
+
+  PolicyName:
+    Description: 'Name of the managed policy'
+    Value: !Ref AssumeOrgAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-PolicyName'

@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM user in the management account that can assume OrganizationAccountAccessRole in member accounts'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  AssumeOrgAccessPolicyArn:
+    Type: String
+    Description: 'ARN of the assume-org-access-role managed policy (output from assume-org-access-policy stack)'
+
+Resources:
+  ManagementAdminUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${ProjectName}-org-admin'
+      ManagedPolicyArns:
+        - !Ref AssumeOrgAccessPolicyArn
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-org-admin'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Purpose
+          Value: assume-member-account-roles
+
+Outputs:
+  UserName:
+    Description: 'Name of the management account admin user'
+    Value: !Ref ManagementAdminUser
+    Export:
+      Name: !Sub '${AWS::StackName}-UserName'
+
+  UserArn:
+    Description: 'ARN of the management account admin user'
+    Value: !GetAtt ManagementAdminUser.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UserArn'

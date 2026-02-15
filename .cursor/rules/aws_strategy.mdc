@@ -1,0 +1,140 @@
+---
+description: AWS deployment and resource management strategy
+globs: ["infra/**", "scripts/deploy/**", "scripts/setup/**", "scripts/utils/**"]
+---
+
+# AWS Deployment Strategy
+
+This rule provides guidelines for AWS resource management, naming conventions, tagging, and deployment best practices for this project.
+
+## Configuration
+
+All infrastructure configuration is centralized in `infra/infra.yaml`. When making changes:
+
+- Read configuration from `infra/infra.yaml` - never hardcode account IDs, regions, or credentials
+- Use AWS profiles for authentication as defined in the environments section
+- Reference secrets via the `secrets_file` path for each environment
+- Secrets are stored in `infra/secrets/{env}_secrets.yaml` (gitignored)
+
+## ECR Image Management
+
+ECR repositories should be kept clean and cost-efficient:
+
+- **Maximum 5 images** per ECR repository
+- Apply lifecycle policies to automatically expire old images
+- Use semantic versioning for image tags in production (e.g., `v1.2.3`)
+- Use commit SHA or `latest` for development environments
+- The `ecr_repo_template.yaml` includes a lifecycle policy that enforces the 5-image limit
+
+Example lifecycle policy is already configured in `infra/resources/ecr_repo_template.yaml`.
+
+## Naming Conventions
+
+Follow the patterns defined in @docs/aws_naming_convention.md:
+
+- **Format**: `{project}-{resource}-{environment}`
+- Use lowercase with hyphens (no underscores or camelCase)
+- Stack names follow the pattern defined in `infra.yaml` (e.g., `chat-template-vpc-dev`)
+
+### Resource Naming Examples
+
+| Resource Type | Naming Pattern | Example |
+|--------------|----------------|---------|
+| VPC | `{project}-vpc-{env}` | `chat-template-vpc-dev` |
+| S3 Bucket | `{project}-s3-bucket-{env}` | `chat-template-s3-bucket-dev` |
+| Database | `{project}-chat-db-{env}` | `chat-template-chat-db-dev` |
+| Knowledge Base | `{project}-rag-kb-{env}` | `chat-template-rag-kb-dev` |
+| ECR Repo | `{project}-rag-lambda-{env}` | `chat-template-rag-lambda-dev` |
+| Lambda | `{project}-{env}-rag-chat` | `chat-template-dev-rag-chat` |
+| IAM Role | `{project}-{purpose}-role-{env}` | `chat-template-deployer-role-dev` |
+
+**Important**: Use specific resource names for lambdas and similar resources (e.g., `rag_lambda`) rather than generic names (e.g., `lambda`) to support multiple instances. S3 bucket can stay as `s3_bucket` for now.
+
+## Required Tags
+
+All AWS resources **MUST** have these tags:
+
+| Tag | Description | Example |
+|-----|-------------|---------|
+| `Name` | Human-readable resource identifier | `chat-template-vpc-dev` |
+| `Project` | Project name from infra.yaml | `chat-template` |
+| `Environment` | Environment name (dev/staging/prod) | `dev` |
+
+### Optional Tags
+
+| Tag | Description | Example |
+|-----|-------------|---------|
+| `Owner` | Team or person responsible | `platform-team` |
+| `CostCenter` | Cost allocation identifier | `engineering` |
+| `ManagedBy` | How the resource is managed | `cloudformation` |
+
+## Template Organization
+
+Templates are organized in the `infra/` folder:
+
+- **Resources**: `infra/resources/*_template.yaml` - AWS resource definitions
+- **Roles**: `infra/roles/*_role.yaml` - IAM role definitions
+- **Policies**: `infra/policies/*_policy.yaml` - IAM policy definitions
+
+When creating new templates:
+1. Use the appropriate suffix (`_template.yaml`, `_role.yaml`, `_policy.yaml`)
+2. Place in the correct folder
+3. Add the template reference to `infra/infra.yaml`
+4. Include all required tags in the template
+
+## Deployment Scripts
+
+Deployment scripts in `scripts/deploy/` should:
+
+1. **Source utilities**: Always source `common.sh`, `config_parser.sh`, and `deploy_summary.sh`
+2. **Read from config**: Get all values from `infra/infra.yaml` - no command-line overrides except `-y` flag
+3. **Show deploy summary**: Display a summary box before deployment
+4. **Confirm before deploy**: Prompt for confirmation unless `-y` flag is passed
+5. **Respect enabled flag**: Only deploy resources that have `enabled: true` in infra.yaml
+6. **Use color scheme**:
+   - `print_info` (white) - General information
+   - `print_step` (cyan) - Major deployment steps
+   - `print_warning` (yellow) - Warnings
+   - `print_error` (red) - Errors
+   - `print_complete` (green) - Successful completion
+
+## Resource Ordering
+
+Resources are deployed in the order they are defined in `infra/infra.yaml`:
+- Roles and policies are defined first (before resources)
+- Resources are defined in dependency order
+- Teardown occurs in reverse order
+- No separate `deployment_order` section is needed
+
+## Secrets Management
+
+- Store sensitive values in `infra/secrets/{env}_secrets.yaml`
+- Never commit secrets to git (they are gitignored)
+- Use `template.secrets.yaml` as a reference
+- Access secrets via `get_secret_value` function in scripts
+
+## Multi-Account Support
+
+The infrastructure supports multiple deployment architectures:
+
+- **Single account**: All environments in one account
+- **Multi-account**: Separate account per environment (recommended)
+- **Hybrid**: Some environments share accounts (e.g., dev/staging together, prod separate)
+
+Account configuration is defined in the `environments` section of `infra/infra.yaml`.
+
+## Cost Optimization
+
+- Use Aurora Serverless v2 with min ACU of 0 for dev environments
+- Disable NAT Gateway when not needed (use VPC endpoints instead)
+- Apply S3 lifecycle rules for infrequently accessed data
+- Keep ECR images to a minimum (max 5 per repo)
+- Use cost allocation tags for tracking
+
+## Security Best Practices
+
+- Use OIDC for GitHub Actions authentication (no long-lived credentials)
+- Scope IAM policies to specific resources using naming patterns
+- Use Secrets Manager for database credentials
+- Enable S3 bucket versioning for data protection
+- Use VPC endpoints for private AWS service access

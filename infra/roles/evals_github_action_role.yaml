@@ -74,7 +74,7 @@ Resources:
                 token.actions.githubusercontent.com:base_ref: !Ref GitHubTargetBranch
               StringLike:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*pull_request'
-          # Allow workflow_dispatch from environments (staging, production)
+          # Allow workflow_dispatch / workflow_call from environments (staging, prod, production)
           - Effect: Allow
             Principal:
               Federated: !Ref OIDCProviderArn
@@ -85,7 +85,7 @@ Resources:
               StringLike:
                 token.actions.githubusercontent.com:sub:
                   - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:staging*'
-                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:production*'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:prod*'
           # Allow workflow_dispatch from specific branches (development, main)
           - Effect: Allow
             Principal:

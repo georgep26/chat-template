@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECR Repository for Lambda container images with lifecycle policy'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  RepositoryName:
+    Type: String
+    Default: 'rag-lambda'
+    Description: 'Full name for the ECR repository (including environment suffix if desired)'
+
+  MaxImageCount:
+    Type: Number
+    Default: 5
+    Description: 'Maximum number of images to keep in the repository'
+
+Resources:
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageTagMutability: MUTABLE
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LambdaECRImageRetrievalPolicy
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only ${MaxImageCount} most recent images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${MaxImageCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Ref RepositoryName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  RepositoryArn:
+    Description: 'ARN of the ECR repository'
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryArn'
+
+  RepositoryUri:
+    Description: 'URI of the ECR repository'
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryUri'
+
+  RepositoryName:
+    Description: 'Name of the ECR repository'
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryName'
