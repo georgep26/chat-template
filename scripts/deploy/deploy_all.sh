@@ -555,6 +555,48 @@ else
 fi
 
 # =============================================================================
+# Sync App Config and Deploy Configs
+# =============================================================================
+
+echo ""
+DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
+print_step "Step $DEPLOYMENT_STEPS: Syncing App Config"
+
+if [ -f "$DEPLOY_SCRIPT_DIR/sync_app_config.sh" ]; then
+    chmod +x "$DEPLOY_SCRIPT_DIR/sync_app_config.sh"
+    if "$DEPLOY_SCRIPT_DIR/sync_app_config.sh" --env "$ENVIRONMENT"; then
+        print_complete "App config sync completed"
+        COMPLETED_STEPS+=("Sync App Config")
+    else
+        print_error "App config sync failed"
+        FAILED_STEPS+=("Sync App Config")
+        exit 1
+    fi
+else
+    print_warning "sync_app_config.sh not found, skipping"
+    SKIPPED_STEPS+=("Sync App Config")
+fi
+
+echo ""
+DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
+print_step "Step $DEPLOYMENT_STEPS: Deploying Configs to S3"
+
+if [ -f "$DEPLOY_SCRIPT_DIR/deploy_configs.sh" ]; then
+    chmod +x "$DEPLOY_SCRIPT_DIR/deploy_configs.sh"
+    if "$DEPLOY_SCRIPT_DIR/deploy_configs.sh" "$ENVIRONMENT"; then
+        print_complete "Configs deployed to S3"
+        COMPLETED_STEPS+=("Deploy Configs")
+    else
+        print_error "Deploy configs failed"
+        FAILED_STEPS+=("Deploy Configs")
+        exit 1
+    fi
+else
+    print_warning "deploy_configs.sh not found, skipping"
+    SKIPPED_STEPS+=("Deploy Configs")
+fi
+
+# =============================================================================
 # Summary
 # =============================================================================
 
