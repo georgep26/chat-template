@@ -87,6 +87,8 @@ jobs:
     needs: [run-tests, check-eval-paths]
     if: needs.check-eval-paths.outputs.should-run == 'true'
     uses: ./.github/workflows/run-evals.yml
+    with:
+      environment: staging
     secrets: inherit
     permissions:
       id-token: write
