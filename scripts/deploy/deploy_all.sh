@@ -555,6 +555,20 @@ else
 fi
 
 # =============================================================================
+# Hydrate Configs (inject secrets into template files)
+# =============================================================================
+
+if [ -f "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" ]; then
+    chmod +x "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh"
+    if "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" "$ENVIRONMENT"; then
+        : # no-op on success (hydrate runs inline)
+    else
+        print_error "Config hydration failed"
+        exit 1
+    fi
+fi
+
+# =============================================================================
 # Sync App Config and Deploy Configs
 # =============================================================================
 
