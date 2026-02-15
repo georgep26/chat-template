@@ -32,13 +32,25 @@ if ! command -v yq &>/dev/null; then
 fi
 
 PROJECT_NAME="$(yq -r '.project.name' "$INFRA_YAML")"
-ACCOUNT_ID="$(yq -r ".environments.${ENV}.account_id" "$INFRA_YAML")"
+ACCOUNT_ID_FROM_INFRA="$(yq -r ".environments.${ENV}.account_id" "$INFRA_YAML")"
 REGION="$(yq -r ".environments.${ENV}.region // .project.default_region" "$INFRA_YAML")"
 ORG_ROLE_NAME="$(yq -r ".environments.${ENV}.org_role_name // \"OrganizationAccountAccessRole\"" "$INFRA_YAML")"
 
-if [[ "$ACCOUNT_ID" == "null" || -z "$ACCOUNT_ID" ]]; then
-    echo "{\"Version\": 1, \"Error\": \"No account_id for environment: $ENV\"}" >&2
-    exit 1
+# Resolve account_id: use infra value if concrete; else env var ACCOUNT_ID; else secrets file
+if [[ "$ACCOUNT_ID_FROM_INFRA" != "null" && -n "$ACCOUNT_ID_FROM_INFRA" && "$ACCOUNT_ID_FROM_INFRA" != *'${'* ]]; then
+    ACCOUNT_ID="$ACCOUNT_ID_FROM_INFRA"
+else
+    ACCOUNT_ID="${ACCOUNT_ID:-}"   # env var from caller if set
+    if [[ -z "$ACCOUNT_ID" ]]; then
+        SECRETS_FILE="$PROJECT_ROOT/infra/secrets/${ENV}_secrets.yaml"
+        if [[ -f "$SECRETS_FILE" ]]; then
+            ACCOUNT_ID="$(yq -r '.config_secrets.ACCOUNT_ID // ""' "$SECRETS_FILE" 2>/dev/null || echo "")"
+        fi
+    fi
+    if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
+        echo "{\"Version\": 1, \"Error\": \"No account_id for environment: $ENV. Set config_secrets.ACCOUNT_ID in infra/secrets/${ENV}_secrets.yaml or run ./scripts/utils/hydrate_configs.sh ${ENV} to hydrate infra.\"}" >&2
+        exit 1
+    fi
 fi
 
 case "$ROLE_TYPE" in
