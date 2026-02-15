@@ -980,10 +980,32 @@ EOF
 
         # Update Lambda to use the latest image (ensures function picks up new image even if tag unchanged)
         if [ "$SKIP_BUILD" = false ]; then
+            # Wait for Lambda to be ready after stack create/update (avoids ResourceConflictException)
+            print_info "Waiting for Lambda to be ready after stack update..."
+            local ready_max_wait=120
+            local ready_start=$(date +%s)
+            while true; do
+                local last_status=$(aws_cmd lambda get-function \
+                    --function-name "$lambda_name" \
+                    --query 'Configuration.LastUpdateStatus' \
+                    --output text 2>/dev/null)
+                if [ "$last_status" = "Successful" ]; then
+                    print_info "Lambda is ready (LastUpdateStatus=Successful)."
+                    break
+                fi
+                local elapsed=$(( $(date +%s) - ready_start ))
+                if [ $elapsed -ge $ready_max_wait ]; then
+                    print_warning "Lambda did not become ready within ${ready_max_wait}s (LastUpdateStatus=$last_status). Proceeding anyway."
+                    break
+                fi
+                print_info "Lambda state: $last_status (waiting... ${elapsed}s)"
+                sleep 5
+            done
+
             print_info "Updating Lambda function to use latest image: $image_uri"
             if aws_cmd lambda update-function-code \
                 --function-name "$lambda_name" \
-                --image-uri "$image_uri" >/dev/null 2>&1; then
+                --image-uri "$image_uri"; then
                 print_info "Lambda function code updated. Waiting for completion..."
 
                 local max_wait=60
@@ -1010,8 +1032,8 @@ EOF
                     sleep 5
                 done
             else
-                print_warning "Failed to update Lambda function code directly."
-                print_warning "Try: aws lambda update-function-code --function-name $lambda_name --image-uri $image_uri --region $AWS_REGION"
+                print_warning "Failed to update Lambda function code directly. See AWS error above."
+                print_warning "You can retry manually: aws lambda update-function-code --function-name $lambda_name --image-uri $image_uri --region $AWS_REGION"
             fi
         fi
     fi
