@@ -1,0 +1,226 @@
+# Infrastructure Configuration
+# This file defines all infrastructure resources, environments, and deployment settings
+# for the chat-template project.
+#
+# Resources are deployed in the order they are defined in this file.
+# Teardown occurs in reverse order.
+
+project:
+  name: chat-template
+  default_region: us-east-1
+  management_account_id: "${MANAGEMENT_ACCOUNT_ID}"
+# For GitHub repository setup
+github:
+  github_repo: "${REPO}"
+  solo_mode: true
+  # Branch protection for main. required_approving_review_count is derived from solo_mode (0 if solo, 1 otherwise).
+  branch_protection:
+    required_status_checks:
+      strict: true
+      contexts:
+        - "Run Tests"
+    enforce_admins: true
+    required_pull_request_reviews:
+      dismiss_stale_reviews: true
+      require_code_owner_reviews: false
+    restrictions: null
+    allow_force_pushes: false
+    allow_deletions: false
+    block_creations: false
+    required_conversation_resolution: true
+    lock_branch: false
+    allow_fork_syncing: false
+# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id by deploy_knowledge_base.sh)
+# Supports: single account, single account with multiple environments,
+# multiple accounts, or hybrid (dev/staging shared, prod separate)
+environments:
+  dev:
+    account_id: "${ACCOUNT_ID}"
+    account_name: "chat-template-dev"
+    region: us-east-1
+    deployer_profile: chat-template-dev-deployer
+    secrets_file: secrets/dev_secrets.yaml
+    email: "${EMAIL}"
+    org_role_name: "OrganizationAccountAccessRole"
+    cli_role_name: "chat-template-dev-admin-cli-role"
+    cli_profile_name: "chat-template-dev-cli"
+    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
+    vpc_id: "${VPC_ID}"
+    subnet_ids: "${SUBNET_IDS}"
+  staging:
+    account_id: "${ACCOUNT_ID}"
+    account_name: "chat-template-staging"
+    region: us-east-1
+    deployer_profile: chat-template-staging-deployer
+    secrets_file: secrets/staging_secrets.yaml
+    email: "${EMAIL}"
+    org_role_name: "OrganizationAccountAccessRole"
+    cli_role_name: "chat-template-staging-admin-cli-role"
+    cli_profile_name: "chat-template-staging-cli"
+    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
+    vpc_id: "${VPC_ID}"
+    subnet_ids: "${SUBNET_IDS}"
+  prod:
+    account_id: "${ACCOUNT_ID}"
+    account_name: "chat-template-prod"
+    region: us-east-1
+    deployer_profile: chat-template-prod-deployer
+    secrets_file: secrets/prod_secrets.yaml
+    email: "${EMAIL}"
+    org_role_name: "OrganizationAccountAccessRole"
+    cli_role_name: "chat-template-prod-admin-cli-role"
+    cli_profile_name: "chat-template-prod-cli"
+    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
+    vpc_id: "${VPC_ID}"
+    subnet_ids: "${SUBNET_IDS}"
+    db_cluster_arn: "${DB_CLUSTER_ARN}"
+    db_credentials_secret_arn: "${DB_CREDENTIALS_SECRET_ARN}"
+    knowledge_base_id: "${KNOWLEDGE_BASE_ID}"
+# Cost allocation tags for AWS billing
+cost_tags:
+  # Tags that will be activated for cost allocation
+  allocation_tags:
+    - Project
+    - Environment
+    - Owner
+    - CostCenter
+  # Default values for cost tags
+  defaults:
+    ManagedBy: cloudformation
+budgets:
+  budget_email: "${BUDGET_EMAIL}"
+  dev_max_budget: 20
+  staging_max_budget: 20
+  prod_max_budget: 20
+# Required and optional tags for all resources
+tags:
+  required:
+    - Name
+    - Project
+    - Environment
+  optional:
+    - Owner
+    - CostCenter
+    - ManagedBy
+# =============================================================================
+# IAM Roles and Policies (deployed first, before resources)
+# =============================================================================
+roles:
+  # OIDC provider for GitHub Actions (created once per account)
+  oidc_provider:
+    enabled: true
+    description: "GitHub OIDC identity provider for Actions authentication"
+  # Deployer role for CI/CD
+  deployer:
+    enabled: true
+    template: roles/deployer_role.yaml
+    stack_name: "{project}-deployer-role-{env}"
+    description: "GitHub Actions deployer role for CI/CD"
+  # Evals role for running evaluations
+  evals:
+    enabled: true
+    template: roles/evals_github_action_role.yaml
+    stack_name: "{project}-evals-role-{env}"
+    description: "GitHub Actions role for running evaluations"
+    policies:
+      - policies/evals_bedrock_policy.yaml
+      - policies/evals_lambda_policy.yaml
+      - policies/evals_s3_policy.yaml
+      - policies/evals_secrets_manager_policy.yaml
+  # CLI role for local development
+  cli:
+    enabled: true
+    template: roles/admin_cli_role.yaml
+    stack_name: "{project}-cli-role-{env}"
+    description: "CLI access role for local development"
+  # RAG Lambda execution role
+  rag_lambda_execution:
+    enabled: true
+    template: roles/rag_lambda_execution_role.yaml
+    stack_name: "{project}-rag-lambda-execution-role-{env}"
+    description: "Execution role for RAG Lambda function"
+    policies:
+      - policies/rag_lambda_policy.yaml
+  # Management account: policy allowing IAM principals to assume OrganizationAccountAccessRole in member accounts
+  assume_org_access_policy:
+    enabled: true
+    template: policies/assume_org_access_role_policy.yaml
+    stack_name: "{project}-assume-org-access-policy"
+    description: "Policy allowing management account to assume OrganizationAccountAccessRole in dev/staging/prod (deployed in management account only)"
+  # Management account: IAM user that can assume member-account admin roles (depends on assume_org_access_policy)
+  management_admin_user:
+    enabled: true
+    template: roles/management_account_admin_user.yaml
+    stack_name: "{project}-management-admin-user"
+    description: "IAM user in management account that can assume OrganizationAccountAccessRole in dev, staging, prod (deployed in management account only)"
+# =============================================================================
+# Resources (deployed in order defined below)
+# =============================================================================
+resources:
+  # VPC and networking
+  network:
+    enabled: true
+    # When true, deploy_network.sh does not create a CloudFormation stack. Instead it:
+    #   1. Uses environments.<env>.vpc_id if set
+    #   2. Otherwise discovers the default VPC in the account
+    #   3. If no default VPC, uses the first available VPC
+    #   4. Writes the discovered vpc_id and subnet_ids back to infra.yaml (environments.<env>)
+    use_defaults: true
+    # Below are only used when use_defaults is false (custom network stack).
+    # template: resources/vpc_template.yaml
+    # stack_name: "{project}-vpc-{env}"
+    # Below config is only used when use_defaults is false (custom network stack).
+    # config:
+    # vpc_cidr: "10.0.0.0/16"
+    # enable_nat_gateway: false
+  # S3 bucket for knowledge base documents
+  s3_bucket:
+    enabled: true
+    template: resources/s3_bucket_template.yaml
+    stack_name: "{project}-s3-{env}"
+    config:
+      bucket_name: "{project}-{env}-s3-bucket"
+      enable_versioning: true
+      enable_lifecycle: true
+  # Aurora Serverless database
+  chat_db:
+    enabled: true
+    templates:
+      main: resources/light_db_template.yaml
+      secret: resources/db_secret_template.yaml
+    stack_name: "{project}-chat-db-{env}"
+    secret_stack_name: "{project}-chat-db-secret-{env}"
+    config:
+      min_acu: 0
+      max_acu: 1
+      engine_version: "15.13"
+      master_username: postgres
+  # Bedrock Knowledge Base
+  rag_knowledge_base:
+    enabled: true
+    template: resources/knowledge_base_template.yaml
+    stack_name: "{project}-rag-kb-{env}"
+    config:
+      db_stack_name: "{project}-chat-db-{env}"
+      embedding_model_id: "amazon.titan-embed-text-v2:0"
+      table_name: "bedrock_integration.bedrock_kb"
+      s3_bucket_name: "{project}-{env}-s3-bucket"
+      s3_inclusion_prefix: "kb_sources/"
+  # ECR repository for RAG Lambda
+  rag_lambda_ecr:
+    enabled: true
+    template: resources/ecr_repo_template.yaml
+    stack_name: "{project}-rag-lambda-ecr-{env}"
+    config:
+      repository_name: "{project}-rag-lambda-{env}"
+      max_image_count: 5
+  # RAG Lambda function
+  rag_lambda:
+    enabled: true
+    template: resources/lambda_template.yaml
+    stack_name: "{project}-rag-lambda-{env}"
+    config:
+      function_name: "{project}-{env}-rag-chat"
+      memory_size: 1024
+      timeout: 300
+      s3_app_config_uri: "s3://{project}-{env}-s3-bucket/config/app_config.yaml"
