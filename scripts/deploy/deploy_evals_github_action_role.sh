@@ -85,7 +85,7 @@ fi
 # Defaults (overridden by infra or flags)
 GITHUB_SOURCE_BRANCH="development"
 GITHUB_TARGET_BRANCH="main"
-INCLUDE_LAMBDA_POLICY=false
+INCLUDE_LAMBDA_POLICY=true
 OIDC_PROVIDER_ARN=""
 KNOWLEDGE_BASE_ID=""
 GITHUB_ORG=""
