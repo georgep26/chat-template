@@ -171,6 +171,18 @@ aws_cmd() {
     fi
 }
 
+# Write knowledge_base_id to infra.yaml under environments.<env>
+write_kb_outputs_to_infra_yaml() {
+    local kb_id=$1
+    if [ -z "$kb_id" ] || [ "$kb_id" = "None" ]; then
+        return 1
+    fi
+    ensure_config_loaded || return 1
+    yq -i ".environments.${ENVIRONMENT}.knowledge_base_id = \"${kb_id}\"" "$INFRA_CONFIG_PATH"
+    print_complete "Wrote knowledge_base_id to infra.yaml (environments.$ENVIRONMENT)"
+    return 0
+}
+
 # For deploy/update: show summary and confirm
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
     print_resource_summary "rag_knowledge_base" "$ENVIRONMENT" "$ACTION"
@@ -604,7 +616,8 @@ deploy_stack() {
         if [ -n "$kb_id" ] && [ "$kb_id" != "None" ]; then
             print_info "Knowledge Base ID: $kb_id"
             print_info "You can use this ID in your application configuration."
-            
+            write_kb_outputs_to_infra_yaml "$kb_id" || true
+
             # Sync the data source to start ingestion
             if [ -n "$data_source_id" ] && [ "$data_source_id" != "None" ] && [ "$data_source_id" != "$kb_id" ]; then
                 print_info "Data Source ID: $data_source_id"

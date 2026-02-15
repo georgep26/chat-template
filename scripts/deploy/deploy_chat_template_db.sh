@@ -271,6 +271,41 @@ aws_cmd() {
     fi
 }
 
+# Write db_cluster_arn and db_credentials_secret_arn to infra.yaml under environments.<env>
+write_db_outputs_to_infra_yaml() {
+    ensure_config_loaded || return 1
+    local account_id
+    account_id=$(yq -r ".environments.${ENVIRONMENT}.account_id" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    if [ -z "$account_id" ] || [ "$account_id" = "null" ]; then
+        print_warning "Could not read account_id for $ENVIRONMENT; skipping infra.yaml write"
+        return 1
+    fi
+    # DB cluster ARN from main stack
+    local cluster_id
+    cluster_id=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`DBClusterIdentifier`].OutputValue' \
+        --output text 2>/dev/null)
+    if [ -n "$cluster_id" ] && [ "$cluster_id" != "None" ]; then
+        local db_cluster_arn="arn:aws:rds:${AWS_REGION}:${account_id}:cluster:${cluster_id}"
+        yq -i ".environments.${ENVIRONMENT}.db_cluster_arn = \"${db_cluster_arn}\"" "$INFRA_CONFIG_PATH"
+        print_complete "Wrote db_cluster_arn to infra.yaml (environments.$ENVIRONMENT)"
+    fi
+    # Secret ARN from secret stack (if it exists)
+    if aws_cmd cloudformation describe-stacks --stack-name "$SECRET_STACK_NAME" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
+        local secret_arn
+        secret_arn=$(aws_cmd cloudformation describe-stacks \
+            --stack-name "$SECRET_STACK_NAME" \
+            --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
+            --output text 2>/dev/null)
+        if [ -n "$secret_arn" ] && [ "$secret_arn" != "None" ]; then
+            yq -i ".environments.${ENVIRONMENT}.db_credentials_secret_arn = \"${secret_arn}\"" "$INFRA_CONFIG_PATH"
+            print_complete "Wrote db_credentials_secret_arn to infra.yaml (environments.$ENVIRONMENT)"
+        fi
+    fi
+    return 0
+}
+
 print_step "Starting Aurora DB deployment for $ENVIRONMENT environment"
 if [ -n "$AWS_CLI_PROFILE" ]; then
     print_info "Using AWS CLI profile: $AWS_CLI_PROFILE"
@@ -988,8 +1023,13 @@ deploy_stack() {
             print_info "Stack is up to date and ready."
         fi
         
-        # Deploy secret after DB stack is ready
-        deploy_secret
+        # Deploy secret after DB stack is ready (when we did create/update)
+        if [ "$no_updates" = false ]; then
+            deploy_secret
+        fi
+        
+        # Write db_cluster_arn and db_credentials_secret_arn to infra.yaml
+        write_db_outputs_to_infra_yaml || true
         
         print_info "You can monitor the progress in the AWS Console or with:"
         if [ -n "$AWS_CLI_PROFILE" ]; then

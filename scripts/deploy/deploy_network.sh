@@ -137,9 +137,9 @@ ENABLE_NAT_GATEWAY=$(get_resource_config "$RESOURCE_NAME" "enable_nat_gateway" "
 [ "$VPC_CIDR" = "null" ] || [ -z "$VPC_CIDR" ] && VPC_CIDR="10.0.0.0/16"
 [ "$ENABLE_NAT_GATEWAY" = "null" ] || [ -z "$ENABLE_NAT_GATEWAY" ] && ENABLE_NAT_GATEWAY=false
 
-# When use_defaults is true: optional existing VPC to use (if no AWS default VPC in region)
-EXISTING_VPC_ID=$(get_resource_config "$RESOURCE_NAME" "vpc_id" "$ENVIRONMENT")
-[ "$EXISTING_VPC_ID" = "null" ] || [ -z "$EXISTING_VPC_ID" ] && EXISTING_VPC_ID=""
+# When use_defaults is true: read VPC ID from environments.<env>.vpc_id (the canonical location).
+EXISTING_VPC_ID=$(get_environment_vpc_id "$ENVIRONMENT")
+
 
 # When use_defaults is true we only read VPC/subnets; use CLI profile so we use the same account as the console (deployer profile can point at a different account or fail to assume).
 if [ "$USE_DEFAULTS" = "true" ]; then
@@ -246,67 +246,84 @@ check_existing_vpc_resources() {
     return 0
 }
 
-# Verifies that the AWS default VPC, at least two subnets, and the default security group exist in the region.
-# Prints IDs and returns 0 on success; prints errors and returns 1 on failure.
-check_default_vpc_resources() {
-    print_step "Checking default VPC, subnets, and security group in region $AWS_REGION"
-    
+# Discover a VPC when none is configured. Tries the default VPC first, then the first available VPC.
+# Sets DISCOVERED_VPC_ID on success.
+discover_vpc() {
+    print_step "No VPC configured for $ENVIRONMENT. Discovering VPC in region $AWS_REGION..."
+
+    # Try the default VPC first
     local vpc_id
     vpc_id=$(aws_cmd ec2 describe-vpcs \
         --filters "Name=is-default,Values=true" \
         --query 'Vpcs[0].VpcId' \
         --output text 2>/dev/null)
-    
-    if [ -z "$vpc_id" ] || [ "$vpc_id" = "None" ]; then
-        print_error "No default VPC found in region $AWS_REGION. Set network.config.vpc_id in infra/infra.yaml to your existing VPC ID, or set use_defaults to false and deploy the network stack."
-        return 1
+
+    if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
+        print_info "Found default VPC: $vpc_id"
+        DISCOVERED_VPC_ID="$vpc_id"
+        return 0
     fi
-    print_info "Default VPC: $vpc_id"
-    
-    local subnet_ids
-    subnet_ids=$(aws_cmd ec2 describe-subnets \
-        --filters "Name=vpc-id,Values=$vpc_id" \
-        --query 'Subnets[*].SubnetId' \
+
+    print_warning "No default VPC found. Looking for any available VPC..."
+
+    # Fall back to the first available VPC
+    vpc_id=$(aws_cmd ec2 describe-vpcs \
+        --query 'Vpcs[0].VpcId' \
         --output text 2>/dev/null)
-    
-    if [ -z "$subnet_ids" ]; then
-        print_error "No subnets found for default VPC $vpc_id."
-        return 1
+
+    if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
+        print_info "Found VPC: $vpc_id"
+        DISCOVERED_VPC_ID="$vpc_id"
+        return 0
     fi
-    
-    local subnet_count
-    subnet_count=$(echo "$subnet_ids" | wc -w | tr -d ' ')
-    if [ "$subnet_count" -lt 2 ]; then
-        print_error "Default VPC has only $subnet_count subnet(s). At least 2 subnets (in different AZs) are required for Aurora."
-        return 1
-    fi
-    print_info "Default subnets ($subnet_count): $subnet_ids"
-    
-    local sg_id
-    sg_id=$(aws_cmd ec2 describe-security-groups \
-        --filters "Name=vpc-id,Values=$vpc_id" "Name=group-name,Values=default" \
-        --query 'SecurityGroups[0].GroupId' \
-        --output text 2>/dev/null)
-    
-    if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
-        print_error "Default security group not found for VPC $vpc_id."
-        return 1
-    fi
-    print_info "Default security group: $sg_id"
-    
-    print_complete "Default VPC resources are present and valid"
-    echo ""
-    print_info "Default VPC is in use and has been verified. Use the VPC ID and subnet IDs above when deploying the DB (e.g. to default VPC). Lambda can be deployed without VPC when using aurora_data_api."
-    return 0
+
+    print_error "No VPCs found in region $AWS_REGION. Create a VPC first, or set use_defaults to false and deploy the network stack."
+    return 1
 }
 
-# Run the appropriate VPC check when use_defaults is true (existing VPC ID or default VPC).
+# Write the discovered/verified VPC ID and subnet IDs back to infra.yaml under environments.<env>.
+write_vpc_to_infra_yaml() {
+    local vpc_id=$1
+    local subnet_csv=$2   # comma-separated subnet IDs
+
+    print_step "Recording VPC info in infra.yaml for $ENVIRONMENT environment"
+
+    yq -i ".environments.${ENVIRONMENT}.vpc_id = \"${vpc_id}\"" "$INFRA_CONFIG_PATH"
+    yq -i ".environments.${ENVIRONMENT}.subnet_ids = \"${subnet_csv}\"" "$INFRA_CONFIG_PATH"
+
+    print_complete "Wrote vpc_id=$vpc_id and subnet_ids to infra.yaml (environments.$ENVIRONMENT)"
+}
+
+# Run the full use_defaults VPC flow:
+#   1. If environments.<env>.vpc_id is set, verify it exists
+#   2. If not set, discover (default VPC -> first VPC)
+#   3. Verify subnets and security group
+#   4. Write vpc_id and subnet_ids back to infra.yaml
 run_use_defaults_vpc_check() {
-    if [ -n "$EXISTING_VPC_ID" ]; then
-        check_existing_vpc_resources "$EXISTING_VPC_ID"
+    local vpc_id="$EXISTING_VPC_ID"
+
+    # Step 1/2: Get a VPC ID
+    if [ -n "$vpc_id" ]; then
+        print_step "Using VPC from infra.yaml: $vpc_id"
     else
-        check_default_vpc_resources
+        discover_vpc || return 1
+        vpc_id="$DISCOVERED_VPC_ID"
     fi
+
+    # Step 3: Verify the VPC and get subnets
+    check_existing_vpc_resources "$vpc_id" || return 1
+
+    # Collect subnet IDs as comma-separated for writing to infra.yaml
+    local subnet_ids_csv
+    subnet_ids_csv=$(aws_cmd ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query 'Subnets[*].SubnetId' \
+        --output text 2>/dev/null | tr '\t' ',')
+
+    # Step 4: Write back to infra.yaml
+    write_vpc_to_infra_yaml "$vpc_id" "$subnet_ids_csv"
+
+    return 0
 }
 
 # Show default/existing VPC details (for status action when use_defaults: true)
