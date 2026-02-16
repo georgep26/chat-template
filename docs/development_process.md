@@ -46,7 +46,7 @@ Feature/Bug/Task: A smaller feature or bug that is part of the epic.
 Sub-task: A smaller feature or bug that is part of the feature/bug/task.
 For a detailed description of each issue type, see (this article)[https://www.launchnotes.com/blog/initiative-vs-epic-vs-feature-understanding-the-key-differences].
 
-## Deployment Process
+## Development Workflow
 
 0. **Initial setup** - setup environment, use "make dev-env"
 
