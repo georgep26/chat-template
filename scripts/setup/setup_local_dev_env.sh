@@ -77,12 +77,50 @@ install_conda_linux() {
     print_info "Miniconda installed. Please restart your terminal or run: source ~/.bashrc"
 }
 
-# Install conda on Windows (Git Bash/Cygwin)
+# Check if Chocolatey is available (Windows)
+check_chocolatey() {
+    if command -v choco &> /dev/null; then
+        return 0
+    fi
+    # Chocolatey may be on PATH only in PowerShell; try running it
+    if choco --version &> /dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Install conda on Windows (Git Bash/Cygwin) via Chocolatey when available
 install_conda_windows() {
-    print_error "Windows installation via script is not fully supported."
-    print_info "Please install Miniconda manually from: https://docs.conda.io/en/latest/miniconda.html"
-    print_info "After installation, restart your terminal and run this script again."
-    exit 1
+    if check_chocolatey; then
+        print_info "Installing Miniconda on Windows via Chocolatey..."
+        choco install miniconda3 -y
+        # Chocolatey adds conda to PATH for new sessions; common install locations for current session
+        local conda_paths=(
+            "/c/ProgramData/miniconda3/Scripts"
+            "/c/ProgramData/miniconda3"
+            "/c/tools/miniconda3/Scripts"
+            "/c/tools/miniconda3"
+            "$HOME/miniconda3/Scripts"
+            "$HOME/miniconda3"
+        )
+        for p in "${conda_paths[@]}"; do
+            if [[ -x "${p}/conda.exe" || -x "${p}/conda" ]]; then
+                export PATH="${p}:$(dirname "$p"):$PATH"
+                break
+            fi
+        done
+        if ! check_conda; then
+            print_warning "Miniconda was installed but conda is not in PATH in this session."
+            print_info "Please restart your terminal and run this script again."
+            exit 1
+        fi
+        print_info "Miniconda installed via Chocolatey. Conda is available in this session."
+    else
+        print_error "Windows installation via script requires Chocolatey (https://chocolatey.org/)."
+        print_info "Install Chocolatey, then run this script again. Or install Miniconda manually from: https://docs.conda.io/en/latest/miniconda.html"
+        print_info "After installation, restart your terminal and run this script again."
+        exit 1
+    fi
 }
 
 # Main installation function
