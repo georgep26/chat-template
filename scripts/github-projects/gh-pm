@@ -1,0 +1,273 @@
+#!/bin/bash
+# GitHub Project Manager: single entry point for project operations.
+# Usage: gh-pm <subcommand> [options]
+# Subcommands: check-env, create-issue, breakdown-outline, cleanup-audit, fetch-current-sprint, weekly-report, discussions-to-issues
+
+set -e
+
+GH_PM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$GH_PM_DIR/../.." && pwd)"
+UTILS_DIR="$PROJECT_ROOT/scripts/utils"
+ISSUE_CREATE_SCRIPT="$GH_PM_DIR/gh-issue-create"
+
+# Shared defaults (overridable by --repo, --project)
+REPO=""
+PROJECT_NAME="Chat Template Project"
+OUTPUT_JSON=false
+DRY_RUN=false
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+if [[ -f "$UTILS_DIR/common.sh" ]]; then
+    source "$UTILS_DIR/common.sh"
+fi
+if [[ -f "$UTILS_DIR/github_repo.sh" ]]; then
+    source "$UTILS_DIR/github_repo.sh"
+fi
+
+# Resolve repo: flag > infra/git
+resolve_repo() {
+    if [[ -n "$REPO" ]]; then
+        echo "$REPO"
+        return 0
+    fi
+    if command -v resolve_github_repo &> /dev/null; then
+        if repo=$(resolve_github_repo 2>/dev/null); then
+            echo "$repo"
+            return 0
+        fi
+    fi
+    if command -v git &> /dev/null && git rev-parse --git-dir &> /dev/null; then
+        local remote_url
+        remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+        if [[ -n "$remote_url" ]]; then
+            echo "$remote_url" | sed -E 's|.*github\.com[:/]([^/]+/[^/]+)(\.git)?$|\1|' | sed 's|\.git$||'
+            return 0
+        fi
+    fi
+    return 1
+}
+
+show_usage() {
+    cat << EOF
+${GREEN}GitHub Project Manager (gh-pm)${NC}
+
+Usage: gh-pm <subcommand> [options]
+
+Subcommands:
+  check-env              Verify gh is installed and authenticated (including project scope).
+  create-issue           Create an issue and add to project (delegates to gh-issue-create).
+  breakdown-outline      Propose sub-issues from an outline; optional duplicate check.
+  cleanup-audit         Report duplicates, orphaned, and stale issues (no mutations by default).
+  fetch-current-sprint   Export current sprint issues as JSON to docs/github_project_issues/.
+  weekly-report          Generate weekly status report to docs/github_project_reports/.
+  discussions-to-issues  List discussions and propose converting to issues (dry-run by default).
+
+Global options (before or after subcommand):
+  --repo OWNER/REPO      Override repository.
+  --project NAME        Override project name (default: "Chat Template Project").
+  --json                 Emit machine-readable output where supported.
+  --dry-run              For mutating subcommands: only report what would be done (default for cleanup, discussions).
+
+Examples:
+  gh-pm check-env
+  gh-pm create-issue feature --title "Add X" --body "Description"
+  gh-pm cleanup-audit --json
+  gh-pm fetch-current-sprint
+  gh-pm weekly-report
+  gh-pm discussions-to-issues --dry-run
+EOF
+}
+
+# Parse global options. Consumes from "$@", leaves subcommand and its args in REST_ARGS.
+parse_global_opts() {
+    REST_ARGS=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --repo)
+                REPO="$2"
+                shift 2
+                ;;
+            --project)
+                PROJECT_NAME="$2"
+                shift 2
+                ;;
+            --json)
+                OUTPUT_JSON=true
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            *)
+                REST_ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
+}
+
+# --- check-env ---
+cmd_check_env() {
+    local json="$OUTPUT_JSON"
+    local ok=true
+    local msg=""
+    local fix=""
+
+    if ! command -v gh &> /dev/null; then
+        ok=false
+        msg="GitHub CLI (gh) is not installed."
+        fix="Install from: https://cli.github.com/"
+    elif ! gh auth status &> /dev/null; then
+        ok=false
+        msg="GitHub CLI is not authenticated."
+        fix="Run: gh auth login"
+    else
+        # Check project scope
+        if ! gh auth status 2>&1 | grep -q 'project'; then
+            ok=false
+            msg="Project scope may not be enabled."
+            fix="Run: gh auth refresh -s project"
+        fi
+    fi
+
+    if [[ "$json" == true ]]; then
+        if [[ "$ok" == true ]]; then
+            echo '{"ok":true,"message":"gh installed and authenticated"}'
+        else
+            echo "{\"ok\":false,\"message\":\"$msg\",\"fix\":\"$fix\"}"
+        fi
+        return 0
+    fi
+
+    if [[ "$ok" == true ]]; then
+        echo -e "${GREEN}✓ gh is installed and authenticated (project scope enabled).${NC}"
+        return 0
+    fi
+    echo -e "${RED}$msg${NC}"
+    echo "$fix"
+    return 1
+}
+
+# --- create-issue: delegate to gh-issue-create ---
+cmd_create_issue() {
+    if [[ ! -x "$ISSUE_CREATE_SCRIPT" ]]; then
+        echo -e "${RED}Error: gh-issue-create script not found or not executable: $ISSUE_CREATE_SCRIPT${NC}" >&2
+        return 1
+    fi
+    local args=("${REST_ARGS[@]}")
+    [[ -n "$REPO" ]] && args+=(--repo "$REPO")
+    [[ "$PROJECT_NAME" != "Chat Template Project" ]] && args+=(--project "$PROJECT_NAME")
+    exec "$ISSUE_CREATE_SCRIPT" "${args[@]}"
+}
+
+# --- breakdown-outline: accept --proposals-json; run duplicate check and output JSON for agent ---
+cmd_breakdown_outline() {
+    local proposals=""
+    local i=0
+    while [[ $i -lt ${#REST_ARGS[@]} ]]; do
+        if [[ "${REST_ARGS[$i]}" == "--proposals-json" ]] && [[ -n "${REST_ARGS[i+1]:-}" ]]; then
+            proposals="${REST_ARGS[i+1]}"
+            break
+        fi
+        (( i++ )) || true
+    done
+    if [[ -z "$proposals" ]]; then
+        if [[ "$OUTPUT_JSON" != true ]]; then
+            echo -e "${YELLOW}Provide proposals for duplicate check: gh-pm breakdown-outline --proposals-json '<json array>'${NC}"
+        fi
+        echo '{"proposals":[],"duplicates":[],"existing_titles":[],"message":"No proposals provided. Agent should generate proposals from outline then call with --proposals-json."}'
+        return 0
+    fi
+    source "$GH_PM_DIR/gh-pm-lib.sh" 2>/dev/null || true
+    if declare -f run_breakdown_duplicate_check &> /dev/null; then
+        run_breakdown_duplicate_check "$proposals"
+    else
+        echo "{\"proposals\":$proposals,\"duplicates\":[],\"existing_titles\":[]}"
+    fi
+    return 0
+}
+
+# --- cleanup-audit: list duplicates, orphaned, stale (read-only by default) ---
+cmd_cleanup_audit() {
+    source "$GH_PM_DIR/gh-pm-lib.sh" 2>/dev/null || true
+    if declare -f run_cleanup_audit &> /dev/null; then
+        run_cleanup_audit
+        return $?
+    fi
+    echo -e "${YELLOW}cleanup-audit: Not yet implemented. Will list duplicates, orphaned, and stale issues.${NC}"
+    echo '{"duplicates":[],"orphaned":[],"stale":[]}'
+    return 0
+}
+
+# --- fetch-current-sprint: write JSON to docs/github_project_issues/ ---
+cmd_fetch_current_sprint() {
+    source "$GH_PM_DIR/gh-pm-lib.sh" 2>/dev/null || true
+    if declare -f run_fetch_current_sprint &> /dev/null; then
+        run_fetch_current_sprint
+        return $?
+    fi
+    echo -e "${YELLOW}fetch-current-sprint: Not yet implemented. Will write sprint issues JSON to docs/github_project_issues/.${NC}"
+    return 0
+}
+
+# --- weekly-report: write markdown to docs/github_project_reports/ ---
+cmd_weekly_report() {
+    source "$GH_PM_DIR/gh-pm-lib.sh" 2>/dev/null || true
+    if declare -f run_weekly_report &> /dev/null; then
+        run_weekly_report
+        return $?
+    fi
+    echo -e "${YELLOW}weekly-report: Not yet implemented. Will write report to docs/github_project_reports/YYYY-MM-DD_weekly_report.md${NC}"
+    return 0
+}
+
+# --- discussions-to-issues: list and propose (dry-run by default) ---
+cmd_discussions_to_issues() {
+    source "$GH_PM_DIR/gh-pm-lib.sh" 2>/dev/null || true
+    if declare -f run_discussions_to_issues &> /dev/null; then
+        run_discussions_to_issues
+        return $?
+    fi
+    echo -e "${YELLOW}discussions-to-issues: Not yet implemented. Will list discussions and propose issue drafts (use --dry-run by default).${NC}"
+    echo '{"discussions":[],"proposed_issues":[]}'
+    return 0
+}
+
+# Main dispatch
+main() {
+    parse_global_opts "$@"
+    set -- "${REST_ARGS[@]}"
+
+    if [[ $# -eq 0 ]]; then
+        show_usage
+        exit 1
+    fi
+
+    local subcmd="$1"
+    shift
+    REST_ARGS=("$@")
+
+    case "$subcmd" in
+        check-env)       cmd_check_env ;;
+        create-issue)   cmd_create_issue ;;
+        breakdown-outline) cmd_breakdown_outline ;;
+        cleanup-audit)  cmd_cleanup_audit ;;
+        fetch-current-sprint) cmd_fetch_current_sprint ;;
+        weekly-report)  cmd_weekly_report ;;
+        discussions-to-issues) cmd_discussions_to_issues ;;
+        -h|--help|help) show_usage ; exit 0 ;;
+        *)
+            echo -e "${RED}Unknown subcommand: $subcmd${NC}" >&2
+            show_usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

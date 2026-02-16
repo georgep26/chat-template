@@ -1257,12 +1257,19 @@ main() {
     
     # Build title with prefix
     local title_prefix
-    title_prefix=$(get_title_prefix "$template_path")
+    # Title prefix: when --type is Epic or Initiative, use [EPIC] or [INITIATIVE] (Type in all caps).
+    # Otherwise use the template prefix ([FEATURE], [BUG], [TASK]).
+    local type_override_normalized
+    type_override_normalized=$(map_issue_type_to_project_type "$PROJECT_TYPE_OVERRIDE")
+    if [[ "$type_override_normalized" == "Epic" ]] || [[ "$type_override_normalized" == "Initiative" ]]; then
+        title_prefix=$(echo "$type_override_normalized" | tr '[:lower:]' '[:upper:]')
+    else
+        title_prefix=$(get_title_prefix "$template_path")
+    fi
     local full_title="$TITLE"
     # If the caller already provided a [TYPE] prefix, preserve it as-is.
-    # Otherwise use the template prefix for this issue category.
+    # Otherwise apply the chosen prefix (EPIC, INITIATIVE, FEATURE, BUG, TASK).
     if [[ -n "$title_prefix" ]] && [[ ! "$TITLE" =~ ^\[[^]]+\] ]]; then
-        # Convert to uppercase (compatible with bash 3.2+)
         local title_prefix_upper
         title_prefix_upper=$(echo "$title_prefix" | tr '[:lower:]' '[:upper:]')
         full_title="[$title_prefix_upper] $TITLE"
