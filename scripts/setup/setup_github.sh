@@ -64,8 +64,44 @@ read_infra_config() {
     [[ -n "$CONFIG_REPO" ]]
 }
 
-# Default branch protection config (used when infra has no value for a key; infra overrides).
-# required_approving_review_count is always set from solo_mode after merge.
+# Output branch protection JSON for a given branch. Reads from infra/infra.yaml
+# github.branch_protection.<branch>. For main, required_approving_review_count is
+# injected from solo_mode. Falls back to built-in defaults if infra key missing or no yq/jq.
+get_protection_json_for_branch() {
+    local project_root="$1"
+    local branch="$2"
+    local infra_file="${project_root}/infra/infra.yaml"
+    local required_reviews=$([[ "$SOLO_MODE" -eq 1 ]] && echo "0" || echo "1")
+
+    if command -v yq &> /dev/null && [[ -f "$infra_file" ]]; then
+        if yq -e ".github.branch_protection.${branch}" "$infra_file" &> /dev/null; then
+            local branch_json
+            branch_json=$(yq -o=json ".github.branch_protection.${branch}" "$infra_file" 2>/dev/null)
+            if [[ -n "$branch_json" ]] && [[ "$branch_json" != "null" ]]; then
+                if command -v jq &> /dev/null; then
+                    # Do not add checks when using contexts - API expects one or the other; both breaks schema (422).
+                    if [[ "$branch" == "main" ]]; then
+                        echo "$branch_json" | jq --argjson n "$required_reviews" '
+                            if .required_pull_request_reviews == null then .required_pull_request_reviews = {} else . end
+                            | .required_pull_request_reviews.required_approving_review_count = $n'
+                    else
+                        echo "$branch_json"
+                    fi
+                    return
+                fi
+            fi
+        fi
+    fi
+
+    # Fallback when infra key missing or no yq/jq
+    if [[ "$branch" == "main" ]]; then
+        get_protection_default_json "$required_reviews"
+    else
+        get_development_protection_default_json
+    fi
+}
+
+# Default protection for main (used when infra has no github.branch_protection.main).
 get_protection_default_json() {
     local required_reviews=$1
     cat <<EOF
@@ -91,43 +127,35 @@ get_protection_default_json() {
 EOF
 }
 
-# Output branch protection JSON: default config with github.branch_protection from infra
-# overriding. Infra values take precedence; only missing keys come from defaults.
-# required_approving_review_count is always set from solo_mode after merge.
+# Default protection for development (used when infra has no github.branch_protection.development).
+# Deletion protection only; no required checks or reviews.
+get_development_protection_default_json() {
+    cat <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": []
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": false,
+  "lock_branch": false,
+  "allow_fork_syncing": false
+}
+EOF
+}
+
+# Back-compat: return protection JSON for main (reads from infra github.branch_protection.main).
 get_protection_json() {
-    local project_root="$1"
-    local infra_file="${project_root}/infra/infra.yaml"
-    local required_reviews=$([[ "$SOLO_MODE" -eq 1 ]] && echo "0" || echo "1")
-
-    local default_json
-    default_json=$(get_protection_default_json "$required_reviews")
-
-    # If we have yq and infra, get github.branch_protection and deep-merge (infra overrides default).
-    if command -v yq &> /dev/null && [[ -f "$infra_file" ]]; then
-        if yq -e '.github.branch_protection' "$infra_file" &> /dev/null; then
-            local infra_json
-            infra_json=$(yq -o=json '.github.branch_protection' "$infra_file" 2>/dev/null)
-            if [[ -n "$infra_json" ]] && [[ "$infra_json" != "null" ]]; then
-                if command -v jq &> /dev/null; then
-                    echo "$default_json" | jq --argjson infra "$infra_json" --argjson n "$required_reviews" '
-                        def deep_merge(base; override):
-                            if override == null then base
-                            elif (base | type) != "object" or (override | type) != "object" then override
-                            else (base | keys) + (override | keys) | unique as $keys |
-                                {} | reduce $keys[] as $k (.; .[$k] = deep_merge(base[$k]; override[$k]))
-                            end;
-                        (deep_merge(.; $infra) | .required_pull_request_reviews.required_approving_review_count = $n)
-                    '
-                    return
-                fi
-                # No jq: use infra JSON only and inject required_approving_review_count (no merge).
-                echo "$infra_json" | yq -o=json ".required_pull_request_reviews.required_approving_review_count = $required_reviews"
-                return
-            fi
-        fi
-    fi
-
-    echo "$default_json"
+    get_protection_json_for_branch "$1" "main"
 }
 
 show_usage() {
@@ -141,7 +169,7 @@ show_usage() {
     echo "  --deploy-secrets [envs]   - Deploy secrets for specific envs only (default: all with secrets files)"
     echo "  --skip-secrets            - Do not deploy environment secrets (default is to deploy)"
     echo "  --dry-run                 - For secrets: print what would be set, do not call gh"
-    echo "  --skip-branch-protection  - Do not set up branch protection on main"
+    echo "  --skip-branch-protection  - Do not set up branch protection on main or development"
     echo "  --skip-environments       - Do not create/ensure GitHub environments"
     echo "  -y, --yes                 - Non-interactive: skip confirmation prompts"
     echo "  --help, -h                - Show this help message"
@@ -150,10 +178,10 @@ show_usage() {
     echo "  No args: ensure all environments (dev, staging, prod) and deploy secrets for all with secrets files."
     echo "  With args: only ensure and deploy secrets for the listed environment(s). e.g. $0 dev"
     echo ""
-    echo "Config: CLI args > infra/infra.yaml (github.github_repo, github.solo_mode, github.branch_protection)"
+    echo "Config: CLI args > infra/infra.yaml (github.github_repo, github.solo_mode, github.branch_protection.main, github.branch_protection.development)"
     echo ""
     echo "This script (default behavior):"
-    echo "  1. Sets branch protection on main (unless --skip-branch-protection)"
+    echo "  1. Sets branch protection on main and development (unless --skip-branch-protection)"
     echo "  2. Ensures GitHub environment(s) (all or only those listed)"
     echo "  3. Deploys secrets from infra/secrets (use --skip-secrets to skip)"
     echo ""
@@ -288,7 +316,57 @@ setup_branch_protection() {
         --input - \
         --silent
 
-    print_info "Branch protection rules configured successfully."
+    print_info "Branch protection rules configured successfully for main."
+    return 0
+}
+
+# Set up branch protection for development branch: deletion protection only (allow_deletions: false).
+# Skips if development branch does not exist (e.g. new repo).
+setup_development_branch_protection() {
+    local repo=$1
+    local project_root=${2:-$(get_project_root)}
+
+    if ! gh api "repos/${repo}/branches/development" --silent &>/dev/null; then
+        print_warning "Branch 'development' does not exist in ${repo}. Skipping development branch protection (create the branch first)."
+        return 0
+    fi
+
+    print_step "Setting up branch protection for 'development' branch in ${repo} (deletion protection)..."
+
+    local existing=0
+    if gh api "repos/${repo}/branches/development/protection" &> /dev/null; then
+        existing=1
+        print_warning "Branch protection already exists for 'development' branch."
+    fi
+
+    echo "  Repository:     ${repo}"
+    echo "  Branch:        development"
+    echo "  Rules:         Deletion protection (allow_deletions: false); no required checks or reviews"
+    echo ""
+
+    if [[ "$AUTO_YES" -eq 0 ]]; then
+        if [[ "$existing" -eq 1 ]]; then
+            read -p "Update development branch protection? (y/N): " -r
+        else
+            read -p "Apply deletion protection to development branch? (y/N): " -r
+        fi
+        echo
+        if [[ ! "$REPLY" =~ ^[yY]([eE][sS])?$ ]]; then
+            print_info "Skipping development branch protection."
+            return 0
+        fi
+    fi
+
+    local gh_err
+    if ! gh_err=$(get_protection_json_for_branch "$project_root" "development" | gh api "repos/${repo}/branches/development/protection" \
+        --method PUT \
+        --input - \
+        2>&1); then
+        print_error "Failed to set development branch protection."
+        [[ -n "$gh_err" ]] && print_error "$gh_err"
+        return 1
+    fi
+    print_info "Development branch protection (deletion protection) configured successfully."
     return 0
 }
 
@@ -558,6 +636,7 @@ main() {
 
     if [[ "$SKIP_BRANCH_PROTECTION" -eq 0 ]]; then
         setup_branch_protection "$repo" "$project_root"
+        setup_development_branch_protection "$repo" "$project_root"
     else
         print_info "Skipping branch protection (--skip-branch-protection)."
     fi
@@ -578,7 +657,7 @@ main() {
 
     print_step "GitHub setup complete!"
     print_info "Summary:"
-    [[ "$SKIP_BRANCH_PROTECTION" -eq 0 ]] && print_info "  Branch protection on main configured"
+    [[ "$SKIP_BRANCH_PROTECTION" -eq 0 ]] && print_info "  Branch protection on main and development (deletion protection) configured"
     if [[ "$SKIP_ENVIRONMENTS" -eq 0 ]]; then
         if [[ ${#SELECTED_ENVS[@]} -gt 0 ]]; then
             print_info "  Environment(s) ensured: ${SELECTED_ENVS[*]}"
