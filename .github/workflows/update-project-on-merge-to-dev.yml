@@ -1,0 +1,382 @@
+# On merge to development: find linked issues and update their Status to "In Review" in GitHub Project.
+# This workflow runs when PRs are merged to the development branch.
+name: Update Project Status on Merge to Development
+
+on:
+  push:
+    branches: [development]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  update-project-status:
+    name: Update Issues to In Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get merged PR information
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get the commit that was just pushed
+            const commits = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ github.sha }}',
+              per_page: 10
+            });
+            
+            // Find the merge commit (usually contains "Merge pull request")
+            let mergedPR = null;
+            for (const commit of commits.data) {
+              const message = commit.commit.message;
+              const prMatch = message.match(/Merge pull request #(\d+)/);
+              
+              if (prMatch) {
+                const prNumber = parseInt(prMatch[1]);
+                try {
+                  const pr = await github.rest.pulls.get({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: prNumber
+                  });
+                  
+                  // Check if this PR targets development
+                  if (pr.data.base.ref === 'development') {
+                    mergedPR = {
+                      number: prNumber,
+                      body: pr.data.body || '',
+                      title: pr.data.title
+                    };
+                    break;
+                  }
+                } catch (error) {
+                  console.log(`Could not fetch PR #${prNumber}: ${error.message}`);
+                }
+              }
+            }
+            
+            if (!mergedPR) {
+              console.log('No PR merged to development found in recent commits');
+              return { found: false };
+            }
+            
+            // Extract linked issues from PR body (Closes #123, Fixes #456, etc.)
+            const issuePattern = /(?:closes?|fixes?|resolves?)\s+#(\d+)/gi;
+            const linkedIssues = new Set();
+            
+            // Check PR body
+            if (mergedPR.body) {
+              let match;
+              while ((match = issuePattern.exec(mergedPR.body)) !== null) {
+                linkedIssues.add(parseInt(match[1]));
+              }
+            }
+            
+            // Also check commit messages
+            for (const commit of commits.data) {
+              const message = commit.commit.message;
+              let match;
+              while ((match = issuePattern.exec(message)) !== null) {
+                linkedIssues.add(parseInt(match[1]));
+              }
+            }
+            
+            return {
+              found: true,
+              pr_number: mergedPR.number,
+              pr_title: mergedPR.title,
+              linked_issues: Array.from(linkedIssues)
+            };
+
+      - name: Find GitHub Project
+        id: find-project
+        if: steps.pr-info.outputs.found == 'true' && fromJson(steps.pr-info.outputs.linked_issues).length > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const PROJECT_NAME = "Chat Template Project";
+            const org = context.repo.owner;
+            
+            // Try to find Project V2 first (organization projects)
+            const projectV2Query = `
+              query($org: String!, $projectName: String!) {
+                organization(login: $org) {
+                  projectsV2(first: 20, query: $projectName) {
+                    nodes { 
+                      id 
+                      title 
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const projectV2Result = await github.graphql(projectV2Query, {
+              org: org,
+              projectName: PROJECT_NAME
+            });
+            
+            let projectId = null;
+            if (projectV2Result?.organization?.projectsV2?.nodes) {
+              const project = projectV2Result.organization.projectsV2.nodes.find(
+                p => p.title === PROJECT_NAME
+              );
+              if (project && project.id.startsWith('PVT_')) {
+                projectId = project.id;
+              }
+            }
+            
+            // Fallback: try user projects
+            if (!projectId) {
+              const userProjectQuery = `
+                query($owner: String!, $projectName: String!) {
+                  user(login: $owner) {
+                    projectsV2(first: 20, query: $projectName) {
+                      nodes { 
+                        id 
+                        title 
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const userProjectResult = await github.graphql(userProjectQuery, {
+                owner: org,
+                projectName: PROJECT_NAME
+              });
+              
+              if (userProjectResult?.user?.projectsV2?.nodes) {
+                const project = userProjectResult.user.projectsV2.nodes.find(
+                  p => p.title === PROJECT_NAME
+                );
+                if (project && project.id.startsWith('PVT_')) {
+                  projectId = project.id;
+                }
+              }
+            }
+            
+            if (!projectId) {
+              console.log(`Project "${PROJECT_NAME}" not found`);
+              return { found: false };
+            }
+            
+            console.log(`Found project: ${PROJECT_NAME} (${projectId})`);
+            return { found: true, project_id: projectId };
+
+      - name: Get Status field and In Review option
+        id: status-field
+        if: steps.find-project.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectId = '${{ steps.find-project.outputs.project_id }}';
+            
+            const query = `
+              query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    fields(first: 100) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const result = await github.graphql(query, {
+              projectId: projectId
+            });
+            
+            const fields = result.node.fields.nodes;
+            const statusField = fields.find(f => f.name === 'Status');
+            
+            if (!statusField) {
+              console.log('Status field not found in project');
+              return { found: false };
+            }
+            
+            const inReviewOption = statusField.options.find(opt => opt.name === 'In Review');
+            
+            if (!inReviewOption) {
+              console.log('In Review option not found in Status field');
+              console.log('Available options:', statusField.options.map(o => o.name).join(', '));
+              return { found: false };
+            }
+            
+            console.log(`Found Status field: ${statusField.id}, In Review option: ${inReviewOption.id}`);
+            return {
+              found: true,
+              field_id: statusField.id,
+              option_id: inReviewOption.id
+            };
+
+      - name: Find project items for linked issues
+        id: find-items
+        if: steps.status-field.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectId = '${{ steps.find-project.outputs.project_id }}';
+            const linkedIssues = ${{ steps.pr-info.outputs.linked_issues }};
+            
+            // Fetch project items (first 100)
+            const query = `
+              query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(first: 100) {
+                      nodes {
+                        id
+                        content {
+                          ... on Issue {
+                            number
+                            title
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const result = await github.graphql(query, {
+              projectId: projectId
+            });
+            
+            const items = result.node.items.nodes;
+            const issueToItemMap = {};
+            
+            for (const item of items) {
+              if (item.content && item.content.number) {
+                issueToItemMap[item.content.number] = {
+                  item_id: item.id,
+                  title: item.content.title
+                };
+              }
+            }
+            
+            // Find items for linked issues
+            const foundItems = [];
+            for (const issueNum of linkedIssues) {
+              if (issueToItemMap[issueNum]) {
+                foundItems.push({
+                  issue_number: issueNum,
+                  item_id: issueToItemMap[issueNum].item_id,
+                  title: issueToItemMap[issueNum].title
+                });
+              } else {
+                console.log(`Issue #${issueNum} not found in project`);
+              }
+            }
+            
+            return { items: foundItems };
+
+      - name: Update issues to In Review
+        if: steps.status-field.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectId = '${{ steps.find-project.outputs.project_id }}';
+            const fieldId = '${{ steps.status-field.outputs.field_id }}';
+            const optionId = '${{ steps.status-field.outputs.option_id }}';
+            const items = ${{ steps.find-items.outputs.items }};
+            
+            if (items.length === 0) {
+              console.log('No linked issues found in project');
+              return;
+            }
+            
+            const mutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    value: { singleSelectOptionId: $optionId }
+                  }
+                ) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `;
+            
+            const results = [];
+            for (const item of items) {
+              try {
+                await github.graphql(mutation, {
+                  projectId: projectId,
+                  itemId: item.item_id,
+                  fieldId: fieldId,
+                  optionId: optionId
+                });
+                results.push({
+                  issue_number: item.issue_number,
+                  title: item.title,
+                  success: true
+                });
+                console.log(`✅ Updated issue #${item.issue_number} (${item.title}) to In Review`);
+              } catch (error) {
+                results.push({
+                  issue_number: item.issue_number,
+                  title: item.title,
+                  success: false,
+                  error: error.message
+                });
+                console.log(`❌ Failed to update issue #${item.issue_number}: ${error.message}`);
+              }
+            }
+            
+            const successCount = results.filter(r => r.success).length;
+            const failCount = results.filter(r => !r.success).length;
+            
+            console.log(`\n📊 Summary: ${successCount} updated, ${failCount} failed`);
+            
+            if (failCount > 0) {
+              console.log('\nFailed updates:');
+              results.filter(r => !r.success).forEach(r => {
+                console.log(`  - #${r.issue_number}: ${r.error}`);
+              });
+            }
+
+      - name: Skip (no PR found)
+        if: steps.pr-info.outputs.found != 'true'
+        run: |
+          echo "⏭️ Skipping - no PR merged to development found in recent commits"
+
+      - name: Skip (no linked issues)
+        if: steps.pr-info.outputs.found == 'true' && fromJson(steps.pr-info.outputs.linked_issues).length == 0
+        run: |
+          echo "⏭️ Skipping - PR #${{ steps.pr-info.outputs.pr_number }} has no linked issues (no 'Closes #123' found)"
+
+      - name: Skip (project not found)
+        if: steps.find-project.outputs.found != 'true'
+        run: |
+          echo "⏭️ Skipping - GitHub Project 'Chat Template Project' not found"
+
+      - name: Skip (Status field not found)
+        if: steps.status-field.outputs.found != 'true'
+        run: |
+          echo "⏭️ Skipping - Status field or 'In Review' option not found in project"
