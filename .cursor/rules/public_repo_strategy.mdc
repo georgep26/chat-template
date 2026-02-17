@@ -1,0 +1,48 @@
+---
+description: Public repo strategy for sensitive data; supports both GitHub-secrets flow and private-fork flow
+globs: ["infra/**", "config/**", "scripts/**", ".github/**", "docs/**"]
+---
+
+# Public Repo Strategy
+
+This rule documents how we keep the repository safe to publish publicly while still supporting deployment via GitHub Actions and local scripts. **Remember this strategy when adding new config, infra, or CI features.**
+
+## Two Usage Modes
+
+We support two deployment modes; designs should work for both:
+
+| Mode | Who | Sensitive data | How |
+|------|-----|-----------------|-----|
+| **Public repo (upstream)** | Maintainers / this project | In GitHub environment secrets and gitignored `infra/secrets/*_secrets.yaml` | Templated files with `${PLACEHOLDER}`; `hydrate_configs.sh` injects at runtime |
+| **Private fork** | Other teams / adopters | Can live directly in config and infra files | No placeholders; real values committed. Hydration can be turned off. |
+
+Design so that **forkers can use the repo privately** without setting up GitHub secrets for every value. Less sensitive data (e.g. account IDs, VPC IDs, resource ARNs) can stay in `infra/infra.yaml` and `config/<env>/app_config.yaml` when the repo is private.
+
+## What We Do in the Public Repo
+
+- **Commit only templates**: `infra/infra.yaml` and `config/<env>/app_config.yaml` use `${PLACEHOLDER}` for sensitive or deployment-specific values (account IDs, emails, ARNs, VPC/subnet IDs, knowledge base IDs, DB cluster/secret ARNs).
+- **Secrets stay out of git**: Real values live in `infra/secrets/<env>_secrets.yaml` (gitignored) and, for CI, in GitHub environment secrets.
+- **Runtime injection**: `scripts/utils/hydrate_configs.sh` injects secrets into the templated files before deploy (locally from secrets files, in CI from env vars set by the workflow).
+- **Optional hydration**: If `HYDRATE_CONFIGS=false` (repo or environment variable), or if no placeholders exist in the files, hydration is a no-op. Private forks can set this and commit real values.
+
+## What Forkers Can Do (Private Repo)
+
+- **Fork and make the repo private** so config and infra are not visible publicly.
+- **Commit real values** in `infra/infra.yaml` and `config/<env>/app_config.yaml` (no placeholders).
+- **Disable hydration**: Set repository or environment variable `HYDRATE_CONFIGS=false` so the Hydrate step is skipped in GitHub Actions.
+- **Optionally skip secrets for “low sensitivity” data**: They do not need to put every account ID or ARN in GitHub secrets; those can stay in the committed config.
+
+## Design Principles Going Forward
+
+1. **Prefer “works in both modes”**: New config or infra fields should work whether values come from hydration (placeholders + secrets) or from committed real values (no placeholders, hydration off).
+2. **Respect HYDRATE_CONFIGS**: Any step that injects secrets from GitHub or secrets files should be gated by the same pattern (e.g. skip when `HYDRATE_CONFIGS=false` or when no placeholders are present).
+3. **Document both flows**: In docs (e.g. `docs/github_environment_secrets.md`, README), mention the public-repo flow (secrets + hydrate) and the private-fork flow (real values in config, hydration off).
+4. **Secrets vs config**: Truly sensitive data (passwords, API keys, tokens) always belong in secrets, never in committed config. For the public repo, we also treat account IDs, emails, and resource ARNs as “sensitive” and keep them in secrets + placeholders; forkers in a private repo may keep those in config.
+5. **New placeholders**: When adding a new sensitive or deployment-specific value to infra or app config, add a corresponding `${NAMED_PLACEHOLDER}` in the template, add it to `config_secrets` in `infra/secrets/template.secrets.yaml` (and to the hydrate script and workflow if used in CI), and document it.
+
+## Key Files
+
+- **Templated configs**: `infra/infra.yaml`, `config/dev|staging|prod/app_config.yaml`
+- **Secrets (gitignored)**: `infra/secrets/<env>_secrets.yaml`; section `config_secrets` is synced to GitHub via `setup_github.sh`
+- **Hydration**: `scripts/utils/hydrate_configs.sh` (used by `deploy_all.sh` and `.github/workflows/deploy.yml`)
+- **Docs**: `docs/github_environment_secrets.md` (secret names, including `config_secrets`)

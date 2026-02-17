@@ -28,11 +28,13 @@ Act as a helpful mentor and guide. Be thorough but concise, and encourage questi
 
 ### 4. Environment Setup
 - Explain the environment setup process using scripts/setup/setup_local_dev_env.sh
-- Walk through the quick start: `make install` or `bash scripts/setup/setup_local_dev_env.sh`
+- Walk through the quick start: `make dev-env` or `bash scripts/setup/setup_local_dev_env.sh`
 - Explain the conda environment setup and why it's used
 - Mention the importance of updating the environment name in environment.yml
 - Show how to activate the environment after setup
 - Explain the Python version (currently 3.14) and how to change it if needed
+- Note that full setup (GitHub, AWS, OIDC, deployer/evals roles) is in docs/deployment_process.md and can be run via `scripts/setup/setup_all.sh <env>`; initial deployment is `scripts/deploy/deploy_all.sh <env>`
+- For manual setup steps (e.g. if scripts fail), point to docs/github_environment_secrets.md and docs/oidc_github_identity_provider_setup.md
 
 ### 5. Project Structure Deep Dive
 - Explain each major directory and its purpose:
@@ -47,12 +49,15 @@ Act as a helpful mentor and guide. Be thorough but concise, and encourage questi
 
 ### 6. Development Tools & Workflows
 - Explain the Makefile commands:
-  - `make install` - Set up the environment
-  - `make lint` - Run linting (ruff, mypy)
+  - `make dev-env` - Set up local dev environment (conda + PYTHONPATH)
   - `make test` - Run tests (pytest)
+  - `make eval` - Run evaluation pipeline
+  - `make lint` - Run linting (ruff, mypy)
   - `make clean` - Clean up Python cache files
   - `make all` - Run lint and test together
-- Mention optional code quality tools in .pre-commit-config.yaml
+  - `make branch-protection` - Set up branch protection (main, development)
+  - `make initial-deployment` - Run setup_all.sh dev then deploy_all.sh dev (optional)
+- Mention optional code quality tools in .pre-commit-config.yaml (disabled by default)
 - Explain how to enable pre-commit hooks if desired
 
 ### 7. Code Standards

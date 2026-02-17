@@ -1,6 +1,12 @@
 ## Summary
 <!-- Provide a brief description of the changes in this PR -->
 
+## Release Information
+<!-- For PRs from development → main, please provide release details -->
+- [ ] This PR is for a release (development → main)
+- **Release Tag:** `v1.0.0` <!-- e.g., v1.0.0, v1.2.3, etc. -->
+- **Milestone:** <!-- Link to milestone (e.g., Milestone: v1.0.0 or Milestone: Sprint 2024-02) -->
+
 ## Type of Change
 <!-- Please check the relevant options: -->
 - [ ] Feature
