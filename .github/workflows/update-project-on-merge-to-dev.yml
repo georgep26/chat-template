@@ -50,15 +50,28 @@ jobs:
               pull_number: mergedPR.number
             });
             
-            // Extract linked issues from PR body (closes/Closes #123, fixes/Fixes #456, etc.)
-            const issuePattern = /(?:[cC]loses?|[fF]ixes?|[rR]esolves?)\s+#(\d+)/g;
+            // Extract linked issues from PR body:
+            // - "closes/Closes #123", "fixes/Fixes #456", "resolves/Resolves #789"
+            // - "Related to: #123" or "- Related to: #123" (template format)
             const linkedIssues = new Set();
-            
             if (pr.body) {
+              const body = pr.body;
+              // Debug: help diagnose if "Closes #N" is present but not matching (e.g. invisible chars, encoding)
+              console.log('PR body length:', body.length);
+              console.log('PR body contains "Closes":', body.includes('Closes'));
+              console.log('PR body contains "closes":', body.includes('closes'));
+              console.log('PR body contains "#":', body.includes('#'));
+              // Match closes/fixes/resolves + any whitespace (including Unicode) + #digits
+              const closesPattern = /(?:[cC]loses?|[fF]ixes?|[rR]esolves?)[\s\u200b\u200c\u200d\ufeff]*#(\d+)/g;
               let match;
-              while ((match = issuePattern.exec(pr.body)) !== null) {
+              while ((match = closesPattern.exec(body)) !== null) {
                 linkedIssues.add(parseInt(match[1]));
               }
+              const relatedToPattern = /[Rr]elated to:\s*#(\d+)/g;
+              while ((match = relatedToPattern.exec(body)) !== null) {
+                linkedIssues.add(parseInt(match[1]));
+              }
+              console.log('Linked issues found:', Array.from(linkedIssues));
             }
             
             return {
