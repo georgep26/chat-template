@@ -16,7 +16,7 @@
 - [ ] Other (please describe):
 
 ## Related Issues
-<!-- Link to related issues (e.g., Closes #123, Fixes #456) -->
+<!-- Link to related issues (e.g., closes/Closes #123, fixes/Fixes #456) -->
 - Related to: #
 
 ## Changes Made
