@@ -11,7 +11,7 @@ permissions:
   pull-requests: read
   issues: write
   # Required to find and update GitHub Project (Status field)
-  repository-projects: read-write
+  repository-projects: write
 
 jobs:
   update-project-status:
@@ -209,7 +209,7 @@ jobs:
         with:
           script: |
             const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
-            const linkedIssues = ${{ toJSON(fromJson(steps.pr-info.outputs.result).linked_issues || []) }};
+            const linkedIssues = ${{ toJSON(fromJson(steps.pr-info.outputs.result).linked_issues) }};
             
             // Fetch project items (first 100)
             const query = `
@@ -272,7 +272,7 @@ jobs:
             const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
             const fieldId = '${{ fromJson(steps.status-field.outputs.result).field_id }}';
             const optionId = '${{ fromJson(steps.status-field.outputs.result).option_id }}';
-            const items = ${{ toJSON(fromJson(steps.find-items.outputs.result).items || []) }};
+            const items = ${{ toJSON(fromJson(steps.find-items.outputs.result).items) }};
             
             if (items.length === 0) {
               console.log('No linked issues found in project');
