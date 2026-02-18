@@ -10,6 +10,8 @@ permissions:
   contents: read
   pull-requests: read
   issues: write
+  # Required to find and update GitHub Project (Status field)
+  repository-projects: read-write
 
 jobs:
   update-project-status:
@@ -26,80 +28,49 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Get the commit that was just pushed
-            const commits = await github.rest.repos.listCommits({
+            // Use GitHub API to get PR(s) associated with this commit (works for merge, squash, rebase)
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: '${{ github.sha }}',
-              per_page: 10
+              commit_sha: context.sha
             });
             
-            // Find the merge commit (usually contains "Merge pull request")
-            let mergedPR = null;
-            for (const commit of commits.data) {
-              const message = commit.commit.message;
-              const prMatch = message.match(/Merge pull request #(\d+)/);
-              
-              if (prMatch) {
-                const prNumber = parseInt(prMatch[1]);
-                try {
-                  const pr = await github.rest.pulls.get({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: prNumber
-                  });
-                  
-                  // Check if this PR targets development
-                  if (pr.data.base.ref === 'development') {
-                    mergedPR = {
-                      number: prNumber,
-                      body: pr.data.body || '',
-                      title: pr.data.title
-                    };
-                    break;
-                  }
-                } catch (error) {
-                  console.log(`Could not fetch PR #${prNumber}: ${error.message}`);
-                }
-              }
-            }
+            // Find the PR that targeted development (the one we just merged into)
+            const mergedPR = pulls.find(pr => pr.base && pr.base.ref === 'development');
             
             if (!mergedPR) {
-              console.log('No PR merged to development found in recent commits');
+              console.log('No PR merged to development found for this commit (listPullRequestsAssociatedWithCommit returned no PR targeting development)');
               return { found: false };
             }
+            
+            // Get full PR for body/title
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: mergedPR.number
+            });
             
             // Extract linked issues from PR body (Closes #123, Fixes #456, etc.)
             const issuePattern = /(?:closes?|fixes?|resolves?)\s+#(\d+)/gi;
             const linkedIssues = new Set();
             
-            // Check PR body
-            if (mergedPR.body) {
+            if (pr.body) {
               let match;
-              while ((match = issuePattern.exec(mergedPR.body)) !== null) {
-                linkedIssues.add(parseInt(match[1]));
-              }
-            }
-            
-            // Also check commit messages
-            for (const commit of commits.data) {
-              const message = commit.commit.message;
-              let match;
-              while ((match = issuePattern.exec(message)) !== null) {
+              while ((match = issuePattern.exec(pr.body)) !== null) {
                 linkedIssues.add(parseInt(match[1]));
               }
             }
             
             return {
               found: true,
-              pr_number: mergedPR.number,
-              pr_title: mergedPR.title,
+              pr_number: pr.number,
+              pr_title: pr.title,
               linked_issues: Array.from(linkedIssues)
             };
 
       - name: Find GitHub Project
         id: find-project
-        if: steps.pr-info.outputs.found == 'true' && fromJson(steps.pr-info.outputs.linked_issues).length > 0
+        if: fromJson(steps.pr-info.outputs.result).found == true && (fromJson(steps.pr-info.outputs.result).linked_issues || []).length > 0
         uses: actions/github-script@v7
         with:
           script: |
@@ -175,11 +146,11 @@ jobs:
 
       - name: Get Status field and In Review option
         id: status-field
-        if: steps.find-project.outputs.found == 'true'
+        if: steps.find-project.outcome == 'success' && fromJson(steps.find-project.outputs.result).found == true
         uses: actions/github-script@v7
         with:
           script: |
-            const projectId = '${{ steps.find-project.outputs.project_id }}';
+            const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
             
             const query = `
               query($projectId: ID!) {
@@ -214,7 +185,9 @@ jobs:
               return { found: false };
             }
             
-            const inReviewOption = statusField.options.find(opt => opt.name === 'In Review');
+            const inReviewOption = statusField.options.find(opt =>
+              (opt.name || '').trim().toLowerCase() === 'in review'
+            );
             
             if (!inReviewOption) {
               console.log('In Review option not found in Status field');
@@ -231,12 +204,12 @@ jobs:
 
       - name: Find project items for linked issues
         id: find-items
-        if: steps.status-field.outputs.found == 'true'
+        if: steps.status-field.outcome == 'success' && fromJson(steps.status-field.outputs.result).found == true
         uses: actions/github-script@v7
         with:
           script: |
-            const projectId = '${{ steps.find-project.outputs.project_id }}';
-            const linkedIssues = ${{ steps.pr-info.outputs.linked_issues }};
+            const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
+            const linkedIssues = ${{ toJSON(fromJson(steps.pr-info.outputs.result).linked_issues || []) }};
             
             // Fetch project items (first 100)
             const query = `
@@ -292,14 +265,14 @@ jobs:
             return { items: foundItems };
 
       - name: Update issues to In Review
-        if: steps.status-field.outputs.found == 'true'
+        if: steps.status-field.outcome == 'success' && fromJson(steps.status-field.outputs.result).found == true
         uses: actions/github-script@v7
         with:
           script: |
-            const projectId = '${{ steps.find-project.outputs.project_id }}';
-            const fieldId = '${{ steps.status-field.outputs.field_id }}';
-            const optionId = '${{ steps.status-field.outputs.option_id }}';
-            const items = ${{ steps.find-items.outputs.items }};
+            const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
+            const fieldId = '${{ fromJson(steps.status-field.outputs.result).field_id }}';
+            const optionId = '${{ fromJson(steps.status-field.outputs.result).option_id }}';
+            const items = ${{ toJSON(fromJson(steps.find-items.outputs.result).items || []) }};
             
             if (items.length === 0) {
               console.log('No linked issues found in project');
@@ -362,21 +335,21 @@ jobs:
             }
 
       - name: Skip (no PR found)
-        if: steps.pr-info.outputs.found != 'true'
+        if: fromJson(steps.pr-info.outputs.result).found != true
         run: |
           echo "⏭️ Skipping - no PR merged to development found in recent commits"
 
       - name: Skip (no linked issues)
-        if: steps.pr-info.outputs.found == 'true' && fromJson(steps.pr-info.outputs.linked_issues).length == 0
+        if: fromJson(steps.pr-info.outputs.result).found == true && (fromJson(steps.pr-info.outputs.result).linked_issues || []).length == 0
         run: |
-          echo "⏭️ Skipping - PR #${{ steps.pr-info.outputs.pr_number }} has no linked issues (no 'Closes #123' found)"
+          echo "⏭️ Skipping - PR #${{ fromJson(steps.pr-info.outputs.result).pr_number }} has no linked issues (no 'Closes #123' found)"
 
       - name: Skip (project not found)
-        if: steps.find-project.outputs.found != 'true'
+        if: steps.find-project.outcome == 'success' && fromJson(steps.find-project.outputs.result).found != true
         run: |
           echo "⏭️ Skipping - GitHub Project 'Chat Template Project' not found"
 
       - name: Skip (Status field not found)
-        if: steps.status-field.outputs.found != 'true'
+        if: steps.status-field.outcome == 'success' && fromJson(steps.status-field.outputs.result).found != true
         run: |
           echo "⏭️ Skipping - Status field or 'In Review' option not found in project"
