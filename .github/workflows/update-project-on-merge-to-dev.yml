@@ -1,5 +1,10 @@
 # On merge to development: find linked issues and update their Status to "In Review" in GitHub Project.
 # This workflow runs when PRs are merged to the development branch.
+#
+# IMPORTANT: Requires a PAT with "project" scope stored as the PROJECT_TOKEN repository secret.
+# The default GITHUB_TOKEN cannot access GitHub Projects V2.
+# Create one at: https://github.com/settings/tokens (classic, with "project" scope)
+# Then add it at: repo Settings > Secrets and variables > Actions > New repository secret
 name: Update Project Status on Merge to Development
 
 on:
@@ -83,11 +88,27 @@ jobs:
               has_linked_issues: issueList.length > 0
             };
 
+      - name: Check PROJECT_TOKEN secret
+        id: check-token
+        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).has_linked_issues == true
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "❌ PROJECT_TOKEN secret is not set. The default GITHUB_TOKEN cannot access Projects V2."
+            echo "Create a PAT with 'project' scope at https://github.com/settings/tokens"
+            echo "Then add it as PROJECT_TOKEN at repo Settings > Secrets > Actions"
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+
       - name: Find GitHub Project
         id: find-project
-        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).has_linked_issues == true
+        if: steps.check-token.outputs.has_token == 'true'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const PROJECT_NAME = "Chat Template Project";
             const owner = context.repo.owner;
@@ -140,6 +161,7 @@ jobs:
         if: steps.find-project.outcome == 'success' && fromJson(steps.find-project.outputs.result).found == true
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
             
@@ -198,6 +220,7 @@ jobs:
         if: steps.status-field.outcome == 'success' && fromJson(steps.status-field.outputs.result).found == true
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
             const linkedIssues = ${{ toJSON(fromJson(steps.pr-info.outputs.result).linked_issues) }};
@@ -259,6 +282,7 @@ jobs:
         if: steps.status-field.outcome == 'success' && fromJson(steps.status-field.outputs.result).found == true
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const projectId = '${{ fromJson(steps.find-project.outputs.result).project_id }}';
             const fieldId = '${{ fromJson(steps.status-field.outputs.result).field_id }}';
