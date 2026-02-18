@@ -74,16 +74,18 @@ jobs:
               console.log('Linked issues found:', Array.from(linkedIssues));
             }
             
+            const issueList = Array.from(linkedIssues);
             return {
               found: true,
               pr_number: pr.number,
               pr_title: pr.title,
-              linked_issues: Array.from(linkedIssues)
+              linked_issues: issueList,
+              has_linked_issues: issueList.length > 0
             };
 
       - name: Find GitHub Project
         id: find-project
-        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).linked_issues.length > 0
+        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).has_linked_issues == true
         uses: actions/github-script@v7
         with:
           script: |
@@ -353,7 +355,7 @@ jobs:
           echo "⏭️ Skipping - no PR merged to development found in recent commits"
 
       - name: Skip (no linked issues)
-        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).linked_issues.length == 0
+        if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).has_linked_issues != true
         run: |
           echo "⏭️ Skipping - PR #${{ fromJson(steps.pr-info.outputs.result).pr_number }} has no linked issues (no 'closes/Closes #123' found)"
 
