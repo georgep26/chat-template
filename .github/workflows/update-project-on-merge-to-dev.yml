@@ -50,8 +50,8 @@ jobs:
               pull_number: mergedPR.number
             });
             
-            // Extract linked issues from PR body (Closes #123, Fixes #456, etc.)
-            const issuePattern = /(?:closes?|fixes?|resolves?)\s+#(\d+)/gi;
+            // Extract linked issues from PR body (closes/Closes #123, fixes/Fixes #456, etc.)
+            const issuePattern = /(?:[cC]loses?|[fF]ixes?|[rR]esolves?)\s+#(\d+)/g;
             const linkedIssues = new Set();
             
             if (pr.body) {
@@ -342,7 +342,7 @@ jobs:
       - name: Skip (no linked issues)
         if: fromJson(steps.pr-info.outputs.result).found == true && fromJson(steps.pr-info.outputs.result).linked_issues.length == 0
         run: |
-          echo "⏭️ Skipping - PR #${{ fromJson(steps.pr-info.outputs.result).pr_number }} has no linked issues (no 'Closes #123' found)"
+          echo "⏭️ Skipping - PR #${{ fromJson(steps.pr-info.outputs.result).pr_number }} has no linked issues (no 'closes/Closes #123' found)"
 
       - name: Skip (project not found)
         if: steps.find-project.outcome == 'success' && fromJson(steps.find-project.outputs.result).found != true

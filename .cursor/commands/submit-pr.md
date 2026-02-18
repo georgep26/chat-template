@@ -50,7 +50,7 @@ Review the commit messages and file changes to determine:
   - Check file paths: `.md` files → Documentation, `test_` → Testing, etc.
 - **Summary**: Generate a concise summary (1-2 sentences) based on commit messages
 - **Changes Made**: List specific changes based on commits and file changes
-- **Related Issues**: Extract issue numbers from commit messages (e.g., `#123`, `Closes #456`, `Fixes #789`)
+- **Related Issues**: Extract issue numbers from commit messages (e.g., `#123`, `closes/Closes #456`, `fixes/Fixes #789`)
 - **Release Information**: Determine if this is a release PR (target is `main` and source is `development`)
 
 ### 5. Prompt for Release Tag (if applicable)
