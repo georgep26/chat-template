@@ -51,15 +51,26 @@ Review the commit messages and file changes to determine:
 - **Summary**: Generate a concise summary (1-2 sentences) based on commit messages
 - **Changes Made**: List specific changes based on commits and file changes
 - **Related Issues**: Extract issue numbers from commit messages (e.g., `#123`, `Closes #456`, `Fixes #789`)
-- **Release Information**: If target is `main` and source is `development`, mark as release PR
+- **Release Information**: Determine if this is a release PR (target is `main` and source is `development`)
 
-### 5. Fill Out PR Template
+### 5. Prompt for Release Tag (if applicable)
+**CRITICAL**: If this is a release PR (`development → main`):
+- **Prompt the user** for the release tag before proceeding
+- Ask: "This appears to be a release PR (development → main). What release tag should be used? (e.g., v1.0.0, v1.2.3)"
+- **DO NOT** guess or infer the release tag from commits or version numbers
+- **DO NOT** leave a placeholder like `v1.0.0` - either get it from the user or leave it empty
+- Wait for user confirmation before proceeding to template filling
+- If the user doesn't provide a tag, leave the Release Tag field empty in the template
+
+### 6. Fill Out PR Template
 Read `.github/pull_request_template.md` and fill it out intelligently:
 
 - **Summary**: Brief description based on commit analysis
 - **Release Information**: 
-  - Check if this is `development → main` (mark as release PR)
-  - Leave Release Tag and Milestone empty (user can fill)
+  - If this is `development → main`, mark the checkbox as checked
+  - **Release Tag**: Use the tag provided by the user in step 5, or leave empty if not provided
+  - **Milestone**: Leave empty (user can fill if needed)
+  - **NEVER** guess or infer release tags - always ask the user or leave empty
 - **Type of Change**: Check the appropriate box based on analysis
 - **Related Issues**: List any issue numbers found in commits
 - **Changes Made**: Bullet points of key changes from commits
@@ -75,7 +86,7 @@ Read `.github/pull_request_template.md` and fill it out intelligently:
 - **Screenshots/Examples**: Leave empty
 - **Additional Notes**: Add any relevant context from commit messages
 
-### 6. Generate PR Title
+### 7. Generate PR Title
 Create a concise PR title based on:
 - Primary commit message (first non-merge commit)
 - Type of change
@@ -87,7 +98,7 @@ Examples:
 - "Docs: Update API documentation"
 - "Task: Refactor configuration management"
 
-### 7. Create the Pull Request
+### 8. Create the Pull Request
 Use GitHub CLI to create the PR:
 
 ```bash
@@ -103,7 +114,7 @@ gh pr create \
 - Create a temporary file with the filled template content
 - Clean up the temporary file after PR creation
 
-### 8. Report Results
+### 9. Report Results
 - Show the PR URL returned by `gh pr create`
 - Summarize what was included in the PR (type, changes, issues)
 - Remind user to review and adjust the PR description if needed
@@ -124,9 +135,10 @@ gh pr create \
 1. Current branch: `feature/new-feature`
 2. Target branch: `main`
 3. Analyze commits
-4. Mark as release PR (if coming from development)
-5. Fill template
-6. Create PR
+4. Detect if this is `development → main` (release PR)
+5. **Prompt user for release tag** if it's a release PR
+6. Fill template with provided release tag (or leave empty)
+7. Create PR
 
 ## Error Handling
 
@@ -142,6 +154,7 @@ gh pr create \
 - **Concise summaries**: Keep PR summary to 1-2 sentences
 - **Specific changes**: List actual changes, not generic descriptions
 - **Issue linking**: Always link related issues when found in commits
+- **Release tags**: **NEVER** guess release tags - always prompt the user or leave empty
 - **User review**: Always remind user to review the PR description before submitting
 
 ## When to Use This Command
