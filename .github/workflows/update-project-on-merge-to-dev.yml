@@ -94,56 +94,42 @@ jobs:
             
             let projectId = null;
             
-            // Try user projects first (repo owner may be a user, e.g. georgep26, not an org)
-            const userProjectQuery = `
-              query($owner: String!, $projectName: String!) {
-                user(login: $owner) {
-                  projectsV2(first: 20, query: $projectName) {
+            // Fetch projects without search filter (query param can exclude exact title); match by title in code
+            const projectsQuery = (type) => `
+              query($owner: String!) {
+                ${type}(login: $owner) {
+                  projectsV2(first: 50) {
                     nodes { id title }
                   }
                 }
               }
             `;
+            
+            // Try user first (repo owner may be a user, e.g. georgep26)
             try {
-              const userResult = await github.graphql(userProjectQuery, {
-                owner,
-                projectName: PROJECT_NAME
-              });
-              if (userResult?.user?.projectsV2?.nodes) {
-                const project = userResult.user.projectsV2.nodes.find(p => p.title === PROJECT_NAME);
-                if (project?.id?.startsWith('PVT_')) projectId = project.id;
-              }
+              const userResult = await github.graphql(projectsQuery('user'), { owner });
+              const nodes = userResult?.user?.projectsV2?.nodes || [];
+              console.log(`User projects returned: ${nodes.length} (titles: ${nodes.map(p => p.title).join(', ') || 'none'})`);
+              const project = nodes.find(p => p && p.title === PROJECT_NAME && p.id?.startsWith('PVT_'));
+              if (project) projectId = project.id;
             } catch (e) {
               console.log('User projects query failed (owner may be an org):', e.message);
             }
             
-            // Fallback: try organization projects (repo owner may be an org)
             if (!projectId) {
-              const orgProjectQuery = `
-                query($org: String!, $projectName: String!) {
-                  organization(login: $org) {
-                    projectsV2(first: 20, query: $projectName) {
-                      nodes { id title }
-                    }
-                  }
-                }
-              `;
               try {
-                const orgResult = await github.graphql(orgProjectQuery, {
-                  org: owner,
-                  projectName: PROJECT_NAME
-                });
-                if (orgResult?.organization?.projectsV2?.nodes) {
-                  const project = orgResult.organization.projectsV2.nodes.find(p => p.title === PROJECT_NAME);
-                  if (project?.id?.startsWith('PVT_')) projectId = project.id;
-                }
+                const orgResult = await github.graphql(projectsQuery('organization'), { owner });
+                const nodes = orgResult?.organization?.projectsV2?.nodes || [];
+                console.log(`Organization projects returned: ${nodes.length} (titles: ${nodes.map(p => p.title).join(', ') || 'none'})`);
+                const project = nodes.find(p => p && p.title === PROJECT_NAME && p.id?.startsWith('PVT_'));
+                if (project) projectId = project.id;
               } catch (e) {
                 console.log('Organization projects query failed (owner may be a user):', e.message);
               }
             }
             
             if (!projectId) {
-              console.log(`Project "${PROJECT_NAME}" not found (tried user and organization for ${owner})`);
+              console.log(`Project "${PROJECT_NAME}" not found (tried user and organization for ${owner}). Ensure the project exists and the repo has access.`);
               return { found: false };
             }
             console.log(`Found project: ${PROJECT_NAME} (${projectId})`);
