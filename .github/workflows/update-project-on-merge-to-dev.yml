@@ -90,72 +90,62 @@ jobs:
         with:
           script: |
             const PROJECT_NAME = "Chat Template Project";
-            const org = context.repo.owner;
+            const owner = context.repo.owner;
             
-            // Try to find Project V2 first (organization projects)
-            const projectV2Query = `
-              query($org: String!, $projectName: String!) {
-                organization(login: $org) {
+            let projectId = null;
+            
+            // Try user projects first (repo owner may be a user, e.g. georgep26, not an org)
+            const userProjectQuery = `
+              query($owner: String!, $projectName: String!) {
+                user(login: $owner) {
                   projectsV2(first: 20, query: $projectName) {
-                    nodes { 
-                      id 
-                      title 
-                    }
+                    nodes { id title }
                   }
                 }
               }
             `;
-            
-            const projectV2Result = await github.graphql(projectV2Query, {
-              org: org,
-              projectName: PROJECT_NAME
-            });
-            
-            let projectId = null;
-            if (projectV2Result?.organization?.projectsV2?.nodes) {
-              const project = projectV2Result.organization.projectsV2.nodes.find(
-                p => p.title === PROJECT_NAME
-              );
-              if (project && project.id.startsWith('PVT_')) {
-                projectId = project.id;
+            try {
+              const userResult = await github.graphql(userProjectQuery, {
+                owner,
+                projectName: PROJECT_NAME
+              });
+              if (userResult?.user?.projectsV2?.nodes) {
+                const project = userResult.user.projectsV2.nodes.find(p => p.title === PROJECT_NAME);
+                if (project?.id?.startsWith('PVT_')) projectId = project.id;
               }
+            } catch (e) {
+              console.log('User projects query failed (owner may be an org):', e.message);
             }
             
-            // Fallback: try user projects
+            // Fallback: try organization projects (repo owner may be an org)
             if (!projectId) {
-              const userProjectQuery = `
-                query($owner: String!, $projectName: String!) {
-                  user(login: $owner) {
+              const orgProjectQuery = `
+                query($org: String!, $projectName: String!) {
+                  organization(login: $org) {
                     projectsV2(first: 20, query: $projectName) {
-                      nodes { 
-                        id 
-                        title 
-                      }
+                      nodes { id title }
                     }
                   }
                 }
               `;
-              
-              const userProjectResult = await github.graphql(userProjectQuery, {
-                owner: org,
-                projectName: PROJECT_NAME
-              });
-              
-              if (userProjectResult?.user?.projectsV2?.nodes) {
-                const project = userProjectResult.user.projectsV2.nodes.find(
-                  p => p.title === PROJECT_NAME
-                );
-                if (project && project.id.startsWith('PVT_')) {
-                  projectId = project.id;
+              try {
+                const orgResult = await github.graphql(orgProjectQuery, {
+                  org: owner,
+                  projectName: PROJECT_NAME
+                });
+                if (orgResult?.organization?.projectsV2?.nodes) {
+                  const project = orgResult.organization.projectsV2.nodes.find(p => p.title === PROJECT_NAME);
+                  if (project?.id?.startsWith('PVT_')) projectId = project.id;
                 }
+              } catch (e) {
+                console.log('Organization projects query failed (owner may be a user):', e.message);
               }
             }
             
             if (!projectId) {
-              console.log(`Project "${PROJECT_NAME}" not found`);
+              console.log(`Project "${PROJECT_NAME}" not found (tried user and organization for ${owner})`);
               return { found: false };
             }
-            
             console.log(`Found project: ${PROJECT_NAME} (${projectId})`);
             return { found: true, project_id: projectId };
 
