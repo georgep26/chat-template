@@ -78,6 +78,10 @@ show_usage() {
     echo "  --s3_app_config_uri <uri>          - S3 URI for app config (default from infra.yaml)"
     echo "  --local_app_config_path <path>     - Local app config to upload to S3 (optional)"
     echo "  --image-tag <tag>                  - Docker image tag (default: latest)"
+    echo "  --lambda-image-uri <uri>           - Use a prebuilt Lambda image URI (skip build/push)"
+    echo "  --promote-lambda-from-env <env>    - Promote image from source env into target ECR"
+    echo "  --promotion-source-role-arn <arn>  - Role ARN for source env image reads (CI/local)"
+    echo "  --promotion-source-image-uri <uri> - Explicit source image URI for promotion"
     echo "  --skip-build                       - Skip Docker build and push (use existing image)"
     echo "  --db-secret-arn <arn>              - DB secret ARN (auto-detected if not provided)"
     echo "  --knowledge-base-id <kb-id>        - Knowledge Base ID (auto-detected if not provided)"
@@ -109,6 +113,11 @@ ACTION="deploy"
 AUTO_CONFIRM=false
 IMAGE_TAG="latest"
 SKIP_BUILD=false
+LAMBDA_IMAGE_URI=""
+PROMOTE_LAMBDA_FROM_ENV=""
+PROMOTION_SOURCE_ROLE_ARN=""
+PROMOTION_SOURCE_IMAGE_URI=""
+PROMOTED_IMAGE_URI=""
 APP_CONFIG_S3_URI=""
 LOCAL_APP_CONFIG_PATH=""
 DB_SECRET_ARN=""
@@ -135,6 +144,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --image-tag)
             IMAGE_TAG="$2"
+            shift 2
+            ;;
+        --lambda-image-uri)
+            LAMBDA_IMAGE_URI="$2"
+            shift 2
+            ;;
+        --promote-lambda-from-env)
+            PROMOTE_LAMBDA_FROM_ENV="$2"
+            shift 2
+            ;;
+        --promotion-source-role-arn)
+            PROMOTION_SOURCE_ROLE_ARN="$2"
+            shift 2
+            ;;
+        --promotion-source-image-uri)
+            PROMOTION_SOURCE_IMAGE_URI="$2"
             shift 2
             ;;
         --skip-build)
@@ -258,8 +283,11 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
     print_info "App config S3 URI: $APP_CONFIG_S3_URI"
 fi
 
-# Require Docker early for build or deploy/update (when not skipping build), so we never hang after user confirmation
-if [[ "$ACTION" == "build" ]] || { [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]] && [ "$SKIP_BUILD" = false ]; }; then
+# Require Docker early for build or deploy/update when:
+# - explicit build action
+# - deploy/update using normal build path
+# - deploy/update using cross-account promotion path (pull/tag/push)
+if [[ "$ACTION" == "build" ]] || { [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]] && [ "$SKIP_BUILD" = false ] && [ -z "$LAMBDA_IMAGE_URI" ]; }; then
     if ! docker info >/dev/null 2>&1; then
         echo ""
         print_warning "Docker does not appear to be running."
@@ -282,6 +310,20 @@ aws_cmd() {
         aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
     else
         aws --region "$AWS_REGION" "$@"
+    fi
+}
+
+aws_source_cmd() {
+    if [ -n "$SOURCE_AWS_ACCESS_KEY_ID" ]; then
+        AWS_ACCESS_KEY_ID="$SOURCE_AWS_ACCESS_KEY_ID" \
+        AWS_SECRET_ACCESS_KEY="$SOURCE_AWS_SECRET_ACCESS_KEY" \
+        AWS_SESSION_TOKEN="$SOURCE_AWS_SESSION_TOKEN" \
+        aws --region "$AWS_REGION" "$@"
+    elif [ -n "$SOURCE_AWS_PROFILE" ]; then
+        aws --profile "$SOURCE_AWS_PROFILE" --region "$AWS_REGION" "$@"
+    else
+        print_error "Source AWS credentials are not configured for promotion."
+        return 1
     fi
 }
 
@@ -642,6 +684,193 @@ ensure_ecr_repo() {
     apply_ecr_lifecycle_policy "$repo_name" "$ECR_MAX_IMAGE_COUNT"
 }
 
+ensure_lambda_pull_policy() {
+    local repo_name=$1
+    local policy_file
+    policy_file=$(mktemp)
+    trap "rm -f $policy_file" RETURN
+    cat > "$policy_file" << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LambdaECRImageRetrievalPolicy",
+      "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": [ "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer" ]
+    }
+  ]
+}
+EOF
+    aws_cmd ecr set-repository-policy \
+        --repository-name "$repo_name" \
+        --policy-text "file://$policy_file" >/dev/null
+}
+
+setup_promotion_source_auth() {
+    SOURCE_AWS_PROFILE=""
+    SOURCE_AWS_ACCESS_KEY_ID=""
+    SOURCE_AWS_SECRET_ACCESS_KEY=""
+    SOURCE_AWS_SESSION_TOKEN=""
+
+    if [ -z "$PROMOTE_LAMBDA_FROM_ENV" ]; then
+        return 0
+    fi
+
+    validate_environment "$PROMOTE_LAMBDA_FROM_ENV" || return 1
+
+    if [ -n "$PROMOTION_SOURCE_ROLE_ARN" ]; then
+        print_info "Assuming promotion source role: $PROMOTION_SOURCE_ROLE_ARN"
+        local assumed_creds
+        assumed_creds=$(aws_cmd sts assume-role \
+            --role-arn "$PROMOTION_SOURCE_ROLE_ARN" \
+            --role-session-name "lambda-promotion-${ENVIRONMENT}" \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+            --output text 2>/dev/null)
+        SOURCE_AWS_ACCESS_KEY_ID=$(echo "$assumed_creds" | awk '{print $1}')
+        SOURCE_AWS_SECRET_ACCESS_KEY=$(echo "$assumed_creds" | awk '{print $2}')
+        SOURCE_AWS_SESSION_TOKEN=$(echo "$assumed_creds" | awk '{print $3}')
+        if [ -z "$SOURCE_AWS_ACCESS_KEY_ID" ] || [ "$SOURCE_AWS_ACCESS_KEY_ID" = "None" ]; then
+            print_error "Failed to assume promotion source role: $PROMOTION_SOURCE_ROLE_ARN"
+            return 1
+        fi
+        return 0
+    fi
+
+    SOURCE_AWS_PROFILE=$(get_environment_profile "$PROMOTE_LAMBDA_FROM_ENV")
+    [ "$SOURCE_AWS_PROFILE" = "null" ] && SOURCE_AWS_PROFILE=""
+    if [ -n "$SOURCE_AWS_PROFILE" ]; then
+        print_info "Using source deployer profile for promotion: $SOURCE_AWS_PROFILE"
+        return 0
+    fi
+
+    print_error "Promotion source auth is required."
+    print_error "Provide --promotion-source-role-arn or configure deployer_profile for $PROMOTE_LAMBDA_FROM_ENV."
+    return 1
+}
+
+promote_image_from_environment() {
+    local source_image_uri="$PROMOTION_SOURCE_IMAGE_URI"
+    local source_stack_name
+    local source_repo_name
+    local source_registry
+    local source_digest
+    local target_account_id
+    local target_registry
+    local target_repo_uri
+    local promotion_tag
+    local promoted_tag_uri
+    local promoted_digest
+    local cmd_output
+
+    print_step "Resolving source image for promotion"
+    if [ -z "$source_image_uri" ]; then
+        if ! source_stack_name=$(get_resource_stack_name "$RESOURCE_NAME" "$PROMOTE_LAMBDA_FROM_ENV"); then
+            print_error "Failed to resolve source stack name for resource '$RESOURCE_NAME' in env '$PROMOTE_LAMBDA_FROM_ENV'"
+            print_error "Check infra.yaml resources.${RESOURCE_NAME}.stack_name and environment config."
+            return 1
+        fi
+        print_info "Promotion source stack: $source_stack_name"
+        print_step "Reading LambdaImageUri from source stack"
+        if ! cmd_output=$(aws_source_cmd cloudformation describe-stacks \
+            --stack-name "$source_stack_name" \
+            --query 'Stacks[0].Parameters[?ParameterKey==`LambdaImageUri`].ParameterValue | [0]' \
+            --output text 2>&1); then
+            print_error "Failed to resolve source Lambda image from stack: $source_stack_name"
+            echo "$cmd_output" | sed 's/^/  /'
+            return 1
+        fi
+        source_image_uri="$cmd_output"
+    fi
+    if [ -z "$source_image_uri" ] || [ "$source_image_uri" = "None" ]; then
+        print_error "Could not determine source image URI for promotion"
+        return 1
+    fi
+    print_info "Promotion source image URI: $source_image_uri"
+
+    source_repo_name="${source_image_uri##*/}"
+    source_repo_name="${source_repo_name%%[@:]*}"
+    print_info "Promotion source repository: $source_repo_name"
+
+    if [[ "$source_image_uri" == *"@"* ]]; then
+        source_digest="${source_image_uri##*@}"
+    else
+        local source_tag="${source_image_uri##*:}"
+        print_step "Resolving source image digest for tag '$source_tag'"
+        if ! cmd_output=$(aws_source_cmd ecr describe-images \
+            --repository-name "$source_repo_name" \
+            --image-ids imageTag="$source_tag" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>&1); then
+            print_error "Failed to resolve source image digest for tag '$source_tag' in repo: $source_repo_name"
+            echo "$cmd_output" | sed 's/^/  /'
+            return 1
+        fi
+        source_digest="$cmd_output"
+    fi
+
+    if [ -z "$source_digest" ] || [ "$source_digest" = "None" ]; then
+        print_error "Failed to resolve source image digest from: $source_image_uri"
+        return 1
+    fi
+
+    print_step "Ensuring target ECR repository and Lambda pull policy"
+    ensure_ecr_repo "$ECR_REPO_NAME"
+    ensure_lambda_pull_policy "$ECR_REPO_NAME"
+
+    promotion_tag="promoted-${PROMOTE_LAMBDA_FROM_ENV}-$(date +%Y%m%d%H%M%S)"
+    source_registry="${source_image_uri%%/*}"
+    target_account_id=$(aws_cmd sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+    target_registry="${target_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    target_repo_uri="${target_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+    promoted_tag_uri="${target_repo_uri}:${promotion_tag}"
+
+    print_step "Logging into source and target ECR registries"
+    if ! aws_source_cmd ecr get-login-password | docker login --username AWS --password-stdin "$source_registry" >/dev/null 2>&1; then
+        print_error "Failed source ECR login for registry: $source_registry"
+        return 1
+    fi
+    if ! aws_cmd ecr get-login-password | docker login --username AWS --password-stdin "$target_registry" >/dev/null 2>&1; then
+        print_error "Failed target ECR login for registry: $target_registry"
+        return 1
+    fi
+
+    print_step "Pulling source image and pushing to target ECR"
+    if ! docker pull "$source_image_uri" >/dev/null; then
+        print_error "Failed to pull source image: $source_image_uri"
+        return 1
+    fi
+    if ! docker tag "$source_image_uri" "$promoted_tag_uri"; then
+        print_error "Failed to tag promoted image: $promoted_tag_uri"
+        return 1
+    fi
+    if ! docker push "$promoted_tag_uri" >/dev/null; then
+        print_error "Failed to push promoted image: $promoted_tag_uri"
+        return 1
+    fi
+
+    print_step "Resolving promoted image digest in target ECR"
+    if ! cmd_output=$(aws_cmd ecr describe-images \
+        --repository-name "$ECR_REPO_NAME" \
+        --image-ids imageTag="$promotion_tag" \
+        --query 'imageDetails[0].imageDigest' \
+        --output text 2>&1); then
+        print_error "Failed to resolve promoted image digest for tag '$promotion_tag'"
+        echo "$cmd_output" | sed 's/^/  /'
+        return 1
+    fi
+    promoted_digest="$cmd_output"
+    if [ -z "$promoted_digest" ] || [ "$promoted_digest" = "None" ]; then
+        print_error "Promoted image digest was empty for tag '$promotion_tag'"
+        return 1
+    fi
+
+    PROMOTED_IMAGE_URI="${target_repo_uri}@${promoted_digest}"
+    print_info "Promotion digest: $source_digest"
+    print_info "Promoted image URI: $PROMOTED_IMAGE_URI"
+    return 0
+}
+
 # =============================================================================
 # Docker Build and Push
 # =============================================================================
@@ -717,6 +946,8 @@ deploy_stack() {
     print_info "Timeout: ${LAMBDA_TIMEOUT}s"
     print_info "ECR Repo: $ECR_REPO_NAME"
     print_info "Image Tag: $IMAGE_TAG"
+    [ -n "$LAMBDA_IMAGE_URI" ] && print_info "Lambda Image URI Override: $LAMBDA_IMAGE_URI"
+    [ -n "$PROMOTE_LAMBDA_FROM_ENV" ] && print_info "Promote Lambda From Env: $PROMOTE_LAMBDA_FROM_ENV"
     [ -n "$VPC_ID" ] && print_info "VPC: $VPC_ID"
 
     # Confirm deployment
@@ -728,7 +959,45 @@ deploy_stack() {
 
     # Get or build image URI
     local image_uri=""
-    if [ "$SKIP_BUILD" = true ]; then
+    if [ -n "$LAMBDA_IMAGE_URI" ]; then
+        image_uri="$LAMBDA_IMAGE_URI"
+        if [[ "$image_uri" != *".amazonaws.com/"* ]] || [[ "$image_uri" != *":"* && "$image_uri" != *"@"* ]]; then
+            print_error "Invalid --lambda-image-uri format: $image_uri"
+            print_error "Expected ECR URI like <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> or @sha256:<digest>"
+            exit 1
+        fi
+
+        # Guardrail: direct cross-account image URIs cause Lambda ECR 403 failures.
+        # Promotion flow should copy image into this environment's ECR first.
+        local current_account_id
+        current_account_id=$(aws_cmd sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+        local uri_account_id=""
+        local uri_region=""
+        if [[ "$image_uri" =~ ^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com/ ]]; then
+            uri_account_id="${BASH_REMATCH[1]}"
+            uri_region="${BASH_REMATCH[2]}"
+        else
+            print_error "Could not parse account/region from --lambda-image-uri: $image_uri"
+            exit 1
+        fi
+        if [ -n "$current_account_id" ] && [ "$uri_account_id" != "$current_account_id" ]; then
+            print_error "Cross-account --lambda-image-uri is not supported for direct Lambda deploy."
+            print_error "Image account ($uri_account_id) does not match current deploy account ($current_account_id)."
+            print_error "Promote/copy the image into this environment's ECR first, then pass that URI."
+            exit 1
+        fi
+        if [ "$uri_region" != "$AWS_REGION" ]; then
+            print_error "Image region ($uri_region) does not match deploy region ($AWS_REGION)."
+            print_error "Use an image in the same region as the Lambda function."
+            exit 1
+        fi
+        print_info "Using explicit Lambda image URI (promotion path): $image_uri"
+    elif [ -n "$PROMOTE_LAMBDA_FROM_ENV" ]; then
+        setup_promotion_source_auth || exit 1
+        promote_image_from_environment || exit 1
+        image_uri="$PROMOTED_IMAGE_URI"
+        print_info "Promoted source image to target ECR: $image_uri"
+    elif [ "$SKIP_BUILD" = true ]; then
         if aws_cmd cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
             image_uri=$(aws_cmd cloudformation describe-stacks \
                 --stack-name "$STACK_NAME" \
@@ -987,7 +1256,7 @@ EOF
         print_info "Lambda Function Name: $lambda_name"
 
         # Update Lambda to use the latest image (ensures function picks up new image even if tag unchanged)
-        if [ "$SKIP_BUILD" = false ]; then
+        if [ "$SKIP_BUILD" = false ] || [ -n "$LAMBDA_IMAGE_URI" ]; then
             # Wait for Lambda to be ready after stack create/update (avoids ResourceConflictException)
             print_info "Waiting for Lambda to be ready after stack update..."
             local ready_max_wait=120
