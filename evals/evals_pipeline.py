@@ -269,6 +269,7 @@ def main(
     output_type: Optional[str],
     notes: Optional[str] = None,
     environment: Optional[str] = None,
+    run_name: Optional[str] = None,
 ):
     config = read_config(eval_config)
     
@@ -288,6 +289,10 @@ def main(
     if environment:
         config.setdefault("rag_app", {})
         config["rag_app"]["lambda_function_name"] = f"chat-template-{environment}-rag-chat"
+
+    # Override evaluation run name when --run-name is set (e.g. datetime for CI upload to main)
+    if run_name:
+        config["run"]["evaluation_run_name"] = run_name
 
     asyncio.run(run_evaluation(config=config, notes=notes))
 
@@ -320,6 +325,12 @@ if __name__ == "__main__":
         choices=["dev", "staging", "prod"],
         help="Environment (dev, staging, prod). When set, overrides rag_app.lambda_function_name to chat-template-<env>-rag-chat."
     )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Override evaluation_run_name from config (e.g. datetime for CI: 2025-02-20T14-30-00Z). Outputs go to evals/eval_outputs/<run-name>/."
+    )
     args = parser.parse_args()
-    main(args.config, args.output_type, args.notes, args.environment)
+    main(args.config, args.output_type, args.notes, args.environment, args.run_name)
 
