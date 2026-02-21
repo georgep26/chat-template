@@ -32,7 +32,7 @@ on:
       upload_to_main:
         description: 'Push eval results to evals/eval_outputs/<datetime> on main'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 jobs:
@@ -41,8 +41,8 @@ jobs:
     environment: ${{ inputs.environment || github.event.inputs.environment || 'staging' }}
     permissions:
       id-token: write
-      # write includes read; needed for "Push eval results to main" when upload_to_main is true
-      contents: write
+      # contents: read is enough for checkout/run; callers that need push-to-main must pass contents: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -85,7 +85,7 @@ jobs:
           fi
 
       - name: Generate run name for upload to main
-        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || github.event.inputs.upload_to_main == 'true')
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
         id: generate-run-name
         run: echo "run_name=$(date -u +%Y-%m-%dT%H-%M-%SZ)" >> $GITHUB_OUTPUT
 
@@ -142,7 +142,7 @@ jobs:
           retention-days: 7
 
       - name: Push eval results to main
-        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || github.event.inputs.upload_to_main == 'true')
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
         run: |
           RUN_NAME="${{ steps.generate-run-name.outputs.run_name }}"
           git fetch origin main
