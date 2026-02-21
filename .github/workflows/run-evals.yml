@@ -41,8 +41,7 @@ jobs:
     environment: ${{ inputs.environment || github.event.inputs.environment || 'staging' }}
     permissions:
       id-token: write
-      contents: read
-      # contents: write is used only by "Push eval results to main" when upload_to_main is true
+      # write includes read; needed for "Push eval results to main" when upload_to_main is true
       contents: write
 
     steps:
