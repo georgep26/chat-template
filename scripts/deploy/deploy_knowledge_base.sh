@@ -195,11 +195,11 @@ validate_config "$ENVIRONMENT" || exit 1
 PROJECT_NAME=$(get_project_name)
 AWS_REGION=$(get_environment_region "$ENVIRONMENT")
 [ -n "${AWS_REGION_OVERRIDE:-}" ] && AWS_REGION="$AWS_REGION_OVERRIDE"
-AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
-[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
-# In GitHub Actions, credentials come from OIDC (env vars); do not use profile so aws uses them
-if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$GITHUB_ACTIONS" = "true" ]; then
-    AWS_PROFILE=""
+# Use deployer profile for local runs. In CI, the deployer role is assumed via OIDC (AWS_SESSION_TOKEN set).
+if [ -z "$AWS_PROFILE" ] && [ -z "$AWS_SESSION_TOKEN" ]; then
+    AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+    [ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+    [ -n "$AWS_PROFILE" ] && print_info "Using deployer profile: $AWS_PROFILE"
 fi
 
 # Get stack name and template from infra
