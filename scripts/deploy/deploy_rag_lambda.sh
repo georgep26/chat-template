@@ -720,7 +720,7 @@ setup_promotion_source_auth() {
     validate_environment "$PROMOTE_LAMBDA_FROM_ENV" || return 1
 
     if [ -n "$PROMOTION_SOURCE_ROLE_ARN" ]; then
-        print_info "Assuming promotion source role: $PROMOTION_SOURCE_ROLE_ARN"
+        print_info "Assuming promotion source role (ARN set)."
         local assumed_creds
         assumed_creds=$(aws_cmd sts assume-role \
             --role-arn "$PROMOTION_SOURCE_ROLE_ARN" \
@@ -731,7 +731,7 @@ setup_promotion_source_auth() {
         SOURCE_AWS_SECRET_ACCESS_KEY=$(echo "$assumed_creds" | awk '{print $2}')
         SOURCE_AWS_SESSION_TOKEN=$(echo "$assumed_creds" | awk '{print $3}')
         if [ -z "$SOURCE_AWS_ACCESS_KEY_ID" ] || [ "$SOURCE_AWS_ACCESS_KEY_ID" = "None" ]; then
-            print_error "Failed to assume promotion source role: $PROMOTION_SOURCE_ROLE_ARN"
+            print_error "Failed to assume promotion source role (check ARN)."
             return 1
         fi
         return 0
@@ -758,9 +758,7 @@ promote_image_from_environment() {
     local target_account_id
     local target_registry
     local target_repo_uri
-    local promotion_tag
     local promoted_tag_uri
-    local promoted_digest
     local cmd_output
 
     print_step "Resolving source image for promotion"
@@ -818,12 +816,11 @@ promote_image_from_environment() {
     ensure_ecr_repo "$ECR_REPO_NAME"
     ensure_lambda_pull_policy "$ECR_REPO_NAME"
 
-    promotion_tag="promoted-${PROMOTE_LAMBDA_FROM_ENV}-$(date +%Y%m%d%H%M%S)"
     source_registry="${source_image_uri%%/*}"
     target_account_id=$(aws_cmd sts get-caller-identity --query 'Account' --output text 2>/dev/null)
     target_registry="${target_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     target_repo_uri="${target_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
-    promoted_tag_uri="${target_repo_uri}:${promotion_tag}"
+    promoted_tag_uri="${target_repo_uri}:latest"
 
     print_step "Logging into source and target ECR registries"
     if ! aws_source_cmd ecr get-login-password | docker login --username AWS --password-stdin "$source_registry" >/dev/null 2>&1; then
@@ -849,24 +846,8 @@ promote_image_from_environment() {
         return 1
     fi
 
-    print_step "Resolving promoted image digest in target ECR"
-    if ! cmd_output=$(aws_cmd ecr describe-images \
-        --repository-name "$ECR_REPO_NAME" \
-        --image-ids imageTag="$promotion_tag" \
-        --query 'imageDetails[0].imageDigest' \
-        --output text 2>&1); then
-        print_error "Failed to resolve promoted image digest for tag '$promotion_tag'"
-        echo "$cmd_output" | sed 's/^/  /'
-        return 1
-    fi
-    promoted_digest="$cmd_output"
-    if [ -z "$promoted_digest" ] || [ "$promoted_digest" = "None" ]; then
-        print_error "Promoted image digest was empty for tag '$promotion_tag'"
-        return 1
-    fi
-
-    PROMOTED_IMAGE_URI="${target_repo_uri}@${promoted_digest}"
-    print_info "Promotion digest: $source_digest"
+    PROMOTED_IMAGE_URI="${target_repo_uri}:latest"
+    print_info "Promoted image tagged as latest in target ECR"
     print_info "Promoted image URI: $PROMOTED_IMAGE_URI"
     return 0
 }
@@ -898,14 +879,29 @@ build_and_push_image() {
     # or attestation manifests; --provenance=false and --sbom=false avoid creating them
     # (e.g. on GitHub Actions where buildx is the default). --load writes the image to
     # the local daemon so we can tag and push a single manifest.
+    # Older Docker Buildx on Mac may not support --provenance/--sbom; try with them first, then without.
+    local build_succeeded=false
     if docker buildx version >/dev/null 2>&1; then
-        docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-            -f src/rag_lambda/Dockerfile -t rag-lambda:latest --load .
+        # Try with --provenance and --sbom flags first (for newer Docker Buildx)
+        if docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            -f src/rag_lambda/Dockerfile -t rag-lambda:latest --load . >&2; then
+            build_succeeded=true
+        else
+            # If that failed, retry without the flags (for older Docker Buildx)
+            print_info "Retrying without --provenance/--sbom (older Docker Buildx)" >&2
+            if docker buildx build --platform linux/amd64 \
+                -f src/rag_lambda/Dockerfile -t rag-lambda:latest --load . >&2; then
+                build_succeeded=true
+            fi
+        fi
     else
-        docker build --platform linux/amd64 -f src/rag_lambda/Dockerfile -t rag-lambda:latest .
+        # Fall back to regular docker build if buildx is not available
+        if docker build --platform linux/amd64 -f src/rag_lambda/Dockerfile -t rag-lambda:latest . >&2; then
+            build_succeeded=true
+        fi
     fi
 
-    if [ $? -ne 0 ]; then
+    if [ "$build_succeeded" != "true" ]; then
         print_error "Docker build failed" >&2
         exit 1
     fi
@@ -1074,7 +1070,7 @@ deploy_stack() {
         local secret_arn=$(get_db_secret_arn)
         if [ $? -eq 0 ] && [ -n "$secret_arn" ]; then
             DB_SECRET_ARN="$secret_arn"
-            print_info "DB Secret ARN: $DB_SECRET_ARN"
+            print_info "DB Secret ARN (set)."
         fi
     fi
     if [ -z "$DB_SECRET_ARN" ]; then
@@ -1101,7 +1097,7 @@ deploy_stack() {
         local role_arn=$(get_lambda_role_arn)
         if [ $? -eq 0 ] && [ -n "$role_arn" ]; then
             LAMBDA_ROLE_ARN="$role_arn"
-            print_info "Lambda Role ARN: $LAMBDA_ROLE_ARN"
+            print_info "Lambda Role ARN (set)."
         else
             print_error "Failed to retrieve Lambda execution role ARN after deployment."
             exit 1
@@ -1119,29 +1115,44 @@ deploy_stack() {
     fi
 
     # -------------------------------------------------------------------------
-    # Create parameters file
+    # Create parameters file (use Python so values are properly JSON-escaped)
     # -------------------------------------------------------------------------
     local param_file=$(mktemp)
     trap "rm -f $param_file" EXIT
 
-    cat > "$param_file" << EOF
-[
-  {"ParameterKey": "ProjectName", "ParameterValue": "$PROJECT_NAME"},
-  {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
-  {"ParameterKey": "AWSRegion", "ParameterValue": "$AWS_REGION"},
-  {"ParameterKey": "LambdaImageUri", "ParameterValue": "$image_uri"},
-  {"ParameterKey": "LambdaMemorySize", "ParameterValue": "$LAMBDA_MEMORY_SIZE"},
-  {"ParameterKey": "LambdaTimeout", "ParameterValue": "$LAMBDA_TIMEOUT"},
-  {"ParameterKey": "VpcId", "ParameterValue": "${VPC_ID:-}"},
-  {"ParameterKey": "SubnetIds", "ParameterValue": "${SUBNET_IDS:-}"},
-  {"ParameterKey": "SecurityGroupIds", "ParameterValue": "${SECURITY_GROUP_IDS:-}"},
-  {"ParameterKey": "DBSecretArn", "ParameterValue": "${DB_SECRET_ARN:-}"},
-  {"ParameterKey": "KnowledgeBaseId", "ParameterValue": "${KNOWLEDGE_BASE_ID:-}"},
-  {"ParameterKey": "LambdaExecutionRoleArn", "ParameterValue": "$LAMBDA_ROLE_ARN"},
-  {"ParameterKey": "AppConfigPath", "ParameterValue": "$APP_CONFIG_S3_URI"},
-  {"ParameterKey": "ConfigS3Bucket", "ParameterValue": "$config_bucket"}
+    export LAMBDA_IMAGE_URI="$image_uri"
+    export CONFIG_BUCKET="$config_bucket"
+    export PROJECT_NAME ENVIRONMENT AWS_REGION LAMBDA_MEMORY_SIZE LAMBDA_TIMEOUT
+    export VPC_ID SUBNET_IDS SECURITY_GROUP_IDS DB_SECRET_ARN KNOWLEDGE_BASE_ID
+    export LAMBDA_ROLE_ARN APP_CONFIG_S3_URI
+
+    python3 - "$param_file" << 'PYEOF'
+import json
+import os
+import sys
+
+def v(key):
+    return os.environ.get(key, "")
+
+params = [
+    {"ParameterKey": "ProjectName", "ParameterValue": v("PROJECT_NAME")},
+    {"ParameterKey": "Environment", "ParameterValue": v("ENVIRONMENT")},
+    {"ParameterKey": "AWSRegion", "ParameterValue": v("AWS_REGION")},
+    {"ParameterKey": "LambdaImageUri", "ParameterValue": v("LAMBDA_IMAGE_URI")},
+    {"ParameterKey": "LambdaMemorySize", "ParameterValue": v("LAMBDA_MEMORY_SIZE")},
+    {"ParameterKey": "LambdaTimeout", "ParameterValue": v("LAMBDA_TIMEOUT")},
+    {"ParameterKey": "VpcId", "ParameterValue": v("VPC_ID")},
+    {"ParameterKey": "SubnetIds", "ParameterValue": v("SUBNET_IDS")},
+    {"ParameterKey": "SecurityGroupIds", "ParameterValue": v("SECURITY_GROUP_IDS")},
+    {"ParameterKey": "DBSecretArn", "ParameterValue": v("DB_SECRET_ARN")},
+    {"ParameterKey": "KnowledgeBaseId", "ParameterValue": v("KNOWLEDGE_BASE_ID")},
+    {"ParameterKey": "LambdaExecutionRoleArn", "ParameterValue": v("LAMBDA_ROLE_ARN")},
+    {"ParameterKey": "AppConfigPath", "ParameterValue": v("APP_CONFIG_S3_URI")},
+    {"ParameterKey": "ConfigS3Bucket", "ParameterValue": v("CONFIG_BUCKET")},
 ]
-EOF
+with open(sys.argv[1], "w") as f:
+    json.dump(params, f, indent=2)
+PYEOF
 
     # Validate parameters file is valid JSON
     if ! python3 -m json.tool "$param_file" >/dev/null 2>&1; then
@@ -1256,7 +1267,7 @@ EOF
         print_info "Lambda Function Name: $lambda_name"
 
         # Update Lambda to use the latest image (ensures function picks up new image even if tag unchanged)
-        if [ "$SKIP_BUILD" = false ] || [ -n "$LAMBDA_IMAGE_URI" ]; then
+        if [ "$SKIP_BUILD" = false ] || [ -n "$LAMBDA_IMAGE_URI" ] || [ -n "$PROMOTE_LAMBDA_FROM_ENV" ]; then
             # Wait for Lambda to be ready after stack create/update (avoids ResourceConflictException)
             print_info "Waiting for Lambda to be ready after stack update..."
             local ready_max_wait=120
