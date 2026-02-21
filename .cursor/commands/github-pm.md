@@ -89,6 +89,27 @@ Use this when the user asks to create an issue, describes work to track, or repo
 
 - User says "github-pm", "project manager", "manage project", "check project", "sprint issues", "weekly report", "clean up issues", "break down this into issues", "add these to backlog", "discussions to issues", etc.
 - User asks to create an issue and you want a single entry point: you can still route to create and follow the create flow above.
+- User asks to create or edit a PR to **development** that should move issues to In Review on merge: follow the format in **"PRs to development: linking issues so they move to In Review"** so each linked issue uses a closing keyword (e.g. `Closes #N` per issue).
+
+## PRs to development: linking issues so they move to In Review
+
+When creating or editing a PR that targets the **development** branch, link issues in the PR body so that the workflow `.github/workflows/update-project-on-merge-to-dev.yml` can move those issues to **In Review** when the PR is merged.
+
+**Required format (workflow-compatible):**
+
+- The workflow only recognizes these patterns in the PR **body**:
+  - `Closes #123`, `Fixes #123`, `Resolves #123` (and lowercase variants like `closes`, `fixes`, `resolves`).
+  - `Related to: #123` (template-style).
+- **Each issue number must be preceded by a closing/linking keyword.** A single phrase like `Closes #11, #13, #20` is parsed as only **one** linked issue (#11). To link multiple issues, use one of:
+  - One keyword per issue on one line: `Closes #11, closes #13, closes #20`
+  - One per line:
+    - `Closes #11`
+    - `Closes #13`
+    - `Closes #20`
+  - Or: `Closes #11. Closes #13. Closes #20`
+- Linked issues must exist as **items in the GitHub Project** named **"Chat Template Project"**. If an issue is not in that project, the workflow will not update its status to In Review (and will log "Issue #N not found in project").
+
+When you are asked to create or describe a PR to development (e.g. from a feature branch or `ci_cd`), use the format above for every issue that should move to In Review on merge.
 
 ## When Not to Use
 
