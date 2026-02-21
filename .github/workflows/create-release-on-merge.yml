@@ -25,28 +25,63 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Use GitHub API to get PR(s) associated with this commit (works for merge, squash, rebase)
+            const commitSha = context.sha;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Helper: fetch full PR and return if it's development → main and matches this merge
+            async function getPrIfMatch(prNumber) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: prNumber
+              });
+              const isBaseMain = pr.base && pr.base.ref === 'main';
+              const isHeadDev = pr.head && pr.head.ref === 'development';
+              const mergeShaMatches = pr.merge_commit_sha && pr.merge_commit_sha === commitSha;
+              if (isBaseMain && isHeadDev && mergeShaMatches) return pr;
+              return null;
+            }
+
+            // 1) Try commit-associated PRs (works for merge-commit and rebase-merge; NOT for squash)
             const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha
+              owner, repo, commit_sha: commitSha
             });
-            
-            // Find the PR that targeted main with head development (the one we just merged into main)
-            const mergedPR = pulls.find(pr => pr.base && pr.base.ref === 'main' && pr.head && pr.head.ref === 'development');
-            
+            let mergedPR = pulls.find(pr => pr.base && pr.base.ref === 'main' && pr.head && pr.head.ref === 'development');
+
+            // 2) Fallback: for squash-merge, listPullRequestsAssociatedWithCommit often returns nothing.
+            //    Find PR by parsing commit message (e.g. "Title (#123)" or "Merge pull request #123")
+            if (!mergedPR) {
+              const { data: commit } = await github.rest.repos.getCommit({
+                owner, repo, ref: commitSha
+              });
+              const msg = (commit.commit && commit.commit.message) || '';
+              const firstLine = msg.split(/\r?\n/)[0] || '';
+              const mergeMatch = msg.match(/Merge pull request #(\d+)/i);
+              const squashMatch = firstLine.match(/\(#(\d+)\)\s*$/) || msg.match(/\(#(\d+)\)/);  // prefer end of first line (GitHub squash format)
+              const prNum = mergeMatch ? mergeMatch[1] : (squashMatch ? squashMatch[1] : null);
+              if (prNum) {
+                const pr = await getPrIfMatch(parseInt(prNum, 10));
+                if (pr) mergedPR = pr;
+              }
+            }
+
+            // 3) Fallback: list recently merged PRs into main and match by merge_commit_sha
+            if (!mergedPR) {
+              const { data: closedPulls } = await github.rest.pulls.list({
+                owner, repo, state: 'closed', base: 'main', sort: 'updated', direction: 'desc', per_page: 15
+              });
+              for (const p of closedPulls) {
+                if (p.head && p.head.ref !== 'development') continue;
+                const full = await getPrIfMatch(p.number);
+                if (full) { mergedPR = full; break; }
+              }
+            }
+
             if (!mergedPR) {
               console.log('No PR from development → main found for this commit');
               return { found: false };
             }
-            
-            // Get full PR for body, title, milestone
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: mergedPR.number
-            });
-            
+
+            const pr = mergedPR.number ? await github.rest.pulls.get({ owner, repo, pull_number: mergedPR.number }).then(r => r.data) : mergedPR;
             return {
               found: true,
               pr_number: pr.number,
