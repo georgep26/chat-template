@@ -45,13 +45,15 @@ jobs:
     secrets: inherit
 
   # Run evals after deploy so they run within the newly deployed prod environment.
+  # Results are written to evals/eval_outputs/<datetime> on main.
   run-evaluations:
     name: Run Evaluations
     needs: [deploy-prod]
     uses: ./.github/workflows/run-evals.yml
     with:
       environment: prod
+      upload_to_main: true
     secrets: inherit
     permissions:
       id-token: write
-      contents: read
+      contents: write
