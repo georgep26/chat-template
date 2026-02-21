@@ -289,3 +289,6 @@ docs/security_reports/
 
 # Plans
 .cursor/plans/
+
+# Deploy/setup output (contains account IDs; do not commit)
+accounts.json
