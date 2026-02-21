@@ -558,15 +558,22 @@ promote_kb_from_environment() {
     return 0
 }
 
-# Write knowledge_base_id to infra.yaml under environments.<env>
-write_kb_outputs_to_infra_yaml() {
+# Write knowledge_base_id to env secrets file under config_secrets.KNOWLEDGE_BASE_ID.
+# If the secrets file does not exist (e.g. in GitHub Actions where secrets are not checked out), skip the write and warn.
+write_kb_outputs_to_secrets() {
     local kb_id=$1
     if [ -z "$kb_id" ] || [ "$kb_id" = "None" ]; then
         return 1
     fi
     ensure_config_loaded || return 1
-    yq -i ".environments.${ENVIRONMENT}.knowledge_base_id = \"${kb_id}\"" "$INFRA_CONFIG_PATH"
-    print_complete "Wrote knowledge_base_id to infra.yaml (environments.$ENVIRONMENT)"
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null)
+    if [ -n "$secrets_file" ] && [ -f "$secrets_file" ]; then
+        yq -i ".config_secrets.KNOWLEDGE_BASE_ID = \"${kb_id}\"" "$secrets_file"
+        print_complete "Wrote KNOWLEDGE_BASE_ID to $secrets_file (config_secrets)"
+    else
+        print_warning "Secrets file not found for $ENVIRONMENT (e.g. expected in CI when secrets are not present); knowledge_base_id not written to config_secrets"
+    fi
     return 0
 }
 
@@ -1013,7 +1020,7 @@ deploy_stack() {
         if [ -n "$kb_id" ] && [ "$kb_id" != "None" ]; then
             print_info "Knowledge Base ID: $kb_id"
             print_info "You can use this ID in your application configuration."
-            write_kb_outputs_to_infra_yaml "$kb_id" || true
+            write_kb_outputs_to_secrets "$kb_id" || true
 
             # Sync the data source to start ingestion
             if [ -n "$data_source_id" ] && [ "$data_source_id" != "None" ] && [ "$data_source_id" != "$kb_id" ]; then
