@@ -182,12 +182,54 @@ jobs:
           echo "$BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Update CHANGELOG with release notes
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        run: |
+          TAG="${{ steps.extract-tag.outputs.tag }}"
+          PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
+          PR_TITLE="${{ steps.pr-info.outputs.pr_title }}"
+          MILESTONE_TITLE="${{ steps.extract-milestone.outputs.title }}"
+          RELEASE_DATE=$(date -u +%Y-%m-%d)
+          
+          # Build new changelog section (Keep a Changelog style)
+          {
+            echo "## [${TAG}] - ${RELEASE_DATE}"
+            echo "### Summary"
+            echo "${PR_TITLE}"
+            echo ""
+            [ -n "$MILESTONE_TITLE" ] && echo "**Milestone:** ${MILESTONE_TITLE}" && echo ""
+            echo "Merged in PR [#${PR_NUMBER}](https://github.com/${{ github.repository }}/pull/${PR_NUMBER})."
+            echo ""
+          } > CHANGELOG.new
+          
+          # Insert new section before the first existing version heading
+          LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
+          head -n $((LINE - 1)) CHANGELOG.md > CHANGELOG.md.tmp
+          cat CHANGELOG.new >> CHANGELOG.md.tmp
+          tail -n +$LINE CHANGELOG.md >> CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+          rm CHANGELOG.new
+
+      - name: Commit and push CHANGELOG update
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No CHANGELOG changes to commit"
+          else
+            git commit -m "chore: update CHANGELOG for ${{ steps.extract-tag.outputs.tag }}"
+            git push
+          fi
+
       - name: Create GitHub Release
         if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.extract-tag.outputs.tag }}
           name: Release ${{ steps.extract-tag.outputs.tag }}
+          target_commitish: main
           generate_release_notes: true
           body: ${{ steps.release-body.outputs.body }}
         env:

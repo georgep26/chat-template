@@ -86,6 +86,19 @@ print_resource_summary() {
     [ "$account_name" = "null" ] && account_name=""
     local region=$(get_environment_region "$env")
     local profile=$(get_environment_profile "$env")
+    
+    # Resolve placeholder account_id if needed
+    if [[ "$account_id" == *'${'* ]]; then
+        # Try to get actual account ID from AWS credentials
+        if command -v aws &> /dev/null; then
+            local aws_cmd="aws"
+            [ "$profile" != "null" ] && [ -n "$profile" ] && aws_cmd="aws --profile $profile"
+            local resolved_account_id=$($aws_cmd sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
+            if [ -n "$resolved_account_id" ]; then
+                account_id="$resolved_account_id"
+            fi
+        fi
+    fi
     local stack_name=$(get_resource_stack_name "$resource_name" "$env")
     local template=$(get_resource_template "$resource_name")
     

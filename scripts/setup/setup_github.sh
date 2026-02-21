@@ -186,7 +186,8 @@ show_usage() {
     echo "  3. Deploys secrets from infra/secrets (use --skip-secrets to skip)"
     echo ""
     echo "Secrets (see .github/workflows/deploy.yml and docs/github_environment_secrets.md):"
-    echo "  AWS_DEPLOYER_ROLE_ARN, AWS_REGION, S3_APP_CONFIG_URI, LOCAL_APP_CONFIG_PATH,"
+    echo "  AWS_DEPLOYER_ROLE_ARN, STAGING_DEPLOYER_ROLE_ARN (prod promotion flow),"
+    echo "  AWS_REGION, S3_APP_CONFIG_URI, LOCAL_APP_CONFIG_PATH,"
     echo "  MASTER_DB_USERNAME, MASTER_DB_PASSWORD, VPC_ID, SUBNET_IDS, SECURITY_GROUP_IDS"
 }
 

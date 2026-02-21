@@ -16,6 +16,15 @@
 #   ./scripts/deploy/deploy_knowledge_base.sh staging deploy --s3-bucket my-kb-documents-bucket --s3-prefix staging-docs/
 #   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --region us-west-2
 #
+#   # Promote KB content from staging to prod (bucket-to-bucket transfer, no local download)
+#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --promote-kb-from-env staging
+#   # Or with explicit role ARN for cross-account:
+#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --promote-kb-from-env staging --promotion-source-role-arn <arn>
+#   # Use local temp folder for download then upload (optional, if streaming has issues):
+#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --promote-kb-from-env staging --local-download
+#   # Or specify a path for the temporary files:
+#   ./scripts/deploy/deploy_knowledge_base.sh prod deploy --promote-kb-from-env staging --local-download /tmp/kb-promote
+#
 #   # Validate template before deployment
 #   ./scripts/deploy/deploy_knowledge_base.sh dev validate
 #
@@ -61,9 +70,16 @@ show_usage() {
     echo "  --s3-bucket <bucket-name>       - S3 bucket name for knowledge base documents"
     echo "  --s3-prefix <prefix>            - S3 key prefix for documents"
     echo "  --region <region>               - AWS region"
+    echo "  --promote-kb-from-env <env>     - Promote KB content from source env (e.g. staging)"
+    echo "  --promotion-source-role-arn <arn> - Role ARN for reading source env (optional, only needed for cross-account)"
+    echo "  --promotion-source-bucket <bucket> - Explicit source bucket (auto-detected if not provided)"
+    echo "  --promotion-source-prefix <prefix> - Source prefix override (default: kb_sources/)"
+    echo "  --local-download [path]            - For promotion: download to local path then upload to prod (default: temp dir)"
     echo "  -y, --yes                        - Skip confirmation prompt"
     echo ""
     echo "Example: $0 dev deploy -y"
+    echo "Example: $0 prod deploy --promote-kb-from-env staging -y"
+    echo "Example: $0 prod deploy --promote-kb-from-env staging --local-download -y  # Use temp dir for download then upload"
 }
 
 # Check if environment is provided
@@ -91,6 +107,11 @@ S3_BUCKET_NAME=""
 S3_INCLUSION_PREFIX=""
 AWS_REGION_OVERRIDE=""
 AUTO_CONFIRM=false
+PROMOTE_KB_FROM_ENV=""
+PROMOTION_SOURCE_ROLE_ARN=""
+PROMOTION_SOURCE_BUCKET=""
+PROMOTION_SOURCE_PREFIX="kb_sources/"
+PROMOTION_LOCAL_DOWNLOAD_PATH=""  # If set, download to this path (or temp dir) then sync to prod
 
 # Parse options
 while [[ $# -gt 0 ]]; do
@@ -122,6 +143,32 @@ while [[ $# -gt 0 ]]; do
         --region)
             AWS_REGION_OVERRIDE="$2"
             shift 2
+            ;;
+        --promote-kb-from-env)
+            PROMOTE_KB_FROM_ENV="$2"
+            shift 2
+            ;;
+        --promotion-source-role-arn)
+            PROMOTION_SOURCE_ROLE_ARN="$2"
+            shift 2
+            ;;
+        --promotion-source-bucket)
+            PROMOTION_SOURCE_BUCKET="$2"
+            shift 2
+            ;;
+        --promotion-source-prefix)
+            PROMOTION_SOURCE_PREFIX="$2"
+            shift 2
+            ;;
+        --local-download)
+            # Optional path: if next arg is not another flag, use it as path; else use temp dir later
+            if [[ $# -ge 2 && "$2" != -* ]]; then
+                PROMOTION_LOCAL_DOWNLOAD_PATH="$2"
+                shift 2
+            else
+                PROMOTION_LOCAL_DOWNLOAD_PATH="<temp>"  # Signal to create mktemp -d at run time
+                shift
+            fi
             ;;
         -h|--help)
             show_usage
@@ -171,15 +218,362 @@ aws_cmd() {
     fi
 }
 
-# Write knowledge_base_id to infra.yaml under environments.<env>
-write_kb_outputs_to_infra_yaml() {
+# AWS CLI helper for source environment (used during promotion)
+# Falls back to current credentials if no source credentials are configured (same-account scenario)
+aws_source_cmd() {
+    if [ -n "$SOURCE_AWS_ACCESS_KEY_ID" ]; then
+        AWS_ACCESS_KEY_ID="$SOURCE_AWS_ACCESS_KEY_ID" \
+        AWS_SECRET_ACCESS_KEY="$SOURCE_AWS_SECRET_ACCESS_KEY" \
+        AWS_SESSION_TOKEN="$SOURCE_AWS_SESSION_TOKEN" \
+        aws --region "$AWS_REGION" "$@"
+    elif [ -n "$SOURCE_AWS_PROFILE" ]; then
+        aws --profile "$SOURCE_AWS_PROFILE" --region "$AWS_REGION" "$@"
+    else
+        # No source credentials configured - use current credentials (same-account scenario)
+        aws_cmd "$@"
+    fi
+}
+
+# Setup promotion source authentication (role assumption or profile)
+# If no role ARN or profile is provided, assumes same-account scenario and uses current credentials
+setup_promotion_source_auth() {
+    SOURCE_AWS_PROFILE=""
+    SOURCE_AWS_ACCESS_KEY_ID=""
+    SOURCE_AWS_SECRET_ACCESS_KEY=""
+    SOURCE_AWS_SESSION_TOKEN=""
+
+    if [ -z "$PROMOTE_KB_FROM_ENV" ]; then
+        return 0
+    fi
+
+    validate_environment "$PROMOTE_KB_FROM_ENV" || return 1
+
+    if [ -n "$PROMOTION_SOURCE_ROLE_ARN" ]; then
+        print_info "Assuming promotion source role (ARN set)."
+        local assumed_creds
+        assumed_creds=$(aws_cmd sts assume-role \
+            --role-arn "$PROMOTION_SOURCE_ROLE_ARN" \
+            --role-session-name "kb-promotion-${ENVIRONMENT}" \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+            --output text 2>/dev/null)
+        SOURCE_AWS_ACCESS_KEY_ID=$(echo "$assumed_creds" | awk '{print $1}')
+        SOURCE_AWS_SECRET_ACCESS_KEY=$(echo "$assumed_creds" | awk '{print $2}')
+        SOURCE_AWS_SESSION_TOKEN=$(echo "$assumed_creds" | awk '{print $3}')
+        if [ -z "$SOURCE_AWS_ACCESS_KEY_ID" ] || [ "$SOURCE_AWS_ACCESS_KEY_ID" = "None" ]; then
+            print_error "Failed to assume promotion source role (check ARN)."
+            return 1
+        fi
+        return 0
+    fi
+
+    SOURCE_AWS_PROFILE=$(get_environment_profile "$PROMOTE_KB_FROM_ENV")
+    [ "$SOURCE_AWS_PROFILE" = "null" ] && SOURCE_AWS_PROFILE=""
+    if [ -n "$SOURCE_AWS_PROFILE" ]; then
+        print_info "Using source deployer profile for promotion: $SOURCE_AWS_PROFILE"
+        return 0
+    fi
+
+    # No role ARN or profile provided - assume same-account scenario
+    # Use current credentials (will be validated during bucket sync)
+    print_info "No source role ARN or profile provided. Assuming same-account scenario."
+    print_info "Using current credentials for both source and target access."
+    return 0
+}
+
+# Promote KB content from source environment to target (bucket-to-bucket transfer)
+promote_kb_from_environment() {
+    local source_bucket="$PROMOTION_SOURCE_BUCKET"
+    local source_prefix="$PROMOTION_SOURCE_PREFIX"
+    local target_bucket=""
+    local target_prefix="$S3_INCLUSION_PREFIX"
+    local source_stack_name
+    local target_stack_name
+
+    print_step "Promoting KB content from $PROMOTE_KB_FROM_ENV to $ENVIRONMENT"
+
+    # Setup source authentication
+    if ! setup_promotion_source_auth; then
+        print_error "Failed to setup promotion source authentication"
+        return 1
+    fi
+
+    # Resolve source bucket
+    if [ -z "$source_bucket" ]; then
+        print_info "Resolving source bucket from $PROMOTE_KB_FROM_ENV environment..."
+        source_stack_name=$(get_resource_stack_name "s3_bucket" "$PROMOTE_KB_FROM_ENV")
+        if [ -z "$source_stack_name" ]; then
+            print_error "Failed to resolve source S3 stack name for environment: $PROMOTE_KB_FROM_ENV"
+            return 1
+        fi
+        
+        if ! source_bucket=$(aws_source_cmd cloudformation describe-stacks \
+            --stack-name "$source_stack_name" \
+            --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue | [0]' \
+            --output text 2>/dev/null); then
+            print_error "Failed to resolve source bucket from stack: $source_stack_name"
+            return 1
+        fi
+    fi
+
+    if [ -z "$source_bucket" ] || [ "$source_bucket" = "None" ]; then
+        print_error "Could not resolve source bucket for promotion"
+        return 1
+    fi
+    print_info "Source bucket: $source_bucket"
+    print_info "Source prefix: $source_prefix"
+
+    # Resolve target bucket
+    print_info "Resolving target bucket from $ENVIRONMENT environment..."
+    target_stack_name=$(get_resource_stack_name "s3_bucket" "$ENVIRONMENT")
+    if [ -z "$target_stack_name" ]; then
+        print_error "Failed to resolve target S3 stack name for environment: $ENVIRONMENT"
+        return 1
+    fi
+
+    if ! target_bucket=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$target_stack_name" \
+        --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue | [0]' \
+        --output text 2>/dev/null); then
+        print_error "Failed to resolve target bucket from stack: $target_stack_name"
+        return 1
+    fi
+
+    if [ -z "$target_bucket" ] || [ "$target_bucket" = "None" ]; then
+        print_error "Could not resolve target bucket for promotion"
+        return 1
+    fi
+    print_info "Target bucket: $target_bucket"
+    print_info "Target prefix: $target_prefix"
+
+    # Perform bucket-to-bucket sync
+    print_step "Syncing KB content from s3://${source_bucket}/${source_prefix} to s3://${target_bucket}/${target_prefix}"
+    print_info "Note: --delete flag ensures prod matches staging exactly (staging files are NOT deleted)"
+
+    # Check if source and target are in same account
+    local source_account_id=""
+    local target_account_id=""
+    
+    if [ -n "$SOURCE_AWS_ACCESS_KEY_ID" ]; then
+        source_account_id=$(AWS_ACCESS_KEY_ID="$SOURCE_AWS_ACCESS_KEY_ID" \
+            AWS_SECRET_ACCESS_KEY="$SOURCE_AWS_SECRET_ACCESS_KEY" \
+            AWS_SESSION_TOKEN="$SOURCE_AWS_SESSION_TOKEN" \
+            aws sts get-caller-identity --query 'Account' --output text 2>/dev/null || echo "")
+    elif [ -n "$SOURCE_AWS_PROFILE" ]; then
+        source_account_id=$(aws --profile "$SOURCE_AWS_PROFILE" sts get-caller-identity --query 'Account' --output text 2>/dev/null || echo "")
+    fi
+    
+    target_account_id=$(aws_cmd sts get-caller-identity --query 'Account' --output text 2>/dev/null || echo "")
+    
+    if [ -n "$source_account_id" ] && [ -n "$target_account_id" ] && [ "$source_account_id" != "$target_account_id" ]; then
+        print_info "Cross-account transfer detected (source and target accounts differ)."
+        
+        # Optional: use local directory for download then upload (--local-download)
+        if [ -n "$PROMOTION_LOCAL_DOWNLOAD_PATH" ]; then
+            local local_dir=""
+            local cleanup_temp=false
+            
+            if [ "$PROMOTION_LOCAL_DOWNLOAD_PATH" = "<temp>" ]; then
+                local_dir=$(mktemp -d 2>/dev/null || echo "")
+                if [ -z "$local_dir" ]; then
+                    print_error "Failed to create temporary directory for --local-download"
+                    return 1
+                fi
+                cleanup_temp=true
+                print_info "Using temporary directory for download: $local_dir"
+            else
+                local_dir="$PROMOTION_LOCAL_DOWNLOAD_PATH"
+                mkdir -p "$local_dir" || { print_error "Failed to create directory: $local_dir"; return 1; }
+                print_info "Using local directory for download: $local_dir"
+            fi
+            
+            print_info "Downloading from staging (source credentials)..."
+            if ! aws_source_cmd s3 sync "s3://${source_bucket}/${source_prefix}" "$local_dir/" --region "$AWS_REGION" 2>&1; then
+                print_error "Failed to download KB content from staging to $local_dir"
+                [ "$cleanup_temp" = true ] && rm -rf "$local_dir"
+                return 1
+            fi
+            
+            print_info "Uploading to prod (target credentials) with --delete..."
+            if ! aws_cmd s3 sync "$local_dir/" "s3://${target_bucket}/${target_prefix}" --delete --region "$AWS_REGION" 2>&1; then
+                print_error "Failed to upload KB content from $local_dir to prod"
+                [ "$cleanup_temp" = true ] && rm -rf "$local_dir"
+                return 1
+            fi
+            
+            if [ "$cleanup_temp" = true ]; then
+                rm -rf "$local_dir"
+                print_info "Removed temporary directory"
+            fi
+            
+            print_complete "KB content promotion completed successfully (local-download path)"
+            print_info "Prod bucket now matches staging content exactly"
+            return 0
+        fi
+        
+        print_info "Using source credentials to read from staging, target credentials to write to prod"
+        
+        # For cross-account sync, we need to use source credentials to read and target credentials to write
+        # Similar to Lambda promotion: pull with source creds, push with target creds
+        # List all objects in source prefix using source credentials
+        print_info "Listing objects in source bucket..."
+        local source_objects_raw
+        source_objects_raw=$(aws_source_cmd s3api list-objects-v2 \
+            --bucket "$source_bucket" \
+            --prefix "$source_prefix" \
+            --query 'Contents[].Key' \
+            --output text 2>/dev/null || echo "")
+        
+        # Filter out directory markers (keys ending with /) and the prefix itself
+        local source_objects=""
+        local filtered_count=0
+        if [ -n "$source_objects_raw" ]; then
+            for key in $source_objects_raw; do
+                # Skip directory markers (keys ending with /) and keys that exactly match the prefix
+                # Also normalize the prefix to handle trailing slash variations
+                local normalized_prefix="${source_prefix%/}"
+                local normalized_key="${key%/}"
+                
+                # Skip if: ends with /, matches prefix exactly, or is empty
+                if [[ "$key" == */ ]]; then
+                    continue  # Skip directory markers
+                fi
+                if [[ "$normalized_key" == "$normalized_prefix" ]]; then
+                    continue  # Skip the prefix itself
+                fi
+                if [[ -z "$key" ]]; then
+                    continue  # Skip empty keys
+                fi
+                
+                # This is a valid object to copy
+                if [ -z "$source_objects" ]; then
+                    source_objects="$key"
+                else
+                    source_objects="$source_objects $key"
+                fi
+                filtered_count=$((filtered_count + 1))
+            done
+        fi
+        
+        if [ -z "$source_objects" ] || [ $filtered_count -eq 0 ]; then
+            print_warning "No objects found in source bucket prefix: ${source_prefix}"
+            print_info "Raw objects listed: ${source_objects_raw:-none}"
+            source_objects=""  # Ensure it's empty string, not null
+        else
+            print_info "Found $filtered_count objects to copy"
+            # Copy each object using presigned URLs: generate URL with source creds, copy with target creds
+            print_info "Copying objects from staging to prod using presigned URLs..."
+            local copied_count=0
+            local failed_count=0
+            local total_count=0
+            
+            for object_key in $source_objects; do
+                total_count=$((total_count + 1))
+                # Remove leading prefix to get relative path
+                local relative_key="${object_key#${source_prefix}}"
+                # Remove leading slash if present
+                relative_key="${relative_key#/}"
+                local target_key="${target_prefix}${relative_key}"
+                
+                # Generate presigned URL using source credentials (valid for 1 hour)
+                local presigned_url
+                presigned_url=$(aws_source_cmd s3 presign \
+                    "s3://${source_bucket}/${object_key}" \
+                    --expires-in 3600 2>/dev/null || echo "")
+                
+                if [ -z "$presigned_url" ]; then
+                    print_warning "Failed to generate presigned URL for: $object_key"
+                    failed_count=$((failed_count + 1))
+                    continue
+                fi
+                
+                # AWS CLI s3 cp does not support presigned URLs as source when copying to S3.
+                # Stream from presigned URL to target bucket (no local file): curl | aws s3 cp -
+                if curl -sfL --max-time 300 "$presigned_url" | aws_cmd s3 cp - "s3://${target_bucket}/${target_key}" >/dev/null 2>&1; then
+                    copied_count=$((copied_count + 1))
+                    if [ $((copied_count % 10)) -eq 0 ]; then
+                        print_info "  Copied $copied_count/$total_count objects..."
+                    fi
+                else
+                    print_warning "Failed to copy: $object_key"
+                    failed_count=$((failed_count + 1))
+                fi
+            done
+            
+            print_info "Copied $copied_count/$total_count objects"
+            if [ $failed_count -gt 0 ]; then
+                print_warning "Failed to copy $failed_count objects"
+                if [ $failed_count -eq $total_count ]; then
+                    print_error "All copy operations failed. Check bucket policies and permissions."
+                    return 1
+                fi
+            fi
+        fi
+        
+        # Delete objects in target that don't exist in source (--delete equivalent)
+        print_info "Removing objects from prod that don't exist in staging..."
+        local target_objects
+        target_objects=$(aws_cmd s3api list-objects-v2 \
+            --bucket "$target_bucket" \
+            --prefix "$target_prefix" \
+            --query 'Contents[].Key' \
+            --output text 2>/dev/null || echo "")
+        
+        if [ -n "$target_objects" ]; then
+            for target_key in $target_objects; do
+                # Check if this object exists in source
+                local relative_key="${target_key#${target_prefix}}"
+                local source_key="${source_prefix}${relative_key}"
+                local exists_in_source=false
+                
+                if [ -n "$source_objects" ]; then
+                    for src_key in $source_objects; do
+                        if [ "$src_key" = "$source_key" ]; then
+                            exists_in_source=true
+                            break
+                        fi
+                    done
+                fi
+                
+                if [ "$exists_in_source" = false ]; then
+                    print_info "Deleting: $target_key (not in staging)"
+                    aws_cmd s3 rm "s3://${target_bucket}/${target_key}" >/dev/null 2>&1 || true
+                fi
+            done
+        fi
+    else
+        # Same account - use simple sync with target credentials
+        print_info "Same-account transfer - using target credentials for sync"
+        if ! aws_cmd s3 sync \
+            "s3://${source_bucket}/${source_prefix}" \
+            "s3://${target_bucket}/${target_prefix}" \
+            --delete \
+            --region "$AWS_REGION" 2>&1; then
+            print_error "Failed to sync KB content from staging to prod"
+            return 1
+        fi
+    fi
+
+    print_complete "KB content promotion completed successfully"
+    print_info "Prod bucket now matches staging content exactly"
+    return 0
+}
+
+# Write knowledge_base_id to env secrets file under config_secrets.KNOWLEDGE_BASE_ID.
+# If the secrets file does not exist (e.g. in GitHub Actions where secrets are not checked out), skip the write and warn.
+write_kb_outputs_to_secrets() {
     local kb_id=$1
     if [ -z "$kb_id" ] || [ "$kb_id" = "None" ]; then
         return 1
     fi
     ensure_config_loaded || return 1
-    yq -i ".environments.${ENVIRONMENT}.knowledge_base_id = \"${kb_id}\"" "$INFRA_CONFIG_PATH"
-    print_complete "Wrote knowledge_base_id to infra.yaml (environments.$ENVIRONMENT)"
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null)
+    if [ -n "$secrets_file" ] && [ -f "$secrets_file" ]; then
+        yq -i ".config_secrets.KNOWLEDGE_BASE_ID = \"${kb_id}\"" "$secrets_file"
+        print_complete "Wrote KNOWLEDGE_BASE_ID to $secrets_file (config_secrets)"
+    else
+        print_warning "Secrets file not found for $ENVIRONMENT (e.g. expected in CI when secrets are not present); knowledge_base_id not written to config_secrets"
+    fi
     return 0
 }
 
@@ -447,6 +841,16 @@ show_status() {
 deploy_stack() {
     print_info "Deploying CloudFormation stack: $STACK_NAME"
     
+    # Promote KB content from source environment if requested
+    if [ -n "$PROMOTE_KB_FROM_ENV" ]; then
+        print_step "Promoting KB content from $PROMOTE_KB_FROM_ENV to $ENVIRONMENT"
+        if ! promote_kb_from_environment; then
+            print_error "KB content promotion failed. Aborting deployment."
+            exit 1
+        fi
+        print_info "KB content promotion completed. Proceeding with stack deployment..."
+    fi
+    
     # Get DB stack outputs
     local db_outputs=$(get_db_stack_outputs)
     if [ $? -ne 0 ] || [ -z "$db_outputs" ]; then
@@ -460,7 +864,7 @@ deploy_stack() {
     
     print_info "Using DB Cluster ID: $db_cluster_id"
     print_info "Using Database Name: $db_name"
-    print_info "Using Secret ARN: $secret_arn"
+    print_info "Using Secret ARN (set)."
     
     # Run embeddings table setup SQL via RDS Data API before deploying the KB stack
     if ! run_embeddings_sql_via_data_api "$db_cluster_id" "$db_name" "$secret_arn"; then
@@ -616,7 +1020,7 @@ deploy_stack() {
         if [ -n "$kb_id" ] && [ "$kb_id" != "None" ]; then
             print_info "Knowledge Base ID: $kb_id"
             print_info "You can use this ID in your application configuration."
-            write_kb_outputs_to_infra_yaml "$kb_id" || true
+            write_kb_outputs_to_secrets "$kb_id" || true
 
             # Sync the data source to start ingestion
             if [ -n "$data_source_id" ] && [ "$data_source_id" != "None" ] && [ "$data_source_id" != "$kb_id" ]; then

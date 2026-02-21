@@ -49,8 +49,7 @@ github:
       required_conversation_resolution: false
       lock_branch: false
       allow_fork_syncing: false
-
-# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id by deploy_knowledge_base.sh)
+# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id is in secrets file config_secrets.KNOWLEDGE_BASE_ID, written by deploy_knowledge_base.sh)
 # Supports: single account, single account with multiple environments,
 # multiple accounts, or hybrid (dev/staging shared, prod separate)
 environments:

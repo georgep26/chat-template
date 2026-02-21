@@ -25,6 +25,10 @@ Parameters:
     Type: String
     Description: 'ARN of the GitHub OIDC identity provider. Create first; see docs/oidc_github_identity_provider_setup.md.'
 
+Conditions:
+  IsStagingRole: !Equals [!Ref Environment, 'staging']
+  IsProdRole: !Equals [!Ref Environment, 'prod']
+
 Resources:
   DeployerRole:
     Type: AWS::IAM::Role
@@ -34,7 +38,7 @@ Resources:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          # Allow workflow_dispatch when job runs in the matching GitHub environment (dev, staging, prod)
+          # Allow workflow when job runs in the matching GitHub environment.
           - Effect: Allow
             Principal:
               Federated: !Ref OIDCProviderArn
@@ -44,6 +48,18 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:${Environment}'
+          # Allow the prod deployer role to assume this role only when this is the
+          # staging deployer role (used for staging->prod image promotion reads).
+          - !If
+            - IsStagingRole
+            - Effect: Allow
+              Principal:
+                AWS: '*'
+              Action: sts:AssumeRole
+              Condition:
+                ArnLike:
+                  aws:PrincipalArn: !Sub 'arn:aws:iam::*:role/${ProjectName}-prod-deployer-github-actions-role'
+            - !Ref AWS::NoValue
           # Allow OrganizationAccountAccessRole in the same account to assume this role
           # (enables local CLI deployments using the same deployer role as GitHub Actions)
           - Effect: Allow
@@ -238,6 +254,11 @@ Resources:
                   - bedrock:TagResource
                   - bedrock:UntagResource
                   - bedrock:ListTagsForResource
+                  # Required by promotion flow when we re-ingest prod KB after S3 sync.
+                  - bedrock-agent:StartIngestionJob
+                  - bedrock-agent:GetIngestionJob
+                  - bedrock-agent:ListIngestionJobs
+                  - bedrock-agent:StopIngestionJob
                 Resource: '*'
               # Bedrock: Foundation model access (required for knowledge base embedding models)
               - Sid: BedrockFoundationModels
@@ -290,6 +311,7 @@ Resources:
                 Action:
                   - ecr:CreateRepository
                   - ecr:DeleteRepository
+                  - ecr:DescribeImages
                   - ecr:PutLifecyclePolicy
                   - ecr:GetLifecyclePolicy
                   - ecr:TagResource
@@ -336,6 +358,16 @@ Resources:
                 Action:
                   - sts:GetCallerIdentity
                 Resource: '*'
+              # Allow prod deployer role to assume staging deployer role for
+              # promotion reads (only granted on prod deployer role stacks).
+              - !If
+                - IsProdRole
+                - Sid: STSAssumeStagingDeployer
+                  Effect: Allow
+                  Action:
+                    - sts:AssumeRole
+                  Resource: !Sub 'arn:aws:iam::*:role/${ProjectName}-staging-deployer-github-actions-role'
+                - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-deployer-github-actions-role'
