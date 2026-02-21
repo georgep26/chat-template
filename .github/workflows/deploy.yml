@@ -52,6 +52,36 @@ on:
         required: false
         default: false
         type: boolean
+      lambda_image_uri:
+        description: 'Optional prebuilt Lambda image URI (skip Lambda rebuild path)'
+        required: false
+        default: ''
+        type: string
+      promote_lambda_from_env:
+        description: 'Optional source environment to promote Lambda image from (e.g. staging)'
+        required: false
+        default: ''
+        type: string
+      promotion_source_role_arn:
+        description: 'Optional role ARN used to read source env image during promotion'
+        required: false
+        default: ''
+        type: string
+      promotion_source_image_uri:
+        description: 'Optional explicit source image URI for promotion'
+        required: false
+        default: ''
+        type: string
+      promote_kb_from_env:
+        description: 'Optional source environment to promote KB content from (e.g. staging)'
+        required: false
+        default: ''
+        type: string
+      promotion_kb_source_role_arn:
+        description: 'Optional role ARN for reading source env KB during promotion'
+        required: false
+        default: ''
+        type: string
       skip_cost_tags:
         description: 'Skip cost allocation tags activation'
         required: false
@@ -86,6 +116,30 @@ on:
         required: false
         default: false
         type: boolean
+      lambda_image_uri:
+        required: false
+        default: ''
+        type: string
+      promote_lambda_from_env:
+        required: false
+        default: ''
+        type: string
+      promotion_source_role_arn:
+        required: false
+        default: ''
+        type: string
+      promotion_source_image_uri:
+        required: false
+        default: ''
+        type: string
+      promote_kb_from_env:
+        required: false
+        default: ''
+        type: string
+      promotion_kb_source_role_arn:
+        required: false
+        default: ''
+        type: string
       skip_cost_tags:
         required: false
         default: true
@@ -148,6 +202,12 @@ jobs:
           LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
           MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
           MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
+          LAMBDA_IMAGE_URI: ${{ inputs.lambda_image_uri }}
+          PROMOTE_LAMBDA_FROM_ENV: ${{ inputs.promote_lambda_from_env }}
+          PROMOTION_SOURCE_ROLE_ARN: ${{ inputs.promotion_source_role_arn }}
+          PROMOTION_SOURCE_IMAGE_URI: ${{ inputs.promotion_source_image_uri }}
+          PROMOTE_KB_FROM_ENV: ${{ inputs.promote_kb_from_env }}
+          PROMOTION_KB_SOURCE_ROLE_ARN: ${{ inputs.promotion_kb_source_role_arn }}
         run: |
           # Base command: deploy with auto-confirm
           CMD="./scripts/deploy/deploy_all.sh ${ENVIRONMENT} -y"
@@ -168,6 +228,13 @@ jobs:
           if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"; fi
           if [ -n "$MASTER_DB_USERNAME" ]; then CMD="$CMD --master-username $MASTER_DB_USERNAME"; fi
           if [ -n "$MASTER_DB_PASSWORD" ]; then CMD="$CMD --master-password $MASTER_DB_PASSWORD"; fi
+          # Promotion path (e.g. prod-on-main): pull image from source env ECR, push to target ECR, deploy Lambda (no rebuild).
+          if [ -n "$LAMBDA_IMAGE_URI" ]; then CMD="$CMD --lambda-image-uri $LAMBDA_IMAGE_URI"; fi
+          if [ -n "$PROMOTE_LAMBDA_FROM_ENV" ]; then CMD="$CMD --promote-lambda-from-env $PROMOTE_LAMBDA_FROM_ENV"; fi
+          if [ -n "$PROMOTION_SOURCE_ROLE_ARN" ]; then CMD="$CMD --promotion-source-role-arn $PROMOTION_SOURCE_ROLE_ARN"; fi
+          if [ -n "$PROMOTION_SOURCE_IMAGE_URI" ]; then CMD="$CMD --promotion-source-image-uri $PROMOTION_SOURCE_IMAGE_URI"; fi
+          if [ -n "$PROMOTE_KB_FROM_ENV" ]; then CMD="$CMD --promote-kb-from-env $PROMOTE_KB_FROM_ENV"; fi
+          if [ -n "$PROMOTION_KB_SOURCE_ROLE_ARN" ]; then CMD="$CMD --promotion-kb-source-role-arn $PROMOTION_KB_SOURCE_ROLE_ARN"; fi
           
           echo "command<<EOF" >> $GITHUB_OUTPUT
           echo "$CMD" >> $GITHUB_OUTPUT
