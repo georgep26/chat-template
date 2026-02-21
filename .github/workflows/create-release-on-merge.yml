@@ -25,60 +25,35 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Get the commit that was just pushed
-            const commits = await github.rest.repos.listCommits({
+            // Use GitHub API to get PR(s) associated with this commit (works for merge, squash, rebase)
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: '${{ github.sha }}',
-              per_page: 10
+              commit_sha: context.sha
             });
             
-            // Find the merge commit (usually contains "Merge pull request")
-            let mergedPR = null;
-            for (const commit of commits.data) {
-              const message = commit.commit.message;
-              const prMatch = message.match(/Merge pull request #(\d+)/);
-              
-              if (prMatch) {
-                const prNumber = parseInt(prMatch[1]);
-                try {
-                  const pr = await github.rest.pulls.get({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: prNumber
-                  });
-                  
-                  // Check if this PR is from development to main
-                  if (pr.data.base.ref === 'main' && pr.data.head.ref === 'development') {
-                    mergedPR = {
-                      number: prNumber,
-                      body: pr.data.body || '',
-                      title: pr.data.title,
-                      milestone: pr.data.milestone ? {
-                        title: pr.data.milestone.title,
-                        number: pr.data.milestone.number
-                      } : null
-                    };
-                    break;
-                  }
-                } catch (error) {
-                  console.log(`Could not fetch PR #${prNumber}: ${error.message}`);
-                }
-              }
-            }
+            // Find the PR that targeted main with head development (the one we just merged into main)
+            const mergedPR = pulls.find(pr => pr.base && pr.base.ref === 'main' && pr.head && pr.head.ref === 'development');
             
             if (!mergedPR) {
-              console.log('No PR from development → main found in recent commits');
+              console.log('No PR from development → main found for this commit');
               return { found: false };
             }
             
+            // Get full PR for body, title, milestone
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: mergedPR.number
+            });
+            
             return {
               found: true,
-              pr_number: mergedPR.number,
-              pr_body: mergedPR.body,
-              pr_title: mergedPR.title,
-              milestone_title: mergedPR.milestone?.title || '',
-              milestone_number: mergedPR.milestone?.number || ''
+              pr_number: pr.number,
+              pr_body: pr.body || '',
+              pr_title: pr.title,
+              milestone_title: pr.milestone ? pr.milestone.title : '',
+              milestone_number: pr.milestone ? String(pr.milestone.number) : ''
             };
 
       - name: Extract release tag from PR body

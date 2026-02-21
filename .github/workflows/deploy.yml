@@ -204,10 +204,10 @@ jobs:
           MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
           LAMBDA_IMAGE_URI: ${{ inputs.lambda_image_uri }}
           PROMOTE_LAMBDA_FROM_ENV: ${{ inputs.promote_lambda_from_env }}
-          PROMOTION_SOURCE_ROLE_ARN: ${{ inputs.promotion_source_role_arn }}
+          PROMOTION_SOURCE_ROLE_ARN: ${{ inputs.promotion_source_role_arn || secrets.STAGING_DEPLOYER_ROLE_ARN || '' }}
           PROMOTION_SOURCE_IMAGE_URI: ${{ inputs.promotion_source_image_uri }}
           PROMOTE_KB_FROM_ENV: ${{ inputs.promote_kb_from_env }}
-          PROMOTION_KB_SOURCE_ROLE_ARN: ${{ inputs.promotion_kb_source_role_arn }}
+          PROMOTION_KB_SOURCE_ROLE_ARN: ${{ inputs.promotion_kb_source_role_arn || secrets.STAGING_DEPLOYER_ROLE_ARN || '' }}
         run: |
           # Base command: deploy with auto-confirm
           CMD="./scripts/deploy/deploy_all.sh ${ENVIRONMENT} -y"

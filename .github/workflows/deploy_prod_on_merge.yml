@@ -39,9 +39,8 @@ jobs:
       skip_ecr: true
       skip_lambda: false
       promote_kb_from_env: staging
-      promotion_kb_source_role_arn: ${{ secrets.STAGING_DEPLOYER_ROLE_ARN }}
       promote_lambda_from_env: staging
-      promotion_source_role_arn: ${{ secrets.STAGING_DEPLOYER_ROLE_ARN }}
+      # Role ARNs are read from prod env secret STAGING_DEPLOYER_ROLE_ARN in deploy.yml when inputs are empty
     secrets: inherit
 
   # Run evals after deploy so they run within the newly deployed prod environment.
