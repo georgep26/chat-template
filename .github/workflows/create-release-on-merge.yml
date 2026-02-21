@@ -54,8 +54,9 @@ jobs:
                 owner, repo, ref: commitSha
               });
               const msg = (commit.commit && commit.commit.message) || '';
-              const squashMatch = msg.match(/\(#(\d+)\)/);
+              const firstLine = msg.split(/\r?\n/)[0] || '';
               const mergeMatch = msg.match(/Merge pull request #(\d+)/i);
+              const squashMatch = firstLine.match(/\(#(\d+)\)\s*$/) || msg.match(/\(#(\d+)\)/);  // prefer end of first line (GitHub squash format)
               const prNum = mergeMatch ? mergeMatch[1] : (squashMatch ? squashMatch[1] : null);
               if (prNum) {
                 const pr = await getPrIfMatch(parseInt(prNum, 10));
