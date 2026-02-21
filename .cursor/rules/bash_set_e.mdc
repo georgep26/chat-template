@@ -1,0 +1,47 @@
+---
+description: Avoid set -e pitfalls in bash (command substitution, optional commands)
+globs: ["**/*.sh", "scripts/**"]
+alwaysApply: false
+---
+
+# Bash: set -e and Command Substitution
+
+Scripts in this project use `set -e` (exit on first error). That causes a **silent exit** when a command inside **command substitution** fails, so the script never reaches the next line where you might print a friendly error.
+
+## What Goes Wrong
+
+With `set -e`, this:
+
+```bash
+set -e
+MY_VAL=$(some_command_that_may_fail)   # if this fails, script exits here
+if [ -z "$MY_VAL" ]; then
+    print_error "some_command failed: ..."
+    exit 1
+fi
+```
+
+never runs the `if` block. If `some_command_that_may_fail` returns non-zero (e.g. AWS CLI with bad credentials), the assignment itself fails and the script exits immediately. The user sees no error message.
+
+## Fix: Allow the Subshell to Fail, Then Handle It
+
+When the command is **optional or may legitimately fail** and you want to handle that and print a clear error:
+
+```bash
+MY_VAL=$(some_command_that_may_fail) || true
+if [ -z "$MY_VAL" ] || [ "$MY_VAL" = "None" ]; then
+    print_error "Friendly message explaining what went wrong and how to fix it."
+    exit 1
+fi
+```
+
+Use `|| true` (or `|| :`) so the overall command still succeeds; then check the result and exit with a clear message if it's empty or invalid.
+
+## When to Apply
+
+- Any `VAR=$(cmd)` where `cmd` can fail (AWS CLI, `gh`, network, missing tools).
+- Prefer this pattern so users always see a clear error instead of the script just stopping.
+
+## When Not to Use || true
+
+Do **not** add `|| true` when the command **must** succeed and you want the script to exit on failure (e.g. `cp file dest`). Reserve `|| true` for "try this, then check the result and handle failure explicitly."

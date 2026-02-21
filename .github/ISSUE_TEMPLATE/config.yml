@@ -1,9 +1,12 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 📚 Documentation
-    url: https://github.com/YOUR_ORG/YOUR_REPO#readme
-    about: Check the README and documentation for common questions
+  - name: 📚 Project README
+    url: https://github.com/georgep26/chat-template#readme
+    about: Check the README and docs for setup and common questions
   - name: 💬 Discussions
-    url: https://github.com/YOUR_ORG/YOUR_REPO/discussions
+    url: https://github.com/georgep26/chat-template/discussions
     about: Ask questions and discuss ideas with the community
+  - name: 🤝 Contributing
+    url: https://github.com/georgep26/chat-template/blob/main/CONTRIBUTING.md
+    about: Learn how to contribute to this project
 

@@ -17,6 +17,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      upload_to_main:
+        description: 'Push eval results to evals/eval_outputs/<datetime> on main (e.g. after merge to main)'
+        required: false
+        default: 'false'
+        type: boolean
   workflow_call:
     inputs:
       environment:
@@ -24,6 +29,11 @@ on:
         required: true
         default: 'staging'
         type: string
+      upload_to_main:
+        description: 'Push eval results to evals/eval_outputs/<datetime> on main'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   run-evals:
@@ -31,8 +41,9 @@ jobs:
     environment: ${{ inputs.environment || github.event.inputs.environment || 'staging' }}
     permissions:
       id-token: write
+      # contents: read is enough for checkout/run; callers that need push-to-main must pass contents: write
       contents: read
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,6 +84,11 @@ jobs:
             fi
           fi
 
+      - name: Generate run name for upload to main
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
+        id: generate-run-name
+        run: echo "run_name=$(date -u +%Y-%m-%dT%H-%M-%SZ)" >> $GITHUB_OUTPUT
+
       - name: Set up Miniconda
         if: steps.check-branch.outputs.skip != 'true'
         uses: conda-incubator/setup-miniconda@v3
@@ -109,8 +125,13 @@ jobs:
         shell: bash -l {0}
         env:
           EVALS_ENVIRONMENT: ${{ inputs.environment || github.event.inputs.environment || 'staging' }}
+          EVAL_RUN_NAME: ${{ steps.generate-run-name.outputs.run_name }}
         run: |
-          python evals/evals_pipeline.py --config evals/evals_config.yaml --notes "PR Evaluation" --environment "$EVALS_ENVIRONMENT"
+          if [ -n "$EVAL_RUN_NAME" ]; then
+            python evals/evals_pipeline.py --config evals/evals_config.yaml --notes "PR Evaluation" --environment "$EVALS_ENVIRONMENT" --run-name "$EVAL_RUN_NAME"
+          else
+            python evals/evals_pipeline.py --config evals/evals_config.yaml --notes "PR Evaluation" --environment "$EVALS_ENVIRONMENT"
+          fi
 
       - name: Upload evaluation results
         if: steps.check-branch.outputs.skip != 'true'
@@ -119,4 +140,22 @@ jobs:
           name: eval-results
           path: evals/eval_outputs/
           retention-days: 7
+
+      - name: Push eval results to main
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
+        run: |
+          RUN_NAME="${{ steps.generate-run-name.outputs.run_name }}"
+          git fetch origin main
+          git checkout main
+          git pull origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "evals/eval_outputs/$RUN_NAME"
+          git status
+          if git diff --staged --quiet; then
+            echo "No new eval outputs to commit."
+          else
+            git commit -m "chore(evals): add eval results $RUN_NAME [skip ci]"
+            git push origin main
+          fi
 

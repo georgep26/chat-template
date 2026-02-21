@@ -81,6 +81,15 @@ show_usage() {
     echo "  --s3-app-config-uri <uri>          S3 URI for Lambda app config"
     echo "  --local-app-config-path <path>     Local app config to upload to S3"
     echo "  --image-tag <tag>                  Docker image tag for Lambda"
+    echo "  --lambda-image-uri <uri>           Prebuilt Lambda image URI (promotion path)"
+    echo "  --promote-lambda-from-env <env>    Promote image from source env (e.g. staging)"
+    echo "  --promotion-source-role-arn <arn>  Role ARN for source env image reads"
+    echo "  --promotion-source-image-uri <uri> Explicit source image URI for promotion"
+    echo "  --promote-kb-from-env <env>        Promote KB content from source env (e.g. staging)"
+    echo "  --promotion-kb-source-role-arn <arn> Role ARN for source env KB reads"
+    echo "  --promotion-kb-source-bucket <bucket> Explicit source bucket (auto-detected if not provided)"
+    echo "  --promotion-kb-source-prefix <prefix> Source prefix override (default: kb_sources/)"
+    echo "  --local-download [path]              For KB promotion: download to path then upload (default: temp dir)"
     echo ""
     echo "Note: Resources are only deployed if enabled in infra.yaml AND not skipped."
     echo "      Defaults are loaded from infra/infra.yaml."
@@ -129,6 +138,15 @@ PUBLIC_IP_OVERRIDE=""
 S3_APP_CONFIG_URI_OVERRIDE=""
 LOCAL_APP_CONFIG_PATH_OVERRIDE=""
 IMAGE_TAG_OVERRIDE=""
+LAMBDA_IMAGE_URI_OVERRIDE=""
+PROMOTE_LAMBDA_FROM_ENV_OVERRIDE=""
+PROMOTION_SOURCE_ROLE_ARN_OVERRIDE=""
+PROMOTION_SOURCE_IMAGE_URI_OVERRIDE=""
+PROMOTE_KB_FROM_ENV_OVERRIDE=""
+PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE=""
+PROMOTION_KB_SOURCE_BUCKET_OVERRIDE=""
+PROMOTION_KB_SOURCE_PREFIX_OVERRIDE=""
+PROMOTION_LOCAL_DOWNLOAD_OVERRIDE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -225,6 +243,47 @@ while [[ $# -gt 0 ]]; do
         --image-tag)
             IMAGE_TAG_OVERRIDE="$2"
             shift 2
+            ;;
+        --lambda-image-uri)
+            LAMBDA_IMAGE_URI_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promote-lambda-from-env)
+            PROMOTE_LAMBDA_FROM_ENV_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promotion-source-role-arn)
+            PROMOTION_SOURCE_ROLE_ARN_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promotion-source-image-uri)
+            PROMOTION_SOURCE_IMAGE_URI_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promote-kb-from-env)
+            PROMOTE_KB_FROM_ENV_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promotion-kb-source-role-arn)
+            PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promotion-kb-source-bucket)
+            PROMOTION_KB_SOURCE_BUCKET_OVERRIDE="$2"
+            shift 2
+            ;;
+        --promotion-kb-source-prefix)
+            PROMOTION_KB_SOURCE_PREFIX_OVERRIDE="$2"
+            shift 2
+            ;;
+        --local-download)
+            if [[ $# -ge 2 && "$2" != -* ]]; then
+                PROMOTION_LOCAL_DOWNLOAD_OVERRIDE="$2"
+                shift 2
+            else
+                PROMOTION_LOCAL_DOWNLOAD_OVERRIDE="<temp>"
+                shift
+            fi
             ;;
         -h|--help)
             show_usage
@@ -380,6 +439,10 @@ HAS_OVERRIDES=false
 [ -n "$S3_APP_CONFIG_URI_OVERRIDE" ] && HAS_OVERRIDES=true
 [ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ] && HAS_OVERRIDES=true
 [ -n "$IMAGE_TAG_OVERRIDE" ] && HAS_OVERRIDES=true
+[ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ] && HAS_OVERRIDES=true
+[ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ] && HAS_OVERRIDES=true
+[ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ] && HAS_OVERRIDES=true
+[ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ] && HAS_OVERRIDES=true
 
 if [ "$HAS_OVERRIDES" = true ]; then
     print_info "Override parameters:"
@@ -393,6 +456,10 @@ if [ "$HAS_OVERRIDES" = true ]; then
     [ -n "$S3_APP_CONFIG_URI_OVERRIDE" ] && print_info "  S3 App Config URI: $S3_APP_CONFIG_URI_OVERRIDE"
     [ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ] && print_info "  Local App Config: $LOCAL_APP_CONFIG_PATH_OVERRIDE"
     [ -n "$IMAGE_TAG_OVERRIDE" ] && print_info "  Image Tag: $IMAGE_TAG_OVERRIDE"
+    [ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ] && print_info "  Lambda Image URI: $LAMBDA_IMAGE_URI_OVERRIDE"
+    [ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ] && print_info "  Promote Lambda From Env: $PROMOTE_LAMBDA_FROM_ENV_OVERRIDE"
+    [ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ] && print_info "  Promotion Source Role ARN: (set)"
+    [ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ] && print_info "  Promotion Source Image URI: $PROMOTION_SOURCE_IMAGE_URI_OVERRIDE"
     echo ""
 fi
 
@@ -439,11 +506,26 @@ build_lambda_args() {
     if [ -n "$S3_APP_CONFIG_URI_OVERRIDE" ]; then BUILT_ARGS+=(--s3_app_config_uri "$S3_APP_CONFIG_URI_OVERRIDE"); fi
     if [ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ]; then BUILT_ARGS+=(--local_app_config_path "$LOCAL_APP_CONFIG_PATH_OVERRIDE"); fi
     if [ -n "$IMAGE_TAG_OVERRIDE" ]; then BUILT_ARGS+=(--image-tag "$IMAGE_TAG_OVERRIDE"); fi
+    if [ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ]; then BUILT_ARGS+=(--lambda-image-uri "$LAMBDA_IMAGE_URI_OVERRIDE"); fi
+    if [ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ]; then BUILT_ARGS+=(--promote-lambda-from-env "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE"); fi
+    if [ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-role-arn "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE"); fi
+    if [ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-image-uri "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE"); fi
 }
 
 build_kb_args() {
     BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
     if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
+    if [ -n "$PROMOTE_KB_FROM_ENV_OVERRIDE" ]; then BUILT_ARGS+=(--promote-kb-from-env "$PROMOTE_KB_FROM_ENV_OVERRIDE"); fi
+    if [ -n "$PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-role-arn "$PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE"); fi
+    if [ -n "$PROMOTION_KB_SOURCE_BUCKET_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-bucket "$PROMOTION_KB_SOURCE_BUCKET_OVERRIDE"); fi
+    if [ -n "$PROMOTION_KB_SOURCE_PREFIX_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-prefix "$PROMOTION_KB_SOURCE_PREFIX_OVERRIDE"); fi
+    if [ -n "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE" ]; then
+        if [ "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE" = "<temp>" ]; then
+            BUILT_ARGS+=(--local-download)
+        else
+            BUILT_ARGS+=(--local-download "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE")
+        fi
+    fi
 }
 
 # Map resource name to the arg builder function
@@ -491,7 +573,19 @@ run_deployment_script() {
         return 0
     else
         print_error "$resource_name deployment failed (exit code $exit_code)"
-        print_info "To see full output, run from project root: $script_path ${args[*]}"
+        # Build safe args for re-run hint (redact --master-password and value to avoid leaking in logs)
+        local safe_args=()
+        local i=0
+        while [ $i -lt ${#args[@]} ]; do
+            if [ "${args[$i]}" = "--master-password" ]; then
+                safe_args+=(--master-password "****")
+                i=$((i + 2))
+                continue
+            fi
+            safe_args+=("${args[$i]}")
+            i=$((i + 1))
+        done
+        print_info "To see full output, run from project root: $script_path ${safe_args[*]}"
         return 1
     fi
 }

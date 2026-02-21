@@ -1,5 +1,9 @@
-# On merge to main (push to main): run tests; if pass, deploy to prod; then run evals in prod.
-# Keeps main in sync with production.
+# On merge to main (push to main): run tests, promote validated staging artifacts,
+# deploy to prod, then run evals in prod.
+#
+# Standard process in this repo is full build/deploy per environment. This workflow
+# enables an optional promotion path for prod-on-main so prod reuses staging-validated
+# artifacts instead of rebuilding them.
 name: Deploy to Prod on Merge to Main
 
 on:
@@ -22,25 +26,34 @@ jobs:
       contents: read
       pull-requests: write
 
+  # Deploy prod using staging-validated artifacts only (no rebuild).
+  # KB: deploy_all.sh runs deploy_knowledge_base.sh with --promote-kb-from-env staging (bucket-to-bucket transfer, then ingestion).
+  # RAG Lambda: deploy_rag_lambda.sh pulls image from staging ECR, pushes to prod ECR as :latest, then deploys.
   deploy-prod:
     name: Deploy to Prod
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: prod
-      skip_kb: true
+      skip_kb: false
       skip_ecr: true
       skip_lambda: false
+      promote_kb_from_env: staging
+      promotion_kb_source_role_arn: ${{ secrets.STAGING_DEPLOYER_ROLE_ARN }}
+      promote_lambda_from_env: staging
+      promotion_source_role_arn: ${{ secrets.STAGING_DEPLOYER_ROLE_ARN }}
     secrets: inherit
 
   # Run evals after deploy so they run within the newly deployed prod environment.
+  # Results are written to evals/eval_outputs/<datetime> on main.
   run-evaluations:
     name: Run Evaluations
     needs: [deploy-prod]
     uses: ./.github/workflows/run-evals.yml
     with:
       environment: prod
+      upload_to_main: true
     secrets: inherit
     permissions:
       id-token: write
-      contents: read
+      contents: write

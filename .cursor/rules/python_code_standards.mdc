@@ -1,0 +1,19 @@
+---
+description: Python code must follow project standards in docs/code_standards.md
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Code Standards
+
+Any task that involves **writing or modifying Python code** must adhere to the project’s coding standards.
+
+**Reference:** [docs/code_standards.md](docs/code_standards.md)
+
+Before writing or editing Python (`.py`) files:
+
+1. **Read** `docs/code_standards.md` when standards are unclear or the file is large.
+2. **Apply** its guidelines for documentation, error handling, performance, type safety, testing, security, naming, imports, logging, and configuration.
+3. **Prefer** the documented conventions over ad-hoc style (e.g. Google/NumPy docstrings, PEP 8 + Black, isort, type hints, no bare `except`, fail fast, no hardcoded config).
+
+When suggesting or generating Python code, ensure it matches these standards unless the user explicitly requests otherwise.

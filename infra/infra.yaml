@@ -13,24 +13,43 @@ project:
 github:
   github_repo: "${REPO}"
   solo_mode: true
-  # Branch protection for main. required_approving_review_count is derived from solo_mode (0 if solo, 1 otherwise).
+  # Branch protection: main and development. Read by scripts/setup/setup_github.sh.
+  # For main, required_approving_review_count is derived from solo_mode (0 if solo, 1 otherwise).
   branch_protection:
-    required_status_checks:
-      strict: true
-      contexts:
-        - "Run Tests"
-    enforce_admins: true
-    required_pull_request_reviews:
-      dismiss_stale_reviews: true
-      require_code_owner_reviews: false
-    restrictions: null
-    allow_force_pushes: false
-    allow_deletions: false
-    block_creations: false
-    required_conversation_resolution: true
-    lock_branch: false
-    allow_fork_syncing: false
-# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id by deploy_knowledge_base.sh)
+    main:
+      required_status_checks:
+        strict: true
+        contexts:
+          - "Run Tests"
+      enforce_admins: true
+      required_pull_request_reviews:
+        dismiss_stale_reviews: true
+        require_code_owner_reviews: false
+      restrictions: null
+      allow_force_pushes: false
+      allow_deletions: false
+      block_creations: false
+      required_conversation_resolution: true
+      lock_branch: false
+      allow_fork_syncing: false
+    development:
+      # No required checks: use contexts only (omit checks - API rejects both contexts and checks).
+      required_status_checks:
+        strict: true
+        contexts: []
+      enforce_admins: true
+      required_pull_request_reviews:
+        required_approving_review_count: 0
+        dismiss_stale_reviews: false
+        require_code_owner_reviews: false
+      restrictions: null
+      allow_force_pushes: true
+      allow_deletions: false
+      block_creations: false
+      required_conversation_resolution: false
+      lock_branch: false
+      allow_fork_syncing: false
+# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id is in secrets file config_secrets.KNOWLEDGE_BASE_ID, written by deploy_knowledge_base.sh)
 # Supports: single account, single account with multiple environments,
 # multiple accounts, or hybrid (dev/staging shared, prod separate)
 environments:

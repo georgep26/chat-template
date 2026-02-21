@@ -1,0 +1,251 @@
+# On merge to main: extract release tag and milestone from merged PR, then create GitHub release.
+# This workflow runs after code is merged to main and creates a release automatically.
+name: Create Release on Merge to Main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get merged PR information
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get the commit that was just pushed
+            const commits = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ github.sha }}',
+              per_page: 10
+            });
+            
+            // Find the merge commit (usually contains "Merge pull request")
+            let mergedPR = null;
+            for (const commit of commits.data) {
+              const message = commit.commit.message;
+              const prMatch = message.match(/Merge pull request #(\d+)/);
+              
+              if (prMatch) {
+                const prNumber = parseInt(prMatch[1]);
+                try {
+                  const pr = await github.rest.pulls.get({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: prNumber
+                  });
+                  
+                  // Check if this PR is from development to main
+                  if (pr.data.base.ref === 'main' && pr.data.head.ref === 'development') {
+                    mergedPR = {
+                      number: prNumber,
+                      body: pr.data.body || '',
+                      title: pr.data.title,
+                      milestone: pr.data.milestone ? {
+                        title: pr.data.milestone.title,
+                        number: pr.data.milestone.number
+                      } : null
+                    };
+                    break;
+                  }
+                } catch (error) {
+                  console.log(`Could not fetch PR #${prNumber}: ${error.message}`);
+                }
+              }
+            }
+            
+            if (!mergedPR) {
+              console.log('No PR from development → main found in recent commits');
+              return { found: false };
+            }
+            
+            return {
+              found: true,
+              pr_number: mergedPR.number,
+              pr_body: mergedPR.body,
+              pr_title: mergedPR.title,
+              milestone_title: mergedPR.milestone?.title || '',
+              milestone_number: mergedPR.milestone?.number || ''
+            };
+
+      - name: Extract release tag from PR body
+        id: extract-tag
+        if: steps.pr-info.outputs.found == 'true'
+        run: |
+          PR_BODY="${{ steps.pr-info.outputs.pr_body }}"
+          
+          # Try multiple patterns to extract release tag
+          TAG=$(echo "$PR_BODY" | grep -oP '(?i)Release Tag:\s*`\K[^`]+' || \
+                echo "$PR_BODY" | grep -oP '(?i)\*\*Release Tag:\*\*\s*`\K[^`]+' || \
+                echo "$PR_BODY" | grep -oP '(?i)Release Tag:\s*\*\*\K[^*]+' || \
+                echo "")
+          
+          # Clean up the tag (remove any extra whitespace)
+          TAG=$(echo "$TAG" | xargs)
+          
+          if [ -z "$TAG" ]; then
+            echo "⚠️ No release tag found in PR body"
+            echo "tag=" >> $GITHUB_OUTPUT
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "✅ Found release tag: $TAG"
+          fi
+
+      - name: Extract milestone from PR
+        id: extract-milestone
+        if: steps.pr-info.outputs.found == 'true'
+        run: |
+          MILESTONE_TITLE="${{ steps.pr-info.outputs.milestone_title }}"
+          MILESTONE_NUMBER="${{ steps.pr-info.outputs.milestone_number }}"
+          
+          if [ -n "$MILESTONE_TITLE" ]; then
+            echo "title=$MILESTONE_TITLE" >> $GITHUB_OUTPUT
+            echo "number=$MILESTONE_NUMBER" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "✅ Found milestone: $MILESTONE_TITLE"
+          else
+            # Try to extract from PR body as fallback
+            PR_BODY="${{ steps.pr-info.outputs.pr_body }}"
+            MILESTONE=$(echo "$PR_BODY" | grep -oP '(?i)Milestone:\s*\K[^\n]+' | xargs || echo "")
+            
+            if [ -n "$MILESTONE" ]; then
+              echo "title=$MILESTONE" >> $GITHUB_OUTPUT
+              echo "found=true" >> $GITHUB_OUTPUT
+              echo "✅ Found milestone in PR body: $MILESTONE"
+            else
+              echo "found=false" >> $GITHUB_OUTPUT
+              echo "⚠️ No milestone found"
+            fi
+          fi
+
+      - name: Validate release tag
+        if: steps.pr-info.outputs.found == 'true' && steps.extract-tag.outputs.found != 'true'
+        run: |
+          echo "❌ Error: PR from development → main must include a Release Tag in the PR template"
+          echo "Please ensure the PR body contains: **Release Tag:** \`v1.0.0\`"
+          exit 1
+
+      - name: Check if tag already exists
+        id: check-tag
+        if: steps.extract-tag.outputs.found == 'true'
+        run: |
+          TAG="${{ steps.extract-tag.outputs.tag }}"
+          
+          # Check if tag already exists
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release body
+        id: release-body
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        run: |
+          TAG="${{ steps.extract-tag.outputs.tag }}"
+          PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
+          PR_TITLE="${{ steps.pr-info.outputs.pr_title }}"
+          MILESTONE_TITLE="${{ steps.extract-milestone.outputs.title }}"
+          MILESTONE_FOUND="${{ steps.extract-milestone.outputs.found }}"
+          
+          BODY="## Release ${TAG}"
+          BODY="${BODY}"$'\n\n'
+          
+          if [ "$MILESTONE_FOUND" == "true" ] && [ -n "$MILESTONE_TITLE" ]; then
+            BODY="${BODY}**Milestone:** ${MILESTONE_TITLE}"
+            BODY="${BODY}"$'\n\n'
+          fi
+          
+          BODY="${BODY}Merged from PR #${PR_NUMBER}: ${PR_TITLE}"
+          BODY="${BODY}"$'\n\n'
+          BODY="${BODY}---"
+          BODY="${BODY}"$'\n\n'
+          BODY="${BODY}See the [full changelog](https://github.com/${{ github.repository }}/compare/${TAG}^...${TAG}) for details."
+          
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG with release notes
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        run: |
+          TAG="${{ steps.extract-tag.outputs.tag }}"
+          PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
+          PR_TITLE="${{ steps.pr-info.outputs.pr_title }}"
+          MILESTONE_TITLE="${{ steps.extract-milestone.outputs.title }}"
+          RELEASE_DATE=$(date -u +%Y-%m-%d)
+          
+          # Build new changelog section (Keep a Changelog style)
+          {
+            echo "## [${TAG}] - ${RELEASE_DATE}"
+            echo "### Summary"
+            echo "${PR_TITLE}"
+            echo ""
+            [ -n "$MILESTONE_TITLE" ] && echo "**Milestone:** ${MILESTONE_TITLE}" && echo ""
+            echo "Merged in PR [#${PR_NUMBER}](https://github.com/${{ github.repository }}/pull/${PR_NUMBER})."
+            echo ""
+          } > CHANGELOG.new
+          
+          # Insert new section before the first existing version heading
+          LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
+          head -n $((LINE - 1)) CHANGELOG.md > CHANGELOG.md.tmp
+          cat CHANGELOG.new >> CHANGELOG.md.tmp
+          tail -n +$LINE CHANGELOG.md >> CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+          rm CHANGELOG.new
+
+      - name: Commit and push CHANGELOG update
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No CHANGELOG changes to commit"
+          else
+            git commit -m "chore: update CHANGELOG for ${{ steps.extract-tag.outputs.tag }}"
+            git push
+          fi
+
+      - name: Create GitHub Release
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.extract-tag.outputs.tag }}
+          name: Release ${{ steps.extract-tag.outputs.tag }}
+          target_commitish: main
+          generate_release_notes: true
+          body: ${{ steps.release-body.outputs.body }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip release (tag already exists)
+        if: steps.check-tag.outputs.exists == 'true'
+        run: |
+          echo "⏭️ Skipping release creation - tag ${{ steps.extract-tag.outputs.tag }} already exists"
+
+      - name: Skip release (no PR found)
+        if: steps.pr-info.outputs.found != 'true'
+        run: |
+          echo "⏭️ Skipping release creation - no PR from development → main found in recent commits"
+
+      - name: Skip release (no tag found)
+        if: steps.pr-info.outputs.found == 'true' && steps.extract-tag.outputs.found != 'true'
+        run: |
+          echo "⏭️ Skipping release creation - no release tag found in PR body"
