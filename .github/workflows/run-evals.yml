@@ -181,8 +181,7 @@ jobs:
             auto-generated
             evals
 
-      # PRs created by GITHUB_TOKEN do not trigger other workflows, so auto_chore_pr_status never runs.
-      # Set "Run Tests" success ourselves so branch protection is satisfied, then merge.
+      # PRs created by GITHUB_TOKEN do not trigger other workflows; set "Run Tests" ourselves so branch protection is satisfied, then merge.
       - name: Set Run Tests status to success
         if: steps.cpr.outputs.pull-request-number != ''
         env:

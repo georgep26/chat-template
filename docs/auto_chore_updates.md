@@ -6,9 +6,19 @@ This repo keeps branch protection on `main` (PR required, required status check 
 
 1. A workflow creates a **chore PR** from a bot branch (e.g. `bot/evals-results`, `bot/release-changelog`, `bot/aggregate-evals`) that only touches allowlisted paths.
 2. **Run Tests** must be set to success so branch protection allows the merge. Because PRs created by `GITHUB_TOKEN` do not trigger other workflows (GitHub prevents recursive runs), the **creating workflow** sets the **Run Tests** commit status itself on the PR head commit, then merges with **GITHUB_TOKEN**.
-3. **Chore PR Status** (`.github/workflows/auto_chore_pr_status.yml`) still runs when a chore PR is opened by other means (e.g. manually or via a PAT). For automation using `GITHUB_TOKEN`, the workflow that creates the PR sets the status directly.
 
 No bypass list or PAT/App token is required for these chore PRs.
+
+## Workflow permissions
+
+For chore workflows to create and merge PRs with `GITHUB_TOKEN`, the repository must allow it:
+
+1. In GitHub, go to **Settings** → **Actions** → **General**.
+2. Under **Workflow permissions**, choose **Read and write permissions** so workflows have read and write access for all scopes.
+3. Under **Pull request creation permissions**, check **Allow GitHub Actions to create and approve pull requests**.
+4. Click **Save**.
+
+Without these settings, chore workflows may fail when creating or merging PRs (e.g. "Resource not accessible by integration").
 
 ## Allowed chore paths
 
@@ -20,7 +30,7 @@ Only these paths qualify for the lightweight Run Tests pass:
 
 ## Allowed bot branches
 
-The Chore PR Status workflow posts Run Tests success only for PRs whose **head** branch is one of:
+Chore PRs use these **head** branches (one per workflow):
 
 - `bot/evals-results`
 - `bot/release-changelog`
@@ -57,6 +67,7 @@ The main **Pull Request** workflow uses `paths-ignore: evals/eval_outputs/**` so
 
 ## Troubleshooting
 
+- **PR creation or merge fails ("Resource not accessible by integration")** — Ensure [Workflow permissions](#workflow-permissions) are set to **Read and write permissions** and **Allow GitHub Actions to create and approve pull requests** is enabled.
 - **PR stays open** — The creating workflow sets Run Tests itself; if it timed out before merge (check it’s triggered by the path and that the head branch is allowlisted). Merge the PR manually if the diff is correct.
-- **Run Tests never passes** — For automation-created PRs, the same workflow sets the status; ensure the job has `statuses: write`. For manually opened chore PRs, ensure the head branch is allowlisted and only allowlisted paths are changed.
+- **Run Tests never passes** — The creating workflow sets the status; ensure its job has `statuses: write`. Chore PRs are intended to be created only by the workflows above; manually opened chore PRs would need Run Tests set some other way (e.g. run the corresponding workflow or merge with admin override).
 - **Required check missing** — Branch protection expects a check named **Run Tests**. Do not rename that context without updating branch protection.

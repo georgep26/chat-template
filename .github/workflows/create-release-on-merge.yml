@@ -89,9 +89,11 @@ jobs:
             }
 
             const pr = mergedPR.number ? await github.rest.pulls.get({ owner, repo, pull_number: mergedPR.number }).then(r => r.data) : mergedPR;
+            // Escape backticks so shell does not interpret them when PR body is used in run script
+            const prBody = (pr.body || '').replace(/`/g, '\\`');
             core.setOutput('found', 'true');
             core.setOutput('pr_number', String(pr.number));
-            core.setOutput('pr_body', pr.body || '');
+            core.setOutput('pr_body', prBody);
             core.setOutput('pr_title', pr.title || '');
             core.setOutput('milestone_title', pr.milestone ? pr.milestone.title : '');
             core.setOutput('milestone_number', pr.milestone ? String(pr.milestone.number) : '');
