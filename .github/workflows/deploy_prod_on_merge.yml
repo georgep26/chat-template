@@ -1,5 +1,6 @@
 # On merge to main (push to main): run tests, promote validated staging artifacts,
 # deploy to prod, then run evals in prod.
+# Pushes that only add eval results (evals/eval_outputs/**) do not trigger this workflow.
 #
 # Standard process in this repo is full build/deploy per environment. This workflow
 # enables an optional promotion path for prod-on-main so prod reuses staging-validated
@@ -9,6 +10,10 @@ name: Deploy to Prod on Merge to Main
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'evals/eval_outputs/**'
+      - 'docs/pr_evals_results/**'
+      - 'CHANGELOG.md'
 
 permissions:
   checks: write
@@ -56,3 +61,4 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      pull-requests: write

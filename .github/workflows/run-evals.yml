@@ -1,10 +1,11 @@
 name: Run Evaluations
 
 # When run on its own (workflow_dispatch), these apply. When called (workflow_call), the caller must
-# grant at least these permissions (both deploy_prod_on_merge and pull_request pass contents: write).
+# grant at least these permissions. For upload_to_main, caller must also grant pull-requests: write.
 permissions:
   id-token: write   # required for AWS credential federation
-  contents: write   # required for manual runs with "Push eval results to main"; callers must grant it too
+  contents: write   # required for creating chore PR
+  pull-requests: write  # required when upload_to_main is true
 
 on:
   workflow_dispatch:
@@ -24,7 +25,7 @@ on:
         default: 'false'
         type: boolean
       upload_to_main:
-        description: 'Push eval results to evals/eval_outputs/<datetime> on main (e.g. after merge to main)'
+        description: 'Create chore PR with eval results to main; chore status workflow sets Run Tests, then merge with GITHUB_TOKEN'
         required: false
         default: 'false'
         type: boolean
@@ -36,7 +37,7 @@ on:
         default: 'staging'
         type: string
       upload_to_main:
-        description: 'Push eval results to evals/eval_outputs/<datetime> on main'
+        description: 'Create chore PR with eval results to main; chore status workflow then GITHUB_TOKEN merge'
         required: false
         default: false
         type: boolean
@@ -146,23 +147,60 @@ jobs:
           path: evals/eval_outputs/
           retention-days: 7
 
-      - name: Push eval results to main
+      # Stage only the new eval output dir (path is in .gitignore) for the PR.
+      - name: Stage eval results for PR
         if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
         run: |
           RUN_NAME="${{ steps.generate-run-name.outputs.run_name }}"
-          git fetch origin main
-          git checkout main
-          git pull origin main
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ ! -d "evals/eval_outputs/$RUN_NAME" ]; then
+            echo "No eval output dir found at evals/eval_outputs/$RUN_NAME"
+            exit 1
+          fi
           git add -f "evals/eval_outputs/$RUN_NAME"
           git status
-          if git diff --staged --quiet; then
-            echo "No new eval outputs to commit."
-          else
-            git commit -m "chore(evals): add eval results $RUN_NAME [skip ci]"
-            git push origin main
-          fi
+
+      - name: Create pull request for eval results
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
+        id: cpr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bot/evals-results
+          base: main
+          add-paths: |
+            evals/eval_outputs/
+          commit-message: |
+            chore(evals): add eval results ${{ steps.generate-run-name.outputs.run_name }} [skip ci]
+          title: "chore(evals): add eval results to main"
+          body: |
+            Automated eval results from production run.
+            Run name: `${{ steps.generate-run-name.outputs.run_name }}`
+            [skip ci]
+          labels: |
+            auto-generated
+            evals
+
+      # Chore PR Status workflow sets "Run Tests" success for this PR; wait then merge with GITHUB_TOKEN.
+      - name: Wait for Run Tests status and merge chore PR
+        if: steps.cpr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="${{ steps.cpr.outputs.pull-request-head-sha }}"
+          PR_NUM="${{ steps.cpr.outputs.pull-request-number }}"
+          echo "Waiting for 'Run Tests' status on $SHA (PR #$PR_NUM)..."
+          for i in $(seq 1 24); do
+            STATE=$(gh api "/repos/${{ github.repository }}/commits/$SHA/status" -q '.statuses[] | select(.context == "Run Tests") | .state' 2>/dev/null || true)
+            if [ "$STATE" = "success" ]; then
+              echo "Run Tests passed; merging PR."
+              gh pr merge "$PR_NUM" --squash
+              exit 0
+            fi
+            echo "Attempt $i/24: Run Tests state=${STATE:-pending}; waiting 10s..."
+            sleep 10
+          done
+          echo "Timeout waiting for Run Tests; PR left open for manual merge."
+          exit 0
 
       # - name: Merge main into development
       #   if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
