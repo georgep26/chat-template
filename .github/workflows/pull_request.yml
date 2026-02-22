@@ -2,9 +2,12 @@ name: Pull Request Workflow
 
 # PRs from development → main: run tests, deploy to staging, then run evals in staging.
 # PRs to development: run tests, then path-filtered evals only (no staging deploy).
+# Eval-results-only PRs (bot/evals-results → main) do not trigger this workflow.
 on:
   pull_request:
     branches: [main, development]
+    paths-ignore:
+      - 'evals/eval_outputs/**'
 
 permissions:
   checks: write
@@ -72,11 +75,12 @@ jobs:
               - 'evals/evals_config.yaml'
               - '.github/workflows/run-evals.yml'
 
-      # For PRs targeting main (development → main), always run evals. Otherwise use path filter.
+      # For PRs from development → main, always run evals. Otherwise use path filter.
+      # (Eval-results PRs are already excluded by paths-ignore.)
       - name: Set whether to run evals
         id: set-should-run
         run: |
-          if [ "${{ github.base_ref }}" == "main" ]; then
+          if [ "${{ github.base_ref }}" == "main" ] && [ "${{ github.head_ref }}" == "development" ]; then
             echo "should-run=true" >> $GITHUB_OUTPUT
           else
             echo "should-run=${{ steps.filter.outputs.evals }}" >> $GITHUB_OUTPUT
@@ -100,7 +104,7 @@ jobs:
   # Deploy to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
     name: Deploy Lambda to Staging
-    if: github.base_ref == 'main'
+    if: github.base_ref == 'main' && github.head_ref == 'development'
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:

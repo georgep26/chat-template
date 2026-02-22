@@ -1,20 +1,24 @@
 # On merge to main: extract release tag and milestone from merged PR, then create GitHub release.
-# This workflow runs after code is merged to main and creates a release automatically.
+# Pushes that only add eval results do not trigger this workflow.
 name: Create Release on Merge to Main
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'evals/eval_outputs/**'
+      - 'docs/pr_evals_results/**'
+      - 'CHANGELOG.md'
 
 permissions:
   contents: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'chore: update CHANGELOG for ')
+    if: ${{ github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'chore: update CHANGELOG for ') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -220,18 +224,42 @@ jobs:
           mv CHANGELOG.md.tmp CHANGELOG.md
           rm CHANGELOG.new
 
-      - name: Commit and push CHANGELOG update
+      - name: Create PR for CHANGELOG update
         if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
+        id: changelog-pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bot/release-changelog
+          base: main
+          add-paths: CHANGELOG.md
+          commit-message: |
+            chore: update CHANGELOG for ${{ steps.extract-tag.outputs.tag }}
+          title: "chore: update CHANGELOG for ${{ steps.extract-tag.outputs.tag }}"
+          body: "Automated CHANGELOG update for release ${{ steps.extract-tag.outputs.tag }}."
+          labels: auto-generated
+
+      # Chore PR Status workflow sets "Run Tests" success for this PR; wait then merge with GITHUB_TOKEN.
+      - name: Wait for Run Tests status and merge chore PR
+        if: steps.changelog-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          if git diff --staged --quiet; then
-            echo "No CHANGELOG changes to commit"
-          else
-            git commit -m "chore: update CHANGELOG for ${{ steps.extract-tag.outputs.tag }}"
-            git push
-          fi
+          SHA="${{ steps.changelog-pr.outputs.pull-request-head-sha }}"
+          PR_NUM="${{ steps.changelog-pr.outputs.pull-request-number }}"
+          echo "Waiting for 'Run Tests' status on $SHA (PR #$PR_NUM)..."
+          for i in $(seq 1 24); do
+            STATE=$(gh api "/repos/${{ github.repository }}/commits/$SHA/status" -q '.statuses[] | select(.context == "Run Tests") | .state' 2>/dev/null || true)
+            if [ "$STATE" = "success" ]; then
+              echo "Run Tests passed; merging PR."
+              gh pr merge "$PR_NUM" --squash
+              exit 0
+            fi
+            echo "Attempt $i/24: Run Tests state=${STATE:-pending}; waiting 10s..."
+            sleep 10
+          done
+          echo "Timeout waiting for Run Tests; PR left open for manual merge."
+          exit 0
 
       - name: Create GitHub Release
         if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true'
