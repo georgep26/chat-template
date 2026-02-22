@@ -1,0 +1,65 @@
+{
+  "metrics": {
+    "faithfulness": {
+      "mean": 0.8916666666666666,
+      "std": 0.1572330188676101,
+      "median": 0.95,
+      "min": 0.6666666666666666,
+      "max": 1.0,
+      "ci_lower": 0.7499999999999999,
+      "ci_upper": 1.0
+    },
+    "answer_relevancy": {
+      "mean": 0.8640237377400303,
+      "std": 0.11955641664256111,
+      "median": 0.8992748724948028,
+      "min": 0.6972841666558915,
+      "max": 0.9602610393146239,
+      "ci_lower": 0.7579863496240035,
+      "ci_upper": 0.9501769689214815
+    },
+    "context_precision": {
+      "mean": 0.4688712521935834,
+      "std": 0.3786362767574978,
+      "median": 0.42361111109926386,
+      "min": 0.09999999999,
+      "max": 0.9282627865858059,
+      "ci_lower": 0.162499999989375,
+      "ci_upper": 0.7752425043977919
+    },
+    "context_recall": {
+      "mean": 0.875,
+      "std": 0.25,
+      "median": 1.0,
+      "min": 0.5,
+      "max": 1.0,
+      "ci_lower": 0.625,
+      "ci_upper": 1.0
+    },
+    "correctness_binary": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0
+    },
+    "correctness_atomic": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0
+    }
+  },
+  "run": {
+    "evaluation_run_name": "2026-02-22T19-34-27Z_v0.0.3",
+    "mode": "lambda",
+    "run_timestamp": "2026-02-22T19:37:02.393859",
+    "num_validation_questions": 4,
+    "notes": "PR Evaluation"
+  }
+}

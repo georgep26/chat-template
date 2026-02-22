@@ -5,6 +5,14 @@ All notable changes to this project will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.3] - 2026-02-22
+### Summary
+Release v0.0.3: CI/CD and release automation
+
+**Milestone:** ** v0.0.3
+
+Merged in PR [#104](https://github.com/georgep26/chat-template/pull/104).
+
 ## [v0.0.2] - 2026-02-22
 ### Summary
 Release v0.0.2
