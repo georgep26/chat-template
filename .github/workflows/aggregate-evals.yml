@@ -24,6 +24,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      statuses: write
       actions: read
     
     steps:
@@ -90,7 +91,18 @@ jobs:
           body: "Automated aggregation of evaluation results."
           labels: auto-generated
 
-      # Chore PR Status workflow sets "Run Tests" success for this PR; wait then merge with GITHUB_TOKEN.
+      # PRs created by GITHUB_TOKEN do not trigger other workflows; set "Run Tests" success ourselves.
+      - name: Set Run Tests status to success
+        if: steps.agg-pr.outputs.pull-request-number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/repos/${{ github.repository }}/statuses/${{ steps.agg-pr.outputs.pull-request-head-sha }}" \
+            -f context="Run Tests" \
+            -f state="success" \
+            -f description="Chore-only PR; no tests required" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Wait for Run Tests status and merge chore PR
         if: steps.agg-pr.outputs.pull-request-number != ''
         env:

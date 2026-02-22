@@ -1,6 +1,6 @@
 # Development Process
 
-Below is an outline of the development process for both humans and AI agents.
+Below is an outline of the development process for both humans and AI agents. The intent of this process is to orchestrate and organize the development of an application in a clear and automated way.
 
 ## Branch Structure
 
@@ -14,19 +14,21 @@ Ideally we pair our repos with GitHub Projects to enhance task tracking. Below a
 
 For more information on how to setup the GitHub project, see the gh_project_setup.md file.
 
-Tabs:
+### Tabs Overview
 - Backlog: All incoming issues go through the backlog. Issues should be tagged as:
     - "Feature": new feature that doesn't currently exist in the application 
     - "Bug": an error or bug identified that needs to be fixed 
     - "Task": general task not related to writing new code
     - "Epic": a large feature that is broken down into smaller issues
     - "Initiative": a majore milestone, typically accomplished on the scale of a month or more
-- Triage/Sprint Planning: Table view of issues with issues grouped by Sprint. Allows you to plan what gets done in each sprint. You can also assign tasks to specific individuals (or AI agents).
-- Current status: Kanban board grouped by each person. This can be used in standup meetings. Main idea is to provide the current status of development activities and report any blockers. All issues should have a "blocked" tag that is visible in this view and can be used to highlight issues.
+- Sprint Planning - Triage: Table view of issues with issues grouped by Sprint. Allows you to plan what gets done in each sprint. You can also assign tasks to specific individuals (or AI agents).
+- Daily Management Board: Kanban board grouped by each person. This can be used in standup meetings. Main idea is to provide the current status of development activities and report any blockers. All issues should have a "blocked" tag that is visible in this view and can be used to highlight issues.
+- Rollup: Table view of issues with issues grouped by Epic. This is used to track the progress of the epics and initiatives.
+- Roadmap: Roadmap view of issues with issues grouped by Epic. This is used to track the progress of the epics and initiatives.
 - QA Review: Tab with all issues that are in QA review and marked as "In Review"
-- My Tasks: Tab with all issues that are assigned to the current user. This tab should include all issues assigned to the user, sorted by priority.
+- My Tasks: Tab with all issues that are assigned to the current user. This tab should include all issues assigned to the user, sorted by priority. Developers should use this tab to understand their current tasks and prioritize their work.
 
-Issue Fields:
+### Issue Fields
 Type: Feature, Bug, or Task
 Status: 
 - Backlog: Idea in the backlog, not processed yet.
@@ -38,7 +40,7 @@ Assignee: Person or AI agent assigned to the task.
 Sprint: The sprint the issue is assigned to. Should be blank for incomming backlog.
 Tags: Includes things like "blocked", "good first issue" (for new developers), "question" (raise a question with the team)
 
-Issue Hierarchy:
+### Issue Hierarchy
 The overall hierarchy for issues is: Initiative -> Epic -> Feature/Bug/Task -> Sub-task.
 Initiative: A major milestone, typically accomplished on the scale of a month or more.
 Epic: A large feature that is broken down into smaller issues.
@@ -46,11 +48,21 @@ Feature/Bug/Task: A smaller feature or bug that is part of the epic.
 Sub-task: A smaller feature or bug that is part of the feature/bug/task.
 For a detailed description of each issue type, see (this article)[https://www.launchnotes.com/blog/initiative-vs-epic-vs-feature-understanding-the-key-differences].
 
-Priority Definition:
+### Priority Definition
 - P0: Critical issues that must be resolved immediately (block other work, addressed within 1-2 business days).
 - P1: High priority issues that should be addressed soon (should be addressed within 3-5 days).
 - P2: Medium priority issues that can be addressed in the near future (should be addressed within 2 weeks).
 - P3: Low priority issues that can be addressed in the distant future (should be addressed within 1-2 months).
+
+### GitHub Project Workflow
+Below is a rough outline of the workflow for using GitHub projects to manage the development process.
+1. Create new issues in the backlog tab. This can include feature ideas, bugs, or general tasks.
+2. Prior to a sprint, the team should review the backlog and triage the issues in the sprint planning tab. This includes:
+   - Organizing the issues into sprints
+   - Assigning issues to individuals
+   - Determining the priority of the issues
+   - Alligning an issue to an epic or initiative
+   - Labeling an issue under a particular release/milestone (e.g. v1.1.1, v2.1.2, etc.)
 
 ## Development Workflow
 
