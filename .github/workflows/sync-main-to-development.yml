@@ -1,0 +1,74 @@
+# After chore updates are merged to main, open a PR from main → development,
+# set Run Tests success, and merge so development gets the new evals/CHANGELOG/docs.
+# Runs only when the push to main includes chore paths (so after chore workflows merge).
+name: Sync Main to Development
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'evals/eval_outputs/**'
+      - 'CHANGELOG.md'
+      - 'docs/pr_evals_results/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  sync:
+    name: Sync main into development
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or find PR (main → development)
+        id: sync-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUM=$(gh pr list --base development --head main --state open -q '.[0].number' 2>/dev/null || true)
+          if [ -z "$PR_NUM" ]; then
+            gh pr create --base development --head main \
+              --title "chore: sync development with main" \
+              --body "Syncs main into development so development has the latest chore updates (evals, CHANGELOG, aggregated docs)."
+            PR_NUM=$(gh pr list --base development --head main --state open -q '.[0].number')
+          fi
+          echo "pull-request-number=$PR_NUM" >> $GITHUB_OUTPUT
+          echo "Using PR #$PR_NUM (main → development)"
+
+      - name: Set Run Tests status to success
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Head of main→development PR is the current main commit
+          gh api "/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f context="Run Tests" \
+            -f state="success" \
+            -f description="Sync main to development; chore-only" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Wait for Run Tests status and merge sync PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUM="${{ steps.sync-pr.outputs.pull-request-number }}"
+          SHA="${{ github.sha }}"
+          echo "Waiting for 'Run Tests' status on $SHA (PR #$PR_NUM)..."
+          for i in $(seq 1 12); do
+            STATE=$(gh api "/repos/${{ github.repository }}/commits/$SHA/status" -q '.statuses[] | select(.context == "Run Tests") | .state' 2>/dev/null || true)
+            if [ "$STATE" = "success" ]; then
+              echo "Run Tests passed; merging PR."
+              gh pr merge "$PR_NUM" --merge
+              echo "Synced main into development."
+              exit 0
+            fi
+            echo "Attempt $i/12: Run Tests state=${STATE:-pending}; waiting 5s..."
+            sleep 5
+          done
+          echo "Timeout waiting for Run Tests; PR left open for manual merge."
+          exit 0

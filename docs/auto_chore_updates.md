@@ -45,6 +45,7 @@ PRs from any other branch (e.g. `development`) do not get the auto-pass even if 
 | Run Evaluations (upload_to_main) | `bot/evals-results` | `evals/eval_outputs/**` |
 | Create Release on Merge to Main | `bot/release-changelog` | `CHANGELOG.md` |
 | Aggregate Evaluation Results | `bot/aggregate-evals` | `docs/pr_evals_results/**` |
+| Sync Main to Development | *(main → development)* | Runs after pushes to main that touch the paths above. |
 
 ## Merge flow
 
@@ -55,6 +56,16 @@ Each of these workflows:
 3. Polls the commit status API until **Run Tests** is `success` (typically immediate), then runs `gh pr merge <number> --squash --delete-branch` with `GITHUB_TOKEN` (the bot branch is deleted after merge).
 
 If the status does not appear in time, the step exits without failing and the PR remains open for manual merge.
+
+## Syncing main back to development
+
+After chore updates are merged to `main`, the **Sync Main to Development** workflow (`.github/workflows/sync-main-to-development.yml`) runs on push to `main` when the commit touches chore paths. It:
+
+1. Creates a PR from `main` into `development` (or reuses an existing open one).
+2. Sets **Run Tests** to success on the PR head (current `main` commit).
+3. Merges the PR so `development` gets the latest evals, CHANGELOG, and aggregated docs.
+
+Branch protection on `development` is satisfied by the same Run Tests status pattern; the workflow does not push directly. The sync runs only when the push to `main` includes `evals/eval_outputs/**`, `CHANGELOG.md`, or `docs/pr_evals_results/**`, i.e. after one of the chore workflows has merged.
 
 ## Recursion protection
 
