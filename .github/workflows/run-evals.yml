@@ -210,6 +210,113 @@ jobs:
           path: evals/eval_outputs/
           retention-days: 7
 
+      - name: Build eval results comment for PR
+        if: steps.check-branch.outputs.skip != 'true' && github.event_name == 'pull_request'
+        id: eval-comment
+        shell: bash -l {0}
+        run: |
+          SUMMARY_JSON=$(find evals/eval_outputs -name 'summary.json' -type f | head -1)
+          if [ -z "$SUMMARY_JSON" ]; then
+            echo "No summary.json found; skipping comment."
+            echo "comment_path=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          export SUMMARY_JSON
+          python << 'PYEOF'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = os.environ.get("SUMMARY_JSON")
+          if not summary_path or not Path(summary_path).exists():
+              summary_path = next(Path("evals/eval_outputs").rglob("summary.json"), None)
+          if not summary_path or not Path(summary_path).exists():
+              Path("eval-comment.md").write_text("")
+              raise SystemExit(0)
+          summary_path = Path(summary_path)
+
+          with open(summary_path) as f:
+              data = json.load(f)
+
+          metrics = data.get("metrics", {})
+          run_info = data.get("run", {})
+
+          lines = [
+              "## 📊 Evaluation Results",
+              "",
+              "| Metric | Mean | Std | Min | Max |",
+              "|--------|------|-----|-----|-----|",
+          ]
+          for name, m in sorted(metrics.items()):
+              mean = m.get("mean")
+              std = m.get("std")
+              lo = m.get("min")
+              hi = m.get("max")
+              if mean is not None:
+                  mean_s = f"{mean:.4f}" if isinstance(mean, float) else str(mean)
+                  std_s = f"{std:.4f}" if std is not None and isinstance(std, float) else (str(std) if std is not None else "—")
+                  lo_s = f"{lo:.4f}" if lo is not None and isinstance(lo, (int, float)) else (str(lo) if lo is not None else "—")
+                  hi_s = f"{hi:.4f}" if hi is not None and isinstance(hi, (int, float)) else (str(hi) if hi is not None else "—")
+                  lines.append(f"| {name} | {mean_s} | {std_s} | {lo_s} | {hi_s} |")
+
+          lines.extend([
+              "",
+              "**Run:** " + run_info.get("evaluation_run_name", "—") + " | " +
+              "**Mode:** " + str(run_info.get("mode", "—")) + " | " +
+              "**Validation questions:** " + str(run_info.get("num_validation_questions", "—")) + " | " +
+              "**Timestamp:** " + str(run_info.get("run_timestamp", "—"))[:26],
+              "",
+          ])
+          if run_info.get("notes"):
+              lines.append("**Notes:** " + str(run_info["notes"]))
+
+          Path("eval-comment.md").write_text("\n".join(lines))
+          PYEOF
+          # Pass path for next step (empty if no summary)
+          if [ -f eval-comment.md ] && [ -s eval-comment.md ]; then
+            echo "comment_path=eval-comment.md" >> $GITHUB_OUTPUT
+          else
+            echo "comment_path=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post or update eval results comment on PR
+        if: steps.check-branch.outputs.skip != 'true' && github.event_name == 'pull_request' && steps.eval-comment.outputs.comment_path != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const commentPath = '${{ steps.eval-comment.outputs.comment_path }}';
+            if (!commentPath) return;
+            const body = fs.readFileSync(commentPath, 'utf8');
+            const prNumber = context.payload.pull_request?.number;
+            if (!prNumber) return;
+
+            const marker = '## 📊 Evaluation Results';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body && c.body.startsWith(marker)
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
       # Stage only the new eval output dir (path is in .gitignore) for the PR.
       - name: Stage eval results for PR
         if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
