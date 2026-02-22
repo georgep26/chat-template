@@ -41,12 +41,14 @@ jobs:
     environment: ${{ inputs.environment || github.event.inputs.environment || 'staging' }}
     permissions:
       id-token: write
-      # contents: read is enough for checkout/run; callers that need push-to-main must pass contents: write
-      contents: read
+      # contents: write required when upload_to_main is true (push eval results + merge main into development)
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check if PR is from development branch
         id: check-branch
@@ -158,4 +160,13 @@ jobs:
             git commit -m "chore(evals): add eval results $RUN_NAME [skip ci]"
             git push origin main
           fi
+
+      # - name: Merge main into development
+      #   if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
+      #   run: |
+      #     git fetch origin main development
+      #     git checkout development
+      #     git pull origin development
+      #     git merge origin/main -m "chore: sync development with main (eval results) [skip ci]"
+      #     git push origin development
 
