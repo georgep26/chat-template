@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ECR Repository for Lambda container images with lifecycle policy'
+Description: 'ECR Repository for Lambda container images; lifecycle policy keeps only the 5 most recent images'
 
 Parameters:
   ProjectName:
@@ -21,7 +21,7 @@ Parameters:
   MaxImageCount:
     Type: Number
     Default: 5
-    Description: 'Maximum number of images to keep in the repository'
+    Description: 'Maximum number of images to keep (only the N most recent are retained; older images are expired)'
 
 Resources:
   ECRRepository:
