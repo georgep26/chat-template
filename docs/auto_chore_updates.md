@@ -52,7 +52,7 @@ Each of these workflows:
 
 1. Creates a PR with `peter-evans/create-pull-request` to `main` from the corresponding bot branch.
 2. Sets the **Run Tests** commit status to success on the PR head SHA (so branch protection is satisfied without relying on another workflow run).
-3. Polls the commit status API until **Run Tests** is `success` (typically immediate), then runs `gh pr merge <number> --squash` with `GITHUB_TOKEN`.
+3. Polls the commit status API until **Run Tests** is `success` (typically immediate), then runs `gh pr merge <number> --squash --delete-branch` with `GITHUB_TOKEN` (the bot branch is deleted after merge).
 
 If the status does not appear in time, the step exits without failing and the PR remains open for manual merge.
 
