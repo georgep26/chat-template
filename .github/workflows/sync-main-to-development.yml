@@ -1,9 +1,15 @@
-# After chore updates are merged to main, open a PR from main → development,
-# set Run Tests success, and merge so development gets the new evals/CHANGELOG/docs.
-# Runs only when the push to main includes chore paths (so after chore workflows merge).
+# After all updates to main (deploy → run-evaluations → create-release with CHANGELOG),
+# sync main into development so development gets evals, CHANGELOG, and docs.
+# Triggered by workflow_run so it runs once after Create Release on Merge completes.
 name: Sync Main to Development
 
 on:
+  workflow_run:
+    workflows: ["Create Release on Merge to Main"]
+    types:
+      - completed
+    branches: [main]
+  # Also run on direct pushes to main that touch chore paths (e.g. manual CHANGELOG/eval updates)
   push:
     branches: [main]
     paths:
@@ -20,11 +26,19 @@ jobs:
   sync:
     name: Sync main into development
     runs-on: ubuntu-latest
+    # When triggered by workflow_run, only run after successful release (so main has evals + CHANGELOG)
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # When triggered by workflow_run, use latest main (after create-release merged CHANGELOG)
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+
+      - name: Set commit SHA to use
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
       - name: Create or find PR (main → development)
         id: sync-pr
@@ -45,8 +59,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Head of main→development PR is the current main commit
-          gh api "/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+          # Head of main→development PR is the main commit we're syncing
+          gh api "/repos/${{ github.repository }}/statuses/${{ steps.sha.outputs.sha }}" \
             -f context="Run Tests" \
             -f state="success" \
             -f description="Sync main to development; chore-only" \
@@ -57,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUM="${{ steps.sync-pr.outputs.pull-request-number }}"
-          SHA="${{ github.sha }}"
+          SHA="${{ steps.sha.outputs.sha }}"
           echo "Waiting for 'Run Tests' status on $SHA (PR #$PR_NUM)..."
           for i in $(seq 1 12); do
             STATE=$(gh api "/repos/${{ github.repository }}/commits/$SHA/status" -q '.statuses[] | select(.context == "Run Tests") | .state' 2>/dev/null || true)
