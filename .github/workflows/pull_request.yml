@@ -95,12 +95,13 @@ jobs:
     with:
       environment: staging
     secrets: inherit
-    # run-evals.yml declares contents: write and pull-requests: write; caller must grant both.
+    # run-evals.yml declares contents, pull-requests, and statuses: write; caller must grant all.
     # This job does not pass upload_to_main, so it never creates or merges a PR.
     permissions:
       id-token: write
       contents: write
       pull-requests: write
+      statuses: write
 
   # Deploy to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
