@@ -113,6 +113,7 @@ gh pr create \
 - Use `required_permissions: ["all"]` when calling `run_terminal_cmd` so `gh` can access GitHub API
 - Create a temporary file with the filled template content
 - Clean up the temporary file after PR creation
+- **Do not add** "Made by Cursor", "Created by Cursor", or any similar attribution or footer to the PR body or filled template—use only the template sections and the content derived from the analysis above.
 
 ### 9. Report Results
 - Show the PR URL returned by `gh pr create`

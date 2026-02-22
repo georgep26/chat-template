@@ -225,14 +225,14 @@ resources:
       table_name: "bedrock_integration.bedrock_kb"
       s3_bucket_name: "{project}-{env}-s3-bucket"
       s3_inclusion_prefix: "kb_sources/"
-  # ECR repository for RAG Lambda
+  # ECR repository for RAG Lambda (lifecycle policy keeps only the 5 most recent images)
   rag_lambda_ecr:
     enabled: true
     template: resources/ecr_repo_template.yaml
     stack_name: "{project}-rag-lambda-ecr-{env}"
     config:
       repository_name: "{project}-rag-lambda-{env}"
-      max_image_count: 5
+      max_image_count: 5  # only this many images retained; older ones expired automatically
   # RAG Lambda function
   rag_lambda:
     enabled: true
