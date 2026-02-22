@@ -56,13 +56,20 @@ For a detailed description of each issue type, see (this article)[https://www.la
 
 ### GitHub Project Workflow
 Below is a rough outline of the workflow for using GitHub projects to manage the development process.
-1. Create new issues in the backlog tab. This can include feature ideas, bugs, or general tasks.
+1. Create new issues in the backlog tab. This can include feature ideas, bugs, or general tasks. When creating a new issue, no priority will be set by default. However, high priority issues should be labeled accordingly based on the priority definition in **Priority Definition**. This will surface higher priority items to the top of the backlog.
 2. Prior to a sprint, the team should review the backlog and triage the issues in the sprint planning tab. This includes:
-   - Organizing the issues into sprints
+   - Organizing the issues into sprints. Create new sprints as needed with the appropriate start and end dates.
    - Assigning issues to individuals
    - Determining the priority of the issues
    - Alligning an issue to an epic or initiative
    - Labeling an issue under a particular release/milestone (e.g. v1.1.1, v2.1.2, etc.)
+3. During the sprint, each developer should update the status of their issues in the daily management board. This should include:
+   - Update the status of the issue to "In Progress" when they start working on the issue
+   - Set tags for blockers or questions
+4. Once an issue is complete, the developer should submit a PR from their feature branch to the development branch. This should move the issue to "In Review" in the daily management board.
+5. When all changes for a particular release are complete and merged to development, a PR can be submitted from development to main. This will automatically deploy all changes to staging, run evals, and tests. Once deployment is complete, the PM should review the issues in "QA Review" and confirm they are working as expected in the staging environment. 
+6. Once the QA review is complete and all issues are working as expected in staging, the PR can be merged to main. This will automatically deploy all changes to production. Clicking the "Merge" button should be considered a sign off from the PM that the release is ready to be deployed to production.
+
 
 ## Development Workflow
 

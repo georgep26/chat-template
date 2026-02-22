@@ -142,9 +142,9 @@ jobs:
             echo "found=true" >> $GITHUB_OUTPUT
             echo "✅ Found milestone: $MILESTONE_TITLE"
           else
-            # Try to extract from PR body as fallback
+            # Try to extract from PR body as fallback (skip optional ** after colon)
             PR_BODY="${{ steps.pr-info.outputs.pr_body }}"
-            MILESTONE=$(echo "$PR_BODY" | grep -oP '(?i)Milestone:\s*\K[^\n]+' | xargs || echo "")
+            MILESTONE=$(echo "$PR_BODY" | grep -oP '(?i)Milestone:\s*\**\s*\K[^\n*]+' | sed 's/\*$//' | xargs || echo "")
             
             if [ -n "$MILESTONE" ]; then
               echo "title=$MILESTONE" >> $GITHUB_OUTPUT
@@ -299,7 +299,9 @@ jobs:
         with:
           script: |
             const milestoneNumber = '${{ steps.extract-milestone.outputs.number }}';
-            const milestoneTitle = '${{ steps.extract-milestone.outputs.title }}';
+            let milestoneTitle = '${{ steps.extract-milestone.outputs.title }}';
+            // Normalize: strip leading/trailing markdown bold (**) and whitespace
+            milestoneTitle = (milestoneTitle || '').replace(/^\s*\*+\s*|\s*\*+\s*$/g, '').trim();
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
