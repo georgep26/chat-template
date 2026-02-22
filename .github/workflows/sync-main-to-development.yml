@@ -45,12 +45,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUM=$(gh pr list --base development --head main --state open -q '.[0].number' 2>/dev/null || true)
+          PR_NUM=$(gh pr list --base development --head main --state open --json number -q '.[0].number' 2>/dev/null || true)
           if [ -z "$PR_NUM" ]; then
             gh pr create --base development --head main \
               --title "chore: sync development with main" \
               --body "Syncs main into development so development has the latest chore updates (evals, CHANGELOG, aggregated docs)."
-            PR_NUM=$(gh pr list --base development --head main --state open -q '.[0].number')
+            PR_NUM=$(gh pr list --base development --head main --state open --json number -q '.[0].number')
           fi
           echo "pull-request-number=$PR_NUM" >> $GITHUB_OUTPUT
           echo "Using PR #$PR_NUM (main → development)"
