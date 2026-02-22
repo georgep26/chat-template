@@ -1,0 +1,94 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>RAG Evaluation Report - 2026-02-22T21-08-26Z_v0.0.4</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f4f4f4; }
+  </style>
+</head>
+<body>
+  <h1>RAG Evaluation Report</h1>
+  <h2>Aggregate Metrics</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>Mean</th>
+        <th>Std</th>
+        <th>Median</th>
+        <th>Min</th>
+        <th>Max</th>
+        <th>95% CI (mean)</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+        <tr>
+          <td>faithfulness</td>
+          <td>0.8917</td>
+          <td>0.1572</td>
+          <td>0.9500</td>
+          <td>0.6667</td>
+          <td>1.0000</td>
+          <td>[0.7500, 1.0000]</td>
+        </tr>
+        
+        <tr>
+          <td>answer_relevancy</td>
+          <td>0.6462</td>
+          <td>0.4464</td>
+          <td>0.8122</td>
+          <td>0.0000</td>
+          <td>0.9603</td>
+          <td>[0.2401, 0.9437]</td>
+        </tr>
+        
+        <tr>
+          <td>context_precision</td>
+          <td>0.5016</td>
+          <td>0.4158</td>
+          <td>0.4532</td>
+          <td>0.1000</td>
+          <td>1.0000</td>
+          <td>[0.1625, 0.8407]</td>
+        </tr>
+        
+        <tr>
+          <td>context_recall</td>
+          <td>0.8750</td>
+          <td>0.2500</td>
+          <td>1.0000</td>
+          <td>0.5000</td>
+          <td>1.0000</td>
+          <td>[0.6250, 1.0000]</td>
+        </tr>
+        
+        <tr>
+          <td>correctness_binary</td>
+          <td>1.0000</td>
+          <td>0.0000</td>
+          <td>1.0000</td>
+          <td>1.0000</td>
+          <td>1.0000</td>
+          <td>[1.0000, 1.0000]</td>
+        </tr>
+        
+        <tr>
+          <td>correctness_atomic</td>
+          <td>1.0000</td>
+          <td>0.0000</td>
+          <td>1.0000</td>
+          <td>1.0000</td>
+          <td>1.0000</td>
+          <td>[1.0000, 1.0000]</td>
+        </tr>
+        
+    </tbody>
+  </table>
+</body>
+</html>
