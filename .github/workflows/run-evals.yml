@@ -1,10 +1,10 @@
 name: Run Evaluations
 
-# When run on its own (workflow_dispatch), these apply. When called by another workflow (workflow_call),
-# the caller's permissions are used instead (e.g. deploy_prod_on_merge passes contents: write; pull_request passes contents: read).
+# When run on its own (workflow_dispatch), these apply. When called (workflow_call), the caller must
+# grant at least these permissions (both deploy_prod_on_merge and pull_request pass contents: write).
 permissions:
   id-token: write   # required for AWS credential federation
-  contents: write   # required when running manually with "Push eval results to main" enabled
+  contents: write   # required for manual runs with "Push eval results to main"; callers must grant it too
 
 on:
   workflow_dispatch:

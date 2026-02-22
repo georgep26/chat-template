@@ -91,9 +91,11 @@ jobs:
     with:
       environment: staging
     secrets: inherit
+    # Must grant contents: write because run-evals.yml declares it (needed for manual runs with "Push to main").
+    # This job does not pass upload_to_main, so it never pushes.
     permissions:
       id-token: write
-      contents: read
+      contents: write
 
   # Deploy to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
