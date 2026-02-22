@@ -1,14 +1,14 @@
-# On merge to main: extract release tag and milestone from merged PR, then create GitHub release.
-# Pushes that only add eval results do not trigger this workflow.
+# After deploy-to-prod (including run-evaluations) completes: extract release tag and milestone
+# from the merged PR, then create GitHub release. This runs after eval results have been added to main.
+# Triggered by workflow_run so the release is created last.
 name: Create Release on Merge to Main
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Deploy to Prod on Merge to Main"]
+    types:
+      - completed
     branches: [main]
-    paths-ignore:
-      - 'evals/eval_outputs/**'
-      - 'docs/pr_evals_results/**'
-      - 'CHANGELOG.md'
 
 permissions:
   contents: write
@@ -19,7 +19,10 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    if: "${{ github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'chore: update CHANGELOG for ') }}"
+    # Only run after successful deploy (so evals have run and been pushed); skip chore-only pushes
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_commit == null || !startsWith(github.event.workflow_run.head_commit.message, 'chore: update CHANGELOG for '))
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,7 +34,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const commitSha = context.sha;
+            // When triggered by workflow_run, use the merge commit that triggered the deploy workflow
+            const commitSha = context.eventName === 'workflow_run'
+              ? context.payload.workflow_run.head_sha
+              : context.sha;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
@@ -286,6 +292,34 @@ jobs:
           body: ${{ steps.release-body.outputs.body }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Close milestone
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true' && steps.extract-milestone.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const milestoneNumber = '${{ steps.extract-milestone.outputs.number }}';
+            const milestoneTitle = '${{ steps.extract-milestone.outputs.title }}';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            let numberToClose = milestoneNumber ? parseInt(milestoneNumber, 10) : null;
+            if (!numberToClose && milestoneTitle) {
+              const { data: milestones } = await github.rest.issues.listMilestones({
+                owner, repo, state: 'open'
+              });
+              const match = milestones.find(m => m.title === milestoneTitle);
+              if (match) numberToClose = match.number;
+            }
+
+            if (numberToClose) {
+              await github.rest.issues.updateMilestone({
+                owner, repo, milestone_number: numberToClose, state: 'closed'
+              });
+              console.log('Closed milestone: ' + (milestoneTitle || numberToClose));
+            } else {
+              console.log('Could not resolve milestone number (title: ' + (milestoneTitle || 'none') + '); skip closing.');
+            }
 
       - name: Skip release (tag already exists)
         if: steps.check-tag.outputs.exists == 'true'

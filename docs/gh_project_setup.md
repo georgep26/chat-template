@@ -117,6 +117,7 @@ Use this view to see Initiatives → Epics → Tasks/Features and progress rollu
 - **View:** Roadmap
 - **Date fields:** Start Date and Target Complete Date (or your chosen date fields)
 - Use **Markers**, **Sort**, **Date fields**, **Quarter**, **Today** as needed for timeline and current week.
+- **Initiative titles:** Roadmap groups are sorted alphabetically. When creating initiatives via `gh-pm` (or `gh-issue-create`), pass `Start Date` and `Target Complete Date` so the script adds a date range to the title (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`). That keeps initiative groups in chronological order.
 
 #### In review
 

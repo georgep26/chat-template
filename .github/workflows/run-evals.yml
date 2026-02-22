@@ -91,10 +91,72 @@ jobs:
             fi
           fi
 
+      - name: Get release tag from merged PR
+        if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
+        id: get-release-tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commitSha = context.sha;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            async function getPrIfMatch(prNumber) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+              const isBaseMain = pr.base && pr.base.ref === 'main';
+              const isHeadDev = pr.head && pr.head.ref === 'development';
+              const mergeShaMatches = pr.merge_commit_sha && pr.merge_commit_sha === commitSha;
+              if (isBaseMain && isHeadDev && mergeShaMatches) return pr;
+              return null;
+            }
+
+            let mergedPR = null;
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: commitSha
+            });
+            mergedPR = pulls.find(pr => pr.base?.ref === 'main' && pr.head?.ref === 'development');
+
+            if (!mergedPR) {
+              const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: commitSha });
+              const msg = (commit.commit?.message) || '';
+              const firstLine = msg.split(/\r?\n/)[0] || '';
+              const mergeMatch = msg.match(/Merge pull request #(\d+)/i);
+              const squashMatch = firstLine.match(/\(#(\d+)\)\s*$/) || msg.match(/\(#(\d+)\)/);
+              const prNum = mergeMatch?.[1] || squashMatch?.[1];
+              if (prNum) mergedPR = await getPrIfMatch(parseInt(prNum, 10));
+            }
+
+            if (!mergedPR) {
+              const { data: closedPulls } = await github.rest.pulls.list({
+                owner, repo, state: 'closed', base: 'main', sort: 'updated', direction: 'desc', per_page: 15
+              });
+              for (const p of closedPulls) {
+                if (p.head?.ref !== 'development') continue;
+                const full = await getPrIfMatch(p.number);
+                if (full) { mergedPR = full; break; }
+              }
+            }
+
+            let releaseTag = '';
+            if (mergedPR) {
+              const pr = mergedPR.number ? (await github.rest.pulls.get({ owner, repo, pull_number: mergedPR.number })).data : mergedPR;
+              const body = pr.body || '';
+              const match = body.match(/\*\*Release Tag:\*\*\s*`([^`]+)`/i) || body.match(/Release Tag:\s*`([^`]+)`/i);
+              releaseTag = match ? match[1].trim() : '';
+            }
+            core.setOutput('release_tag', releaseTag);
+
       - name: Generate run name for upload to main
         if: steps.check-branch.outputs.skip != 'true' && (inputs.upload_to_main == 'true' || inputs.upload_to_main == true || github.event.inputs.upload_to_main == 'true')
         id: generate-run-name
-        run: echo "run_name=$(date -u +%Y-%m-%dT%H-%M-%SZ)" >> $GITHUB_OUTPUT
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          RELEASE_TAG="${{ steps.get-release-tag.outputs.release_tag }}"
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "run_name=${TIMESTAMP}_${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "run_name=$TIMESTAMP" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Miniconda
         if: steps.check-branch.outputs.skip != 'true'

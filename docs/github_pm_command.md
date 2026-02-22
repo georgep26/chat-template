@@ -54,7 +54,7 @@ The agent will:
 - **Bug**: Something broken, errors, unexpected behavior
 - **Task**: Refactoring, documentation, maintenance, script/config updates
 
-For Epics or Initiatives, say so explicitly (e.g. “create an Epic for …”) so the title gets the correct prefix `[EPIC]` or `[INITIATIVE]`.
+For Epics or Initiatives, say so explicitly (e.g. “create an Epic for …”) so the title gets the correct prefix `[EPIC]` or `[INITIATIVE]`. For **Initiatives**, always provide start and end dates so the title includes the date range (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`), which keeps roadmap groups in the right order.
 
 ## Script reference
 

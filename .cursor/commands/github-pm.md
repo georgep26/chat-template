@@ -39,6 +39,7 @@ Use this when the user asks to create an issue, describes work to track, or repo
 3. **Review templates** in `.github/ISSUE_TEMPLATE/` (feature_request.md, bug_report.md, task.md). Expand the body so **every section** of the chosen template is filled. Use `N/A` only for sections with no applicable content. Do not pad to a fixed bullet count; use as many bullets as the request needs.
 4. **Extract project fields** from user text and pass as `--field "Name=Value"`:
    - Initiative/Epic: use `--type "Initiative"` or `--type "Epic"` so the title gets `[INITIATIVE]` or `[EPIC]`.
+   - **Initiatives**: always pass `--field "Start Date=YYYY-MM-DD"` and `--field "Target Complete Date=YYYY-MM-DD"` (or equivalent like `2/15/26`). The script adds the date range to the initiative title (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`) so the roadmap view sorts initiative groups correctly (roadmap groups are ordered alphabetically).
    - Priority: "priority P0" → `--field "Priority=P0"`.
    - Dates: "start date 2/17/26" → `--field "Start Date=2/17/26"`.
    - Status: "in progress" → `--field "Status=In progress"`.
@@ -110,6 +111,8 @@ When creating or editing a PR that targets the **development** branch, link issu
 - Linked issues must exist as **items in the GitHub Project** named **"Chat Template Project"**. If an issue is not in that project, the workflow will not update its status to In Review (and will log "Issue #N not found in project").
 
 When you are asked to create or describe a PR to development (e.g. from a feature branch or `ci_cd`), use the format above for every issue that should move to In Review on merge.
+
+**PR body and attribution:** Do not add "Made by Cursor", "Created by Cursor", or any similar attribution or footer text to the PR title or body. Use only the content from the template and the issue-linking format above.
 
 ## When Not to Use
 
