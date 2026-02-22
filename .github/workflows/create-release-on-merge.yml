@@ -14,6 +14,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'chore: update CHANGELOG for ')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -78,18 +79,17 @@ jobs:
 
             if (!mergedPR) {
               console.log('No PR from development → main found for this commit');
-              return { found: false };
+              core.setOutput('found', 'false');
+              return;
             }
 
             const pr = mergedPR.number ? await github.rest.pulls.get({ owner, repo, pull_number: mergedPR.number }).then(r => r.data) : mergedPR;
-            return {
-              found: true,
-              pr_number: pr.number,
-              pr_body: pr.body || '',
-              pr_title: pr.title,
-              milestone_title: pr.milestone ? pr.milestone.title : '',
-              milestone_number: pr.milestone ? String(pr.milestone.number) : ''
-            };
+            core.setOutput('found', 'true');
+            core.setOutput('pr_number', String(pr.number));
+            core.setOutput('pr_body', pr.body || '');
+            core.setOutput('pr_title', pr.title || '');
+            core.setOutput('milestone_title', pr.milestone ? pr.milestone.title : '');
+            core.setOutput('milestone_number', pr.milestone ? String(pr.milestone.number) : '');
 
       - name: Extract release tag from PR body
         id: extract-tag
