@@ -112,6 +112,8 @@ When creating or editing a PR that targets the **development** branch, link issu
 
 When you are asked to create or describe a PR to development (e.g. from a feature branch or `ci_cd`), use the format above for every issue that should move to In Review on merge.
 
+**PR body and attribution:** Do not add "Made by Cursor", "Created by Cursor", or any similar attribution or footer text to the PR title or body. Use only the content from the template and the issue-linking format above.
+
 ## When Not to Use
 
 - User only wants to view or discuss issues without running any script (you can answer from context or suggest running fetch-sprint for data).
