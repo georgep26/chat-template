@@ -1,5 +1,6 @@
 # On merge to main (push to main): run tests, promote validated staging artifacts,
-# deploy to prod, then run evals in prod.
+# deploy to prod, then run evals in prod. After this workflow completes (including
+# run-evaluations), Create Release on Merge to Main runs and creates the GitHub release.
 # Pushes that only add eval results (evals/eval_outputs/**) do not trigger this workflow.
 #
 # Standard process in this repo is full build/deploy per environment. This workflow
