@@ -6,6 +6,7 @@ permissions:
   id-token: write   # required for AWS credential federation
   contents: write   # required for creating chore PR
   pull-requests: write  # required when upload_to_main is true
+  statuses: write   # required to set Run Tests status when we create the PR (GITHUB_TOKEN-created PRs do not trigger other workflows)
 
 on:
   workflow_dispatch:
@@ -180,7 +181,19 @@ jobs:
             auto-generated
             evals
 
-      # Chore PR Status workflow sets "Run Tests" success for this PR; wait then merge with GITHUB_TOKEN.
+      # PRs created by GITHUB_TOKEN do not trigger other workflows, so auto_chore_pr_status never runs.
+      # Set "Run Tests" success ourselves so branch protection is satisfied, then merge.
+      - name: Set Run Tests status to success
+        if: steps.cpr.outputs.pull-request-number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/repos/${{ github.repository }}/statuses/${{ steps.cpr.outputs.pull-request-head-sha }}" \
+            -f context="Run Tests" \
+            -f state="success" \
+            -f description="Chore-only PR; no tests required" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Wait for Run Tests status and merge chore PR
         if: steps.cpr.outputs.pull-request-number != ''
         env:
