@@ -22,8 +22,9 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
       github.event_name == 'workflow_dispatch'
     permissions:
-      contents: write  # Required to commit results back to repository
-      actions: read    # Required to read workflow artifacts
+      contents: write
+      pull-requests: write
+      actions: read
     
     steps:
       - name: Checkout code
@@ -67,7 +68,7 @@ jobs:
         id: check-changes
         shell: bash -l {0}
         run: |
-          if [ -n "$(git status --porcelain docs/gh_evals_results)" ]; then
+          if [ -n "$(git status --porcelain docs/pr_evals_results)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "Changes detected in evaluation results"
           else
@@ -75,13 +76,39 @@ jobs:
             echo "No changes to evaluation results"
           fi
 
-      - name: Commit and push results
+      - name: Create PR for aggregated eval results
         if: steps.check-changes.outputs.has_changes == 'true'
-        shell: bash -l {0}
+        id: agg-pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bot/aggregate-evals
+          base: main
+          add-paths: docs/pr_evals_results/
+          commit-message: "Update evaluation results aggregation [skip ci]"
+          title: "chore(docs): update aggregated evaluation results"
+          body: "Automated aggregation of evaluation results."
+          labels: auto-generated
+
+      # Chore PR Status workflow sets "Run Tests" success for this PR; wait then merge with GITHUB_TOKEN.
+      - name: Wait for Run Tests status and merge chore PR
+        if: steps.agg-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add docs/gh_evals_results/
-          git commit -m "Update evaluation results aggregation [skip ci]"
-          git push
+          SHA="${{ steps.agg-pr.outputs.pull-request-head-sha }}"
+          PR_NUM="${{ steps.agg-pr.outputs.pull-request-number }}"
+          echo "Waiting for 'Run Tests' status on $SHA (PR #$PR_NUM)..."
+          for i in $(seq 1 24); do
+            STATE=$(gh api "/repos/${{ github.repository }}/commits/$SHA/status" -q '.statuses[] | select(.context == "Run Tests") | .state' 2>/dev/null || true)
+            if [ "$STATE" = "success" ]; then
+              echo "Run Tests passed; merging PR."
+              gh pr merge "$PR_NUM" --squash
+              exit 0
+            fi
+            echo "Attempt $i/24: Run Tests state=${STATE:-pending}; waiting 10s..."
+            sleep 10
+          done
+          echo "Timeout waiting for Run Tests; PR left open for manual merge."
+          exit 0
 
