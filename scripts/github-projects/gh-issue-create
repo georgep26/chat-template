@@ -66,7 +66,7 @@ Examples:
   gh issue-create bug --title "Login button not working" --body "The login button does nothing when clicked"
   gh issue-create task --title "Update documentation" --assignee @me
   gh issue-create task --title "Release pipeline update" --field "Priority=P0" --field "Start Date=2/17/26"
-  gh issue-create task --title "POC Release" --type "Initiative"
+  gh issue-create task --title "POC Release" --type "Initiative" --field "Start Date=2026-02-15" --field "Target Complete Date=2026-02-28"
   gh issue-create task --title "Implement deploy flow" --field "Parent issue=#20"
 
 Note: This command requires GitHub CLI authentication with project scope.
@@ -523,6 +523,73 @@ infer_project_type_value() {
 
     # 3) Fallback to categorized issue type
     map_issue_type_to_project_type "$issue_type"
+}
+
+# Get value for a project field from PROJECT_FIELDS array (entries are "Name=Value").
+# Usage: get_field_value_from_project_fields "Start Date"
+get_field_value_from_project_fields() {
+    local field_name="$1"
+    local kv key val
+    for kv in "${PROJECT_FIELDS[@]:-}"; do
+        [[ -z "$kv" ]] && continue
+        key="${kv%%=*}"
+        key=$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+        if [[ "$key" == "$field_name" ]]; then
+            val="${kv#*=}"
+            echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g'
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Normalize a date string to YYYY-MM-DD for initiative title (roadmap alphabetical sort).
+# Accepts: YYYY-MM-DD, M/D/YY, M/D/YYYY, MM/DD/YY, etc.
+normalize_date_to_iso() {
+    local raw="$1"
+    [[ -z "$raw" ]] && return 1
+    local trimmed
+    trimmed=$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+    [[ -z "$trimmed" ]] && return 1
+    # Already ISO
+    if [[ "$trimmed" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo "$trimmed"
+        return 0
+    fi
+    # Try macOS date
+    if date -j -f "%m/%d/%Y" "$trimmed" +%Y-%m-%d 2>/dev/null; then return 0; fi
+    if date -j -f "%m/%d/%y" "$trimmed" +%Y-%m-%d 2>/dev/null; then return 0; fi
+    if date -j -f "%Y-%m-%d" "$trimmed" +%Y-%m-%d 2>/dev/null; then return 0; fi
+    # Try GNU date
+    if date -d "$trimmed" +%Y-%m-%d 2>/dev/null; then return 0; fi
+    return 1
+}
+
+# Build initiative date prefix for title: "YYYY-MM-DD to YYYY-MM-DD: " or "YYYY-MM-DD: " or "".
+# Used so roadmap view (which sorts groups alphabetically) orders initiatives by date.
+build_initiative_date_prefix() {
+    local start_val
+    local end_val
+    start_val=$(get_field_value_from_project_fields "Start Date" 2>/dev/null || echo "")
+    end_val=$(get_field_value_from_project_fields "Target Complete Date" 2>/dev/null || echo "")
+    local start_iso=""
+    local end_iso=""
+    [[ -n "$start_val" ]] && start_iso=$(normalize_date_to_iso "$start_val" 2>/dev/null)
+    [[ -n "$end_val" ]] && end_iso=$(normalize_date_to_iso "$end_val" 2>/dev/null)
+    if [[ -n "$start_iso" ]] && [[ -n "$end_iso" ]]; then
+        echo "${start_iso} to ${end_iso}: "
+        return 0
+    fi
+    if [[ -n "$start_iso" ]]; then
+        echo "${start_iso}: "
+        return 0
+    fi
+    if [[ -n "$end_iso" ]]; then
+        echo "${end_iso}: "
+        return 0
+    fi
+    echo ""
+    return 0
 }
 
 # Set the Projects v2 "Type" single-select field on an item.
@@ -1273,6 +1340,14 @@ main() {
         local title_prefix_upper
         title_prefix_upper=$(echo "$title_prefix" | tr '[:lower:]' '[:upper:]')
         full_title="[$title_prefix_upper] $TITLE"
+        # For initiatives, prepend date range so roadmap (alphabetical group sort) orders by date.
+        if [[ "$type_override_normalized" == "Initiative" ]]; then
+            local date_prefix
+            date_prefix=$(build_initiative_date_prefix 2>/dev/null || echo "")
+            if [[ -n "$date_prefix" ]]; then
+                full_title="[$title_prefix_upper] ${date_prefix}$TITLE"
+            fi
+        fi
     fi
     
     # Get default label

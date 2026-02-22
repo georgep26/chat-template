@@ -39,6 +39,7 @@ Use this when the user asks to create an issue, describes work to track, or repo
 3. **Review templates** in `.github/ISSUE_TEMPLATE/` (feature_request.md, bug_report.md, task.md). Expand the body so **every section** of the chosen template is filled. Use `N/A` only for sections with no applicable content. Do not pad to a fixed bullet count; use as many bullets as the request needs.
 4. **Extract project fields** from user text and pass as `--field "Name=Value"`:
    - Initiative/Epic: use `--type "Initiative"` or `--type "Epic"` so the title gets `[INITIATIVE]` or `[EPIC]`.
+   - **Initiatives**: always pass `--field "Start Date=YYYY-MM-DD"` and `--field "Target Complete Date=YYYY-MM-DD"` (or equivalent like `2/15/26`). The script adds the date range to the initiative title (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`) so the roadmap view sorts initiative groups correctly (roadmap groups are ordered alphabetically).
    - Priority: "priority P0" → `--field "Priority=P0"`.
    - Dates: "start date 2/17/26" → `--field "Start Date=2/17/26"`.
    - Status: "in progress" → `--field "Status=In progress"`.
