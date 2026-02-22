@@ -293,6 +293,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Close milestone
+        if: steps.extract-tag.outputs.found == 'true' && steps.check-tag.outputs.exists != 'true' && steps.extract-milestone.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const milestoneNumber = '${{ steps.extract-milestone.outputs.number }}';
+            const milestoneTitle = '${{ steps.extract-milestone.outputs.title }}';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            let numberToClose = milestoneNumber ? parseInt(milestoneNumber, 10) : null;
+            if (!numberToClose && milestoneTitle) {
+              const { data: milestones } = await github.rest.issues.listMilestones({
+                owner, repo, state: 'open'
+              });
+              const match = milestones.find(m => m.title === milestoneTitle);
+              if (match) numberToClose = match.number;
+            }
+
+            if (numberToClose) {
+              await github.rest.issues.updateMilestone({
+                owner, repo, milestone_number: numberToClose, state: 'closed'
+              });
+              console.log('Closed milestone: ' + (milestoneTitle || numberToClose));
+            } else {
+              console.log('Could not resolve milestone number (title: ' + (milestoneTitle || 'none') + '); skip closing.');
+            }
+
       - name: Skip release (tag already exists)
         if: steps.check-tag.outputs.exists == 'true'
         run: |
