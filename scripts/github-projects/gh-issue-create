@@ -28,6 +28,7 @@ ASSIGNEE=""
 LABELS=""
 PROJECT_NAME="Chat Template Project"
 REPO=""
+PROJECT_ID_OVERRIDE=""
 PROJECT_FIELDS=()  # Repeated --field "Name=Value"
 PROJECT_TYPE_OVERRIDE=""
 
@@ -59,6 +60,7 @@ Options:
   --type TYPE            Override project Type field (e.g. Initiative, Epic, Task, Bug, Feature)
   --repo OWNER/REPO      Override repository (default: from infra.yaml or git remote)
   --project NAME         Override project name (default: "Chat Template Project")
+  --project-id ID        Use this project ID (e.g. PVT_xxx) and skip project lookup
   --help, -h             Show this help message
 
 Examples:
@@ -136,6 +138,10 @@ parse_args() {
                 ;;
             --project)
                 PROJECT_NAME="$2"
+                shift 2
+                ;;
+            --project-id)
+                PROJECT_ID_OVERRIDE="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -1428,7 +1434,9 @@ main() {
     # Find project ID
     echo -e "${GREEN}Finding project: $PROJECT_NAME${NC}"
     local project_id
-    if ! project_id=$(find_project_id "$repo" "$PROJECT_NAME"); then
+    if [[ -n "${PROJECT_ID_OVERRIDE:-}" ]] && [[ "${PROJECT_ID_OVERRIDE}" =~ ^PVT_ ]]; then
+        project_id="$PROJECT_ID_OVERRIDE"
+    elif ! project_id=$(find_project_id "$repo" "$PROJECT_NAME"); then
         echo -e "${YELLOW}Warning: Could not find project '$PROJECT_NAME'${NC}"
         echo "Issue created but not added to project. Please add it manually."
         exit 0

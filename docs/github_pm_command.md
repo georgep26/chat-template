@@ -7,6 +7,10 @@ The **github-pm** slash command is an agentic project manager that uses the GitH
 - **gh** installed and authenticated with project scope. The agent runs `gh-pm check-env` and, if needed, instructs you to run `gh auth login` and `gh auth refresh -s project`.
 - The script resolves the repository from `infra/infra.yaml` or the git remote.
 
+## Project notes
+
+The agent reads and updates `docs/github-pm-notes.md` each run: it uses cached project ID and field/status info from the notes before doing API lookups, and it updates the notes when commands fail or when new project details are learned (including at the end of each session).
+
 ## Actions
 
 | Action | Subcommand | Description |

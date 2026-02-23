@@ -116,7 +116,11 @@ run_cleanup_audit() {
     [[ -z "$repo" ]] && echo -e "${RED}Could not resolve repository.${NC}" >&2 && return 1
 
     local project_id
-    project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    if [[ -n "${PROJECT_ID:-}" ]] && [[ "${PROJECT_ID}" =~ ^PVT_ ]]; then
+        project_id="$PROJECT_ID"
+    else
+        project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    fi
     if [[ -z "$project_id" ]] || [[ ! "$project_id" =~ ^PVT_ ]]; then
         if [[ "$OUTPUT_JSON" == true ]]; then
             echo '{"duplicates":[],"orphaned":[],"stale":[],"error":"Project not found or not Project V2"}'
@@ -154,7 +158,7 @@ run_cleanup_audit() {
     ' 2>/dev/null) || orphan_json="[]"
 
     if [[ "$OUTPUT_JSON" == true ]]; then
-        echo "{\"duplicates\":$dup_json,\"orphaned\":$orphan_json,\"stale\":$stale_json}"
+        echo "{\"duplicates\":$dup_json,\"orphaned\":$orphan_json,\"stale\":$stale_json,\"project_id\":\"$project_id\"}"
         return 0
     fi
 
@@ -192,7 +196,11 @@ run_fetch_current_sprint() {
     [[ -z "$repo" ]] && echo -e "${RED}Could not resolve repository.${NC}" >&2 && return 1
 
     local project_id
-    project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    if [[ -n "${PROJECT_ID:-}" ]] && [[ "${PROJECT_ID}" =~ ^PVT_ ]]; then
+        project_id="$PROJECT_ID"
+    else
+        project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    fi
     if [[ -z "$project_id" ]] || [[ ! "$project_id" =~ ^PVT_ ]]; then
         echo -e "${RED}Project not found or not Project V2.${NC}" >&2
         return 1
@@ -230,7 +238,7 @@ run_fetch_current_sprint() {
     echo "$normalized" > "$outfile"
 
     if [[ "$OUTPUT_JSON" == true ]]; then
-        echo "{\"path\":\"$outfile\",\"count\":$(echo "$normalized" | jq 'length'),\"issues\":$normalized}"
+        echo "{\"path\":\"$outfile\",\"count\":$(echo "$normalized" | jq 'length'),\"project_id\":\"$project_id\",\"issues\":$normalized}"
     else
         echo -e "${GREEN}Sprint issues written to: $outfile${NC}"
         echo "  Count: $(echo "$normalized" | jq 'length')"
@@ -245,7 +253,11 @@ run_weekly_report() {
     [[ -z "$repo" ]] && echo -e "${RED}Could not resolve repository.${NC}" >&2 && return 1
 
     local project_id
-    project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    if [[ -n "${PROJECT_ID:-}" ]] && [[ "${PROJECT_ID}" =~ ^PVT_ ]]; then
+        project_id="$PROJECT_ID"
+    else
+        project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    fi
     if [[ -z "$project_id" ]] || [[ ! "$project_id" =~ ^PVT_ ]]; then
         echo -e "${RED}Project not found or not Project V2.${NC}" >&2
         return 1
@@ -296,7 +308,7 @@ run_weekly_report() {
     } > "$outfile"
 
     if [[ "$OUTPUT_JSON" == true ]]; then
-        echo "{\"path\":\"$outfile\"}"
+        echo "{\"path\":\"$outfile\",\"project_id\":\"$project_id\"}"
     else
         echo -e "${GREEN}Weekly report written to: $outfile${NC}"
     fi
@@ -373,7 +385,11 @@ run_breakdown_duplicate_check() {
     [[ -z "$repo" ]] && echo "{\"proposals\":$proposals,\"duplicates\":[],\"existing_titles\":[]}" && return 0
 
     local project_id
-    project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    if [[ -n "${PROJECT_ID:-}" ]] && [[ "${PROJECT_ID}" =~ ^PVT_ ]]; then
+        project_id="$PROJECT_ID"
+    else
+        project_id=$(get_project_id "$repo" "$PROJECT_NAME") || true
+    fi
     if [[ -z "$project_id" ]] || [[ ! "$project_id" =~ ^PVT_ ]]; then
         echo "{\"proposals\":$proposals,\"duplicates\":[],\"existing_titles\":[]}"
         return 0

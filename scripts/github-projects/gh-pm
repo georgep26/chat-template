@@ -10,9 +10,10 @@ PROJECT_ROOT="$(cd "$GH_PM_DIR/../.." && pwd)"
 UTILS_DIR="$PROJECT_ROOT/scripts/utils"
 ISSUE_CREATE_SCRIPT="$GH_PM_DIR/gh-issue-create"
 
-# Shared defaults (overridable by --repo, --project)
+# Shared defaults (overridable by --repo, --project, --project-id)
 REPO=""
 PROJECT_NAME="Chat Template Project"
+PROJECT_ID=""
 OUTPUT_JSON=false
 DRY_RUN=false
 
@@ -70,6 +71,7 @@ Subcommands:
 Global options (before or after subcommand):
   --repo OWNER/REPO      Override repository.
   --project NAME        Override project name (default: "Chat Template Project").
+  --project-id ID       Use this project ID (e.g. PVT_xxx) and skip project lookup.
   --json                 Emit machine-readable output where supported.
   --dry-run              For mutating subcommands: only report what would be done (default for cleanup, discussions).
 
@@ -94,6 +96,10 @@ parse_global_opts() {
                 ;;
             --project)
                 PROJECT_NAME="$2"
+                shift 2
+                ;;
+            --project-id)
+                PROJECT_ID="$2"
                 shift 2
                 ;;
             --json)
@@ -163,6 +169,7 @@ cmd_create_issue() {
     local args=("${REST_ARGS[@]}")
     [[ -n "$REPO" ]] && args+=(--repo "$REPO")
     [[ "$PROJECT_NAME" != "Chat Template Project" ]] && args+=(--project "$PROJECT_NAME")
+    [[ -n "$PROJECT_ID" ]] && args+=(--project-id "$PROJECT_ID")
     exec "$ISSUE_CREATE_SCRIPT" "${args[@]}"
 }
 
@@ -242,6 +249,7 @@ cmd_discussions_to_issues() {
 # Main dispatch
 main() {
     parse_global_opts "$@"
+    [[ -n "$PROJECT_ID" ]] && export PROJECT_ID
     set -- "${REST_ARGS[@]}"
 
     if [[ $# -eq 0 ]]; then

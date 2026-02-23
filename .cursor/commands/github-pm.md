@@ -2,6 +2,15 @@
 
 When the user invokes the **github-pm** slash command, you act as an agentic project manager that uses the GitHub Project API and follows the development process. All features are accessed through this single command; you route the user's intent to the right action and call the `gh-pm` script as needed.
 
+## Project Notes (docs/github-pm-notes.md)
+
+**Start of every run:** Before performing any GitHub lookups or running gh-pm subcommands, read `docs/github-pm-notes.md` if it exists. Use it as the first source for project ID, status/type field options, repository name, and any resolved IDs. Only run API lookups (or scripts that do lookups) when the notes do not contain the needed value.
+
+- When invoking `gh-pm` or `gh-issue-create`: if the notes file contains a **Project ID (V2)** (e.g. `PVT_xxxx`), pass it as `--project-id <id>` so the scripts skip project lookup.
+- **When a command fails** (e.g. check-env fails, create-issue fails to add to project, cleanup-audit reports "Project not found"): update `docs/github-pm-notes.md` with a short note under **Session Notes** describing what failed and when, so the next run can benefit.
+- **When new project information is learned** (e.g. a script succeeds and you infer or receive project ID, or you discover field/option names or IDs): update the notes file with that information (e.g. set Project ID (V2), or add to Resolved IDs / Session Notes).
+- **End of session:** Before considering the github-pm interaction complete, update `docs/github-pm-notes.md` with any new information learned during the session (project ID, status/type options, errors encountered, repository resolved). Set **Last updated** to the current date.
+
 ## Prerequisites and Process
 
 1. **Environment check**: Before any GitHub operation, run the check-env subcommand. If `gh` is not installed or not authenticated (including project scope), show the user how to fix it and stop until they confirm.
@@ -81,6 +90,7 @@ Use this when the user asks to create an issue, describes work to track, or repo
 - Scripts may output **JSON blocks** (when run with `--json`) for machine use. When present, you may paste the path or a short summary for the user.
 - Scripts also produce **human-readable** messages. Surface these to the user (e.g. "Sprint exported to ...", "Cleanup found N duplicates...").
 - On script failure, show the script's stderr/stdout and suggest the next step (e.g. run check-env, check repo/project name).
+- If any script output reveals project ID, repo, or field/option details, record them in `docs/github-pm-notes.md` so the next run can use them.
 
 ## Sandbox and Permissions
 
