@@ -2,7 +2,7 @@
 
 This file is used by the **github-pm** slash command to avoid repeated API lookups. The agent reads it at the start of each run and updates it when new information is learned or when lookups fail.
 
-**Last updated:** (updated by agent when notes change)
+**Last updated:** 2026-02-23
 
 ---
 
@@ -38,4 +38,4 @@ When the agent or scripts resolve field/option IDs via the API, record them here
 
 ## Session Notes
 
-- *(Agent appends brief notes here when a command fails or when new project info is discovered.)*
+- **2026-02-23 (issue #115):** Status labels in the project were updated from "In progress"/"In review" to "In Progress"/"In Review". Command doc (`.cursor/commands/github-pm.md`) and setup doc (`docs/gh_project_setup.md`) updated to use the new capitalization. Workflow `update-project-on-merge-to-dev.yml` already matches by `toLowerCase() === 'in review'`, so no change needed there.

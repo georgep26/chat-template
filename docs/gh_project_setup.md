@@ -13,7 +13,7 @@ This guide explains how to set up the **Chat Template Project** board for tracki
 5. After the copy, link the new project to your repo’s issues and adjust any filters or workflows if needed.
 
 Copying preserves:
-- All views (Backlog, Sprint Planning, Daily Management Board, Rollup, Roadmap, In review, My items)
+- All views (Backlog, Sprint Planning, Daily Management Board, Rollup, Roadmap, In Review, My items)
 - Custom fields (Status, Type, Iteration, Priority, etc.) and their options
 - View filters, grouping, and layout (Table/Board/Roadmap)
 - Workflows (if supported by the copy)
@@ -44,8 +44,8 @@ Used for workflow stages. Add these options:
 | Option       | Description (optional)              |
 |-------------|--------------------------------------|
 | Backlog     | This item hasn't been started       |
-| In progress | This is actively being worked on    |
-| In review   | This item is in review              |
+| In Progress | This is actively being worked on    |
+| In Review   | This item is in review              |
 | Done        | This has been completed             |
 
 #### Type (single-select)
@@ -96,7 +96,7 @@ Create each view via **+ New view**, name it, then set the **filter** and **layo
 
 - **Filter:** `iteration:@current, -type:Epic, -type:Initiative`
 - **View:** Board
-- **Column by:** **Status** (Backlog | In progress | In review | Done)
+- **Column by:** **Status** (Backlog | In Progress | In Review | Done)
 - **Swimlanes:** Assignees (optional)
 - **Sort by:** Priority (ascending)
 - **Field sum:** Count, Estimate
@@ -119,9 +119,9 @@ Use this view to see Initiatives → Epics → Tasks/Features and progress rollu
 - Use **Markers**, **Sort**, **Date fields**, **Quarter**, **Today** as needed for timeline and current week.
 - **Initiative titles:** Roadmap groups are sorted alphabetically. When creating initiatives via `gh-pm` (or `gh-issue-create`), pass `Start Date` and `Target Complete Date` so the script adds a date range to the title (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`). That keeps initiative groups in chronological order.
 
-#### In review
+#### In Review
 
-- **Filter:** `status:"In review"`
+- **Filter:** `status:"In Review"`
 - **View:** Table
 - **Visible fields (suggested):** Title, Assignees, Linked pull requests, Sub-issues progress, Reviewers, Repository
 - **Group by:** none
@@ -143,8 +143,8 @@ Use this view to see Initiatives → Epics → Tasks/Features and progress rollu
 
 Under **Workflows**, you can add automations, for example:
 
-- Set **Status** to **In progress** when an issue is assigned.
-- Set **Status** to **In review** when a linked PR is opened.
+- Set **Status** to **In Progress** when an issue is assigned.
+- Set **Status** to **In Review** when a linked PR is opened.
 - Set **Status** to **Done** when a linked PR is merged.
 
 The reference project uses **6** workflows; add or adjust to match your process.

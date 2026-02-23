@@ -51,7 +51,7 @@ Use this when the user asks to create an issue, describes work to track, or repo
    - **Initiatives**: always pass `--field "Start Date=YYYY-MM-DD"` and `--field "Target Complete Date=YYYY-MM-DD"` (or equivalent like `2/15/26`). The script adds the date range to the initiative title (e.g. `[INITIATIVE] 2026-02-15 to 2026-02-28: POC Release`) so the roadmap view sorts initiative groups correctly (roadmap groups are ordered alphabetically).
    - Priority: "priority P0" → `--field "Priority=P0"`.
    - Dates: "start date 2/17/26" → `--field "Start Date=2/17/26"`.
-   - Status: "in progress" → `--field "Status=In progress"`.
+   - Status: "in progress" → `--field "Status=In Progress"`.
    - Parent: "under Epic #42" or "parent #42" → `--field "Parent issue=#42"` (accepts `#123`, `123`, URL, or issue title).
    - You may pass multiple `--field` flags. The script adds the issue to the project and sets Type, Status, etc.
 5. **Run**: `./scripts/github-projects/gh-pm create-issue <type> --title "..." --body "..." [--type Epic] [--type Initiative] [--field "Priority=P0"] [--field "Parent issue=#20"] ...`
