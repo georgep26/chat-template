@@ -249,16 +249,21 @@ judge_model:
 outputs:
   types: ["html", "json", "csv"]  # Can be overridden via CLI
   local:
-    base_dir: "eval_outputs"
+    base_dir: "evals/eval_outputs/local"  # Local runs (gitignored). CI uses EVAL_BASE_DIR=evals/eval_outputs/published for release runs.
   s3:
     enabled: false
     bucket: "my-eval-bucket"
     prefix: "rag-evals/irc/"
 ```
 
+The repo uses two output locations under `evals/eval_outputs/`:
+
+- **published/** — Results from production runs after deploy (created by the Deploy to Prod on Merge workflow). Committed to the repo so everyone can compare against released baselines.
+- **local/** — All other runs (local dev, PR evals, manual runs). Gitignored so local results stay on your machine.
+
 ## Output Files
 
-Results are written to `{base_dir}/{experiment_name}/`:
+Results are written to `{base_dir}/{experiment_name}/` (e.g. `evals/eval_outputs/local/<run_name>/` or `evals/eval_outputs/published/<run_name>/`):
 
 - **summary.json**: Aggregate statistics for all metrics (mean, std, median, min, max, 95% CI)
 - **results.csv**: Per-sample scores for all metrics
@@ -281,12 +286,15 @@ The aggregation script:
 #### Basic Usage
 
 ```bash
-# Aggregate results from local evaluation outputs directory
+# Aggregate results (includes both published and local if present)
 python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs
+
+# Or only published (release) results
+python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs/published
 ```
 
 This will:
-- Scan `evals/eval_outputs/` for subdirectories containing `summary.json` files
+- Scan the given directory (and subdirs) for `summary.json` files
 - Generate plots and tables for all metrics found across runs
 - Create `docs/evaluation_results.md` with the aggregated report
 - Save plot images in the `docs/` directory
@@ -333,7 +341,7 @@ The script uses timestamps to order evaluation runs chronologically:
 # 1. Run multiple evaluations over time
 python evals/evals_pipeline.py --config evals/evals_config.yaml --output-type json
 
-# 2. Later, aggregate all results into a report
+# 2. Later, aggregate all results into a report (evals/eval_outputs includes published/ and local/)
 python evals/aggregate_evals.py --eval-results-dir evals/eval_outputs
 
 # 3. View the generated report

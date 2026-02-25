@@ -24,7 +24,7 @@ Without these settings, chore workflows may fail when creating or merging PRs (e
 
 Only these paths qualify for the lightweight Run Tests pass:
 
-- `evals/eval_outputs/**` — eval run outputs
+- `evals/eval_outputs/**` — eval run outputs (only `published/` is committed; `local/` is gitignored)
 - `CHANGELOG.md` — release changelog updates
 - `docs/pr_evals_results/**` — aggregated eval results
 
@@ -42,7 +42,7 @@ PRs from any other branch (e.g. `development`) do not get the auto-pass even if 
 
 | Workflow | Bot branch | Paths |
 |----------|------------|--------|
-| Run Evaluations (upload_to_main) | `bot/evals-results` | `evals/eval_outputs/**` |
+| Run Evaluations (upload_to_main) | `bot/evals-results` | `evals/eval_outputs/published/**` |
 | Create Release on Merge to Main | `bot/release-changelog` | `CHANGELOG.md` |
 | Aggregate Evaluation Results | `bot/aggregate-evals` | `docs/pr_evals_results/**` |
 | Sync Main to Development | *(main → development)* | Runs after pushes to main that touch the paths above. |

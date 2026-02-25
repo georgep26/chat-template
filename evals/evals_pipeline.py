@@ -7,8 +7,9 @@
 
 import argparse
 import asyncio
-import json
 import csv
+import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -145,9 +146,11 @@ async def run_evaluation(config: dict, notes: Optional[str] = None):
     run_cfg = config["run"]
     outputs_cfg = config["outputs"]
     evaluation_run_name = run_cfg.get("evaluation_run_name", "evaluation_run_default")
-    base_dir = Path(outputs_cfg.get("local", {}).get("base_dir", "eval_outputs"))
-    
-    log.info(f"Starting evaluation: {evaluation_run_name}")
+    base_dir = Path(
+        os.environ.get("EVAL_BASE_DIR")
+        or outputs_cfg.get("local", {}).get("base_dir", "eval_outputs")
+    )
+    log.info(f"Starting evaluation: {evaluation_run_name} (outputs: {base_dir})")
     
     # 1) Load data
     df = load_eval_dataframe(config)
@@ -329,7 +332,7 @@ if __name__ == "__main__":
         "--run-name",
         type=str,
         default=None,
-        help="Override evaluation_run_name from config (e.g. datetime for CI: 2025-02-20T14-30-00Z). Outputs go to evals/eval_outputs/<run-name>/."
+        help="Override evaluation_run_name from config (e.g. datetime for CI). Outputs go to evals/eval_outputs/<local|published>/<run-name>/; CI sets EVAL_BASE_DIR for published."
     )
     args = parser.parse_args()
     main(args.config, args.output_type, args.notes, args.environment, args.run_name)

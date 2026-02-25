@@ -62,7 +62,8 @@ llm:
 outputs:
   types: ["html", "json", "csv"]  # CLI can override
   local:
-    base_dir: "evals/eval_outputs"
+    # Default: local runs. CI sets EVAL_BASE_DIR=evals/eval_outputs/published for release runs.
+    base_dir: "evals/eval_outputs/local"
   s3:
     enabled: false
     s3_uri: "s3://my-eval-bucket/rag-evals/irc/"
