@@ -292,3 +292,6 @@ docs/security_reports/
 
 # Deploy/setup output (contains account IDs; do not commit)
 accounts.json
+
+# Add github pm notes (contains IDs, do not commit)
+docs/github-pm-notes.md
