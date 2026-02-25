@@ -62,6 +62,24 @@ Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Lam
 
 See [docs/deployment_process.md](docs/deployment_process.md) for Phase 2 and options (e.g. `--skip-network`, `--only-app`).
 
+Deploy cost guard controls (monitor, enforcer, pricing sync):
+
+```bash
+./scripts/deploy/deploy_cost_guard.sh <environment> deploy
+```
+
+Generate cost reports (JSON + HTML + PNG):
+
+```bash
+python3 scripts/cost/generate_cost_report.py --env <environment> --out docs/cost_reports
+```
+
+Estimate infrastructure/component cost from CloudFormation templates:
+
+```bash
+python3 scripts/cost/estimate_component_cost.py --template infra/resources/lambda_template.yaml
+```
+
 Application and infrastructure configuration (app config, `infra/infra.yaml`, secrets) is described in [docs/config_structure.md](docs/config_structure.md). Per-env app config lives in `config/<env>/app_config.yaml`; see [config/app_config.template.yaml](config/app_config.template.yaml) for structure and options. IAM roles (deployer, evals, Lambda execution) are deployed by the setup and deploy scripts; for the evals role and run-evals workflow, see [evals/README.md](evals/README.md).
 
 ## Run evals and tests
