@@ -164,7 +164,7 @@ chat-template/
 │       ├── llm_factory.py
 │       └── logger.py
 ├── evals/               # RAGAS evaluation pipeline
-│   ├── eval_outputs/    # Evaluation results and reports
+│   ├── eval_outputs/    # Evaluation results (published/ from releases, local/ gitignored)
 │   ├── validation_data/ # Validation datasets
 │   ├── evals_pipeline.py
 │   ├── metrics_base.py
