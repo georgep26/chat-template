@@ -271,8 +271,8 @@ creds.yaml
 # Scratchpad files
 scratchpad.txt
 
-# Evaluation outputs
-evals/eval_outputs/
+# Evaluation outputs: local runs only (published/ is committed)
+evals/eval_outputs/local/
 
 # Working notes
 docs/working_notes.md
