@@ -8,6 +8,8 @@ dependencies:
   - pyaml
   - awscli
   - boto3
+  - plotly
+  - kaleido-core
   - go-yq
   - pip:
     - -r src/rag_lambda/requirements.txt
