@@ -305,6 +305,7 @@ The following scripts are used by `deploy_all.sh` and can also be run individual
 - `deploy_chat_template_db.sh` - Deploy Aurora Serverless v2 PostgreSQL database
 - `deploy_knowledge_base.sh` - Deploy AWS Bedrock Knowledge Base
 - `deploy_rag_lambda.sh` - Deploy RAG Lambda function
+- `deploy_cost_guard.sh` - Deploy hybrid cost guard resources (monitor, enforcer, pricing sync)
 
 See each script's help (`--help` or no arguments) for detailed usage information.
 
@@ -352,6 +353,36 @@ The script activates these tags by default (matching your infrastructure tags):
 - `Name` - Resource name tag
 - `Environment` - Environment tag (dev, staging, prod)
 - `Project` - Project identifier tag
+
+### Cost Guard Deployment (`deploy_cost_guard.sh`)
+
+Deploy the hybrid cost guard stack for near-realtime usage monitoring and enforcement.
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_cost_guard.sh <environment> [action] [options]
+```
+
+**Actions:**
+- `deploy` (default) - Deploy or update the cost guard stack
+- `update` - Update the stack
+- `delete` - Delete the stack
+- `validate` - Validate the CloudFormation template
+- `status` - Show stack status and outputs
+
+**Examples:**
+```bash
+./scripts/deploy/deploy_cost_guard.sh dev deploy
+./scripts/deploy/deploy_cost_guard.sh staging status
+./scripts/deploy/deploy_cost_guard.sh prod delete
+```
+
+**Notes:**
+- Uses `infra/resources/cost_guard_template.yaml`
+- Builds Docker image from `src/cost_guard/Dockerfile`
+- Pushes image to ECR repository `${project}-cost-guard-${env}` (auto-created if needed)
+- Deploys all cost guard Lambda functions from the same image with per-function handler commands
+- Reads `cost_control` settings from `infra/infra.yaml`
 
 ### AWS Organizations Accounts (`deploy_accounts.sh`)
 

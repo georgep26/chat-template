@@ -24,6 +24,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
 # SCRIPT_DIR used later for deploy_summary.sh
 
 # Function to show usage
@@ -55,6 +56,19 @@ show_usage() {
 
 # Default tags to activate
 DEFAULT_TAGS=("Name" "Environment" "Project")
+
+# Prefer tags configured in infra/infra.yaml when available.
+if load_infra_config >/dev/null 2>&1; then
+    if tags_from_config=$(get_cost_allocation_tags 2>/dev/null); then
+        DEFAULT_TAGS=()
+        while IFS= read -r tag; do
+            [ -n "$tag" ] && DEFAULT_TAGS+=("$tag")
+        done <<< "$tags_from_config"
+        if [ ${#DEFAULT_TAGS[@]} -eq 0 ]; then
+            DEFAULT_TAGS=("Name" "Environment" "Project")
+        fi
+    fi
+fi
 TAGS_TO_ACTIVATE=()
 AWS_REGION="us-east-1"  # Cost Explorer is global, but we need a region for AWS CLI
 ACTION="activate"
@@ -294,4 +308,3 @@ case $ACTION in
 esac
 
 print_info "Cost allocation tags operation completed successfully"
-

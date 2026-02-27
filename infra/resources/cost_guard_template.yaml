@@ -1,0 +1,476 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Hybrid Cost Guard resources (monitor, enforcer, pricing sync, state, and notifications)'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Project name'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+
+  CostGuardImageUri:
+    Type: String
+    Description: 'ECR image URI for cost guard Lambda functions'
+
+  CostGuardConfigJson:
+    Type: String
+    Default: '{}'
+    Description: 'Serialized cost_control config JSON'
+    MaxLength: 4096
+
+  BudgetAmountUsd:
+    Type: Number
+    Default: 20
+
+  WarningPercent:
+    Type: Number
+    Default: 80
+
+  HardPercent:
+    Type: Number
+    Default: 100
+
+  MonitorIntervalMinutes:
+    Type: Number
+    Default: 5
+
+  ConsecutiveBreachCount:
+    Type: Number
+    Default: 2
+
+  CooldownMinutes:
+    Type: Number
+    Default: 30
+
+  PricingRefreshHourUtc:
+    Type: Number
+    Default: 4
+
+  WarningEmail:
+    Type: String
+    Default: ''
+    Description: 'Optional email subscriber for warning alerts'
+
+  WarningSms:
+    Type: String
+    Default: ''
+    Description: 'Optional SMS subscriber for warning alerts (E.164 format)'
+
+  CriticalEmail:
+    Type: String
+    Default: ''
+    Description: 'Optional email subscriber for critical alerts'
+
+  CriticalSms:
+    Type: String
+    Default: ''
+    Description: 'Optional SMS subscriber for critical alerts (E.164 format)'
+
+Conditions:
+  HasWarningEmail: !Not [!Equals [!Ref WarningEmail, '']]
+  HasWarningSms: !Not [!Equals [!Ref WarningSms, '']]
+  HasCriticalEmail: !Not [!Equals [!Ref CriticalEmail, '']]
+  HasCriticalSms: !Not [!Equals [!Ref CriticalSms, '']]
+
+Resources:
+  CostGuardStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-cost-guard-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-cost-guard-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardWarningTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${Environment}-cost-guard-warning'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-warning'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardCriticalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${Environment}-cost-guard-critical'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-critical'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  WarningEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasWarningEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref WarningEmail
+      TopicArn: !Ref CostGuardWarningTopic
+
+  WarningSmsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasWarningSms
+    Properties:
+      Protocol: sms
+      Endpoint: !Ref WarningSms
+      TopicArn: !Ref CostGuardWarningTopic
+
+  CriticalEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasCriticalEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref CriticalEmail
+      TopicArn: !Ref CostGuardCriticalTopic
+
+  CriticalSmsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasCriticalSms
+    Properties:
+      Protocol: sms
+      Endpoint: !Ref CriticalSms
+      TopicArn: !Ref CostGuardCriticalTopic
+
+  CostGuardMonitorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-cost-guard-monitor-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CostGuardMonitorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource: !GetAtt CostGuardStateTable.Arn
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunctionConfiguration
+                  - lambda:InvokeFunction
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudtrail:LookupEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref CostGuardWarningTopic
+                  - !Ref CostGuardCriticalTopic
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-monitor-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardEnforcerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CostGuardEnforcerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt CostGuardStateTable.Arn
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunctionConcurrency
+                  - lambda:PutFunctionConcurrency
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:ListEventSourceMappings
+                  - lambda:UpdateEventSourceMapping
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref CostGuardCriticalTopic
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardPricingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CostGuardPricingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource: !GetAtt CostGuardStateTable.Arn
+              - Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref CostGuardCriticalTopic
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardEnforcerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer'
+      PackageType: Image
+      Role: !GetAtt CostGuardEnforcerRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      Code:
+        ImageUri: !Ref CostGuardImageUri
+      ImageConfig:
+        Command:
+          - cost_guard.enforcer_handler.lambda_handler
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          STATE_TABLE_NAME: !Ref CostGuardStateTable
+          CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
+          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardMonitorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-cost-guard-monitor'
+      PackageType: Image
+      Role: !GetAtt CostGuardMonitorRole.Arn
+      Timeout: 180
+      MemorySize: 512
+      Code:
+        ImageUri: !Ref CostGuardImageUri
+      ImageConfig:
+        Command:
+          - cost_guard.monitor_handler.lambda_handler
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          STATE_TABLE_NAME: !Ref CostGuardStateTable
+          WARNING_TOPIC_ARN: !Ref CostGuardWarningTopic
+          CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
+          ENFORCER_FUNCTION_NAME: !Ref CostGuardEnforcerFunction
+          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+          BUDGET_AMOUNT_USD: !Ref BudgetAmountUsd
+          WARNING_PERCENT: !Ref WarningPercent
+          HARD_PERCENT: !Ref HardPercent
+          CONSECUTIVE_BREACH_COUNT: !Ref ConsecutiveBreachCount
+          COOLDOWN_MINUTES: !Ref CooldownMinutes
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-monitor'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardPricingSyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-sync'
+      PackageType: Image
+      Role: !GetAtt CostGuardPricingRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      Code:
+        ImageUri: !Ref CostGuardImageUri
+      ImageConfig:
+        Command:
+          - cost_guard.pricing_sync_handler.lambda_handler
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          STATE_TABLE_NAME: !Ref CostGuardStateTable
+          CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
+          WARNING_TOPIC_ARN: !Ref CostGuardWarningTopic
+          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+          PRICING_REFRESH_HOUR_UTC: !Ref PricingRefreshHourUtc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-sync'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CostGuardMonitorScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-cost-guard-monitor'
+      ScheduleExpression: !Sub 'rate(${MonitorIntervalMinutes} minutes)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CostGuardMonitorFunction.Arn
+          Id: costGuardMonitorTarget
+
+  CostGuardMonitorSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CostGuardMonitorFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CostGuardMonitorScheduleRule.Arn
+
+  CostGuardPricingScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-sync'
+      ScheduleExpression: !Sub 'cron(0 ${PricingRefreshHourUtc} * * ? *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CostGuardPricingSyncFunction.Arn
+          Id: costGuardPricingTarget
+
+  CostGuardPricingSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CostGuardPricingSyncFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CostGuardPricingScheduleRule.Arn
+
+Outputs:
+  CostGuardStateTableName:
+    Description: 'DynamoDB table used for cost guard state'
+    Value: !Ref CostGuardStateTable
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardStateTableName'
+
+  CostGuardWarningTopicArn:
+    Description: 'SNS warning topic ARN'
+    Value: !Ref CostGuardWarningTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardWarningTopicArn'
+
+  CostGuardCriticalTopicArn:
+    Description: 'SNS critical topic ARN'
+    Value: !Ref CostGuardCriticalTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardCriticalTopicArn'
+
+  CostGuardMonitorFunctionName:
+    Description: 'Cost guard monitor Lambda function name'
+    Value: !Ref CostGuardMonitorFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardMonitorFunctionName'
+
+  CostGuardEnforcerFunctionName:
+    Description: 'Cost guard enforcer Lambda function name'
+    Value: !Ref CostGuardEnforcerFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardEnforcerFunctionName'
+
+  CostGuardPricingSyncFunctionName:
+    Description: 'Cost guard pricing sync Lambda function name'
+    Value: !Ref CostGuardPricingSyncFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardPricingSyncFunctionName'

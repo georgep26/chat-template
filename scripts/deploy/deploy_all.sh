@@ -25,7 +25,7 @@
 #   ./scripts/deploy/deploy_all.sh dev --only-infra -y
 #
 #   # Skip specific steps
-#   ./scripts/deploy/deploy_all.sh dev --skip-network --skip-cost-tags -y
+#   ./scripts/deploy/deploy_all.sh dev --skip-network --skip-cost-tags --skip-cost-guard -y
 #
 #   # Pass through overrides for sub-scripts (e.g., DB password for CI)
 #   ./scripts/deploy/deploy_all.sh dev -y --master-password "$DB_PASS"
@@ -60,6 +60,7 @@ show_usage() {
     echo "  --skip-ecr           Skip ECR repo deployment"
     echo "  --skip-lambda        Skip Lambda deployment"
     echo "  --skip-cost-tags     Skip cost allocation tags activation"
+    echo "  --skip-cost-guard    Skip cost guard deployment"
     echo ""
     echo "Convenience Flags:"
     echo "  --only-infra         Only deploy infrastructure (network, S3, DB)"
@@ -126,6 +127,7 @@ SKIP_KB=false
 SKIP_ECR=false
 SKIP_LAMBDA=false
 SKIP_COST_TAGS=false
+SKIP_COST_GUARD=false
 
 # Pass-through overrides
 REGION_OVERRIDE=""
@@ -188,12 +190,17 @@ while [[ $# -gt 0 ]]; do
             SKIP_COST_TAGS=true
             shift
             ;;
+        --skip-cost-guard)
+            SKIP_COST_GUARD=true
+            shift
+            ;;
         # Convenience flags
         --only-infra)
             SKIP_KB=true
             SKIP_ECR=true
             SKIP_LAMBDA=true
             SKIP_COST_TAGS=true
+            SKIP_COST_GUARD=true
             shift
             ;;
         --only-app)
@@ -420,6 +427,17 @@ for resource in rag_knowledge_base rag_lambda_ecr rag_lambda; do
         skip-disabled) draw_box_row "  [DISABLED] $name (disabled in config)" $WIDTH ;;
     esac
 done
+
+COST_GUARD_ENABLED=false
+if is_cost_control_enabled; then
+    COST_GUARD_ENABLED=true
+fi
+if [ "$COST_GUARD_ENABLED" = true ]; then
+    case "$SKIP_COST_GUARD" in
+        false) draw_box_row "  [DEPLOY]   Cost Guard" $WIDTH ;;
+        true)  draw_box_row "  [SKIP]     Cost Guard (skipped by flag)" $WIDTH ;;
+    esac
+fi
 if [ "$SKIP_COST_TAGS" = false ]; then
     draw_box_row "" $WIDTH
     draw_box_row "  [DEPLOY]   Cost Allocation Tags" $WIDTH
@@ -646,6 +664,34 @@ if [ "$SKIP_COST_TAGS" = false ]; then
     fi
 else
     SKIPPED_STEPS+=("Cost Allocation Tags")
+fi
+
+# Deploy cost guard
+if [ "$COST_GUARD_ENABLED" = true ]; then
+    if [ "$SKIP_COST_GUARD" = false ]; then
+        echo ""
+        DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
+        print_step "Step $DEPLOYMENT_STEPS: Deploying Cost Guard"
+
+        if [ -f "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh" ]; then
+            chmod +x "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh"
+            COST_GUARD_ARGS=("$ENVIRONMENT" "deploy" "-y")
+            if [ -n "$REGION_OVERRIDE" ]; then COST_GUARD_ARGS+=(--region "$REGION_OVERRIDE"); fi
+            if "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh" "${COST_GUARD_ARGS[@]}"; then
+                print_complete "Cost guard deployment completed"
+                COMPLETED_STEPS+=("Cost Guard")
+            else
+                print_error "Cost guard deployment failed"
+                FAILED_STEPS+=("Cost Guard")
+                exit 1
+            fi
+        else
+            print_warning "Cost guard script not found, skipping"
+            SKIPPED_STEPS+=("Cost Guard")
+        fi
+    else
+        SKIPPED_STEPS+=("Cost Guard")
+    fi
 fi
 
 # =============================================================================

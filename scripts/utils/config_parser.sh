@@ -358,6 +358,74 @@ get_cost_allocation_tags() {
 }
 
 # =============================================================================
+# Cost Control Configuration
+# =============================================================================
+
+# Check if cost control is enabled
+is_cost_control_enabled() {
+    ensure_config_loaded || return 1
+    local enabled
+    enabled=$(yq '.cost_control.enabled // false' "$INFRA_CONFIG_PATH")
+    [ "$enabled" = "true" ]
+}
+
+# Get cost control value (e.g. "budget.amount_usd", "monitor.interval_minutes")
+# Optional third arg applies {project}/{env} substitution for string values.
+get_cost_control_value() {
+    local key_path=$1
+    local env=${2:-}
+    ensure_config_loaded || return 1
+
+    local value
+    value=$(yq ".cost_control.${key_path}" "$INFRA_CONFIG_PATH")
+
+    if [ -n "$env" ] && [ "$value" != "null" ]; then
+        local project_name
+        project_name=$(get_project_name)
+        value="${value//\{project\}/$project_name}"
+        value="${value//\{env\}/$env}"
+    fi
+
+    echo "$value"
+}
+
+# Get cost control stack name with substitutions.
+get_cost_control_stack_name() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local pattern
+    pattern=$(yq '.cost_control.stack_name // ""' "$INFRA_CONFIG_PATH")
+    if [ -z "$pattern" ] || [ "$pattern" = "null" ]; then
+        local project_name
+        project_name=$(get_project_name)
+        echo "${project_name}-cost-guard-${env}"
+        return 0
+    fi
+    local project_name
+    project_name=$(get_project_name)
+    pattern="${pattern//\{project\}/$project_name}"
+    pattern="${pattern//\{env\}/$env}"
+    echo "$pattern"
+}
+
+# Returns compact JSON for .cost_control with {project}/{env} substitutions.
+get_cost_control_json() {
+    local env=$1
+    ensure_config_loaded || return 1
+
+    local project_name
+    project_name=$(get_project_name)
+    local value
+    value=$(yq -o=json '.cost_control // {}' "$INFRA_CONFIG_PATH")
+    # Compact and apply placeholder substitution.
+    value="${value//$'\n'/}"
+    value="${value//$'\t'/}"
+    value="${value//\{project\}/$project_name}"
+    value="${value//\{env\}/$env}"
+    echo "$value"
+}
+
+# =============================================================================
 # Secrets Configuration
 # =============================================================================
 
@@ -436,6 +504,47 @@ validate_config() {
     if [ "$region" = "null" ] || [ -z "$region" ]; then
         print_error "Missing region for environment: $env"
         return 1
+    fi
+
+    # Cost control validation (if enabled)
+    if is_cost_control_enabled; then
+        local budget_amount warning_percent hard_percent interval_mins breach_count cooldown_mins mode
+        budget_amount=$(get_cost_control_value "budget.amount_usd")
+        warning_percent=$(get_cost_control_value "budget.warning_percent")
+        hard_percent=$(get_cost_control_value "budget.hard_percent")
+        interval_mins=$(get_cost_control_value "monitor.interval_minutes")
+        breach_count=$(get_cost_control_value "monitor.consecutive_breach_count")
+        cooldown_mins=$(get_cost_control_value "monitor.cooldown_minutes")
+        mode=$(get_cost_control_value "mode")
+
+        if [ -z "$budget_amount" ] || [ "$budget_amount" = "null" ]; then
+            print_error "Missing cost_control.budget.amount_usd"
+            return 1
+        fi
+        if [ -z "$warning_percent" ] || [ "$warning_percent" = "null" ]; then
+            print_error "Missing cost_control.budget.warning_percent"
+            return 1
+        fi
+        if [ -z "$hard_percent" ] || [ "$hard_percent" = "null" ]; then
+            print_error "Missing cost_control.budget.hard_percent"
+            return 1
+        fi
+        if [ -z "$interval_mins" ] || [ "$interval_mins" = "null" ]; then
+            print_error "Missing cost_control.monitor.interval_minutes"
+            return 1
+        fi
+        if [ -z "$breach_count" ] || [ "$breach_count" = "null" ]; then
+            print_error "Missing cost_control.monitor.consecutive_breach_count"
+            return 1
+        fi
+        if [ -z "$cooldown_mins" ] || [ "$cooldown_mins" = "null" ]; then
+            print_error "Missing cost_control.monitor.cooldown_minutes"
+            return 1
+        fi
+        if [ "$mode" != "observe" ] && [ "$mode" != "enforce" ]; then
+            print_error "Invalid cost_control.mode: $mode (expected observe or enforce)"
+            return 1
+        fi
     fi
     
     print_complete "Configuration validation successful"

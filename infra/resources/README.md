@@ -7,6 +7,7 @@ This directory contains AWS CloudFormation templates for deploying the RAG chat 
 ```
 cloudformation/
 ├── db_secret_template.yaml          # Database secret in Secrets Manager
+├── cost_guard_template.yaml         # Hybrid cost guard resources
 ├── knowledge_base_template.yaml     # AWS Bedrock Knowledge Base
 ├── lambda_template.yaml             # RAG Lambda function
 ├── light_db_template.yaml           # Aurora Serverless v2 PostgreSQL database
@@ -42,6 +43,10 @@ cloudformation/
 - **`s3_bucket_template.yaml`**: S3 bucket for storing knowledge base documents
   - Deployed via: `./scripts/deploy/deploy_s3_bucket.sh`
   - Creates: S3 bucket with versioning and lifecycle rules
+
+- **`cost_guard_template.yaml`**: Hybrid cost guard resources
+  - Deployed via: `./scripts/deploy/deploy_cost_guard.sh`
+  - Creates: DynamoDB state table, SNS topics/subscriptions, monitor/enforcer/pricing Lambda functions, EventBridge schedules
 
 ## Deployment Order
 

@@ -111,6 +111,57 @@ budgets:
   dev_max_budget: 20
   staging_max_budget: 20
   prod_max_budget: 20
+# Hybrid cost control: AWS-native billing + near-realtime usage guardrails.
+# v1 uses scheduled polling (Option 1); v1.2 can add app-metered events (Option 3).
+cost_control:
+  enabled: true
+  mode: observe  # observe | enforce
+  stack_name: "{project}-cost-guard-{env}"
+  budget:
+    period: monthly
+    amount_usd: 20
+    warning_percent: 80
+    hard_percent: 100
+  monitor:
+    interval_minutes: 5
+    consecutive_breach_count: 2
+    cooldown_minutes: 30
+  notifications:
+    warning_email: "${BUDGET_EMAIL}"
+    warning_sms: ""
+    critical_email: "${BUDGET_EMAIL}"
+    critical_sms: ""
+  pricing:
+    refresh_hour_utc: 4
+    safety_markup_percent: 10
+  bedrock:
+    enforce_model_allowlist: true
+    allowed_model_ids:
+      - "amazon.titan-embed-text-v2:0"
+    blocked_model_ids: []
+    default_invocation_cost_usd: 0.02
+    model_invocation_cost_usd: {}
+  reports:
+    output_dir: "docs/cost_reports"
+    formats:
+      - json
+      - html
+      - png
+    retention_days: 90
+  resources:
+    - id: "rag_lambda"
+      type: "lambda"
+      identifier: "{project}-{env}-rag-chat"
+      enforcement: "lambda_reserved_concurrency_zero"
+      disable_event_sources: true
+      enabled: true
+      priority: 10
+    - id: "rag_runtime_role"
+      type: "iam_role"
+      identifier: "{project}-{env}-lambda-execution-role"
+      enforcement: "attach_bedrock_deny_policy"
+      enabled: true
+      priority: 20
 # Required and optional tags for all resources
 tags:
   required:
