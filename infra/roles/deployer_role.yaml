@@ -285,6 +285,55 @@ Resources:
                   - lambda:UntagResource
                   - lambda:ListTags
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
+              # DynamoDB: cost guard state table scoped to project and environment
+              - Sid: DynamoDBDeployment
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:ListTagsOfResource
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectName}-cost-guard-${Environment}'
+              # SNS: cost guard topics and subscriptions scoped to project and environment
+              - Sid: SNSDeployment
+                Effect: Allow
+                Action:
+                  - sns:CreateTopic
+                  - sns:DeleteTopic
+                  - sns:GetTopicAttributes
+                  - sns:SetTopicAttributes
+                  - sns:TagResource
+                  - sns:UntagResource
+                  - sns:ListTagsForResource
+                  - sns:Subscribe
+                  - sns:Unsubscribe
+                  - sns:GetSubscriptionAttributes
+                  - sns:SetSubscriptionAttributes
+                Resource:
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-cost-guard-warning'
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-cost-guard-critical'
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-cost-guard-warning:*'
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-cost-guard-critical:*'
+              # EventBridge: scheduled rules for cost guard monitor and pricing sync
+              - Sid: EventBridgeRulesDeployment
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:ListTargetsByRule
+                  - events:TagResource
+                  - events:UntagResource
+                  - events:ListTagsForResource
+                Resource:
+                  - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-${Environment}-cost-guard-monitor'
+                  - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-${Environment}-cost-guard-pricing-sync'
               # CloudWatch Logs: log group for Lambda scoped to project and environment
               - Sid: LogsDeployment
                 Effect: Allow
@@ -331,7 +380,9 @@ Resources:
                   - ecr:DeleteRepositoryPolicy
                   - ecr:PutImageTagMutability
                   - ecr:PutImageScanningConfiguration
-                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-rag-lambda-${Environment}'
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-rag-lambda-${Environment}'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-cost-guard-${Environment}'
               # Cost Explorer: cost allocation tags (deploy_cost_analysis_tags)
               - Sid: CostExplorerTags
                 Effect: Allow
