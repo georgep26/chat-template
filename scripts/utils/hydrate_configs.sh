@@ -6,6 +6,7 @@
 #   ./scripts/utils/hydrate_configs.sh dev
 #   ./scripts/utils/hydrate_configs.sh --all   (local only: hydrate all envs)
 #   ./scripts/utils/hydrate_configs.sh --restore   (reset to template versions)
+#   ./scripts/utils/hydrate_configs.sh --run <environment> [missing_secrets_file] -- <command ...>
 #
 # Modes:
 #   CI (GITHUB_ACTIONS=true): reads secrets from environment variables
@@ -29,11 +30,17 @@ source "$SCRIPT_DIR/common.sh"
 show_usage() {
     echo "Hydrate Configs - Injects secrets into templated config files"
     echo ""
-    echo "Usage: $0 <environment> | --all | --restore"
+    echo "Usage:"
+    echo "  $0 <environment> [missing_secrets_file]"
+    echo "  $0 --run <environment> [missing_secrets_file] -- <command ...>"
+    echo "  $0 --all"
+    echo "  $0 --restore"
     echo ""
-    echo "  <environment>   dev | staging | prod  (hydrate for this env)"
-    echo "  --all           (local only) Hydrate all environments from secrets files"
-    echo "  --restore       Reset infra/infra.yaml and config/*/app_config.yaml to template versions"
+    echo "  <environment>        dev | staging | prod  (hydrate for this env)"
+    echo "  missing_secrets_file optional path; keys hydrated with blank are written here (one per line)"
+    echo "  --run                Hydrate, execute command, then restore original files"
+    echo "  --all                (local only) Hydrate all environments from secrets files"
+    echo "  --restore            Reset infra/infra.yaml and config/*/app_config.yaml to template versions"
     echo ""
     echo "No-op when HYDRATE_CONFIGS=false or when no placeholders are present (e.g. private fork)."
 }
@@ -102,9 +109,18 @@ sed_escape() {
 # Hydrate infra.yaml (yq path-based for current env + project-level)
 # -----------------------------------------------------------------------------
 
+# Record a secret key as missing (hydrated with blank) so the deploy script can warn.
+record_missing() {
+    local key=$1
+    local missing_out="${2:-}"
+    [[ -z "$missing_out" ]] && return 0
+    echo "$key" >> "$missing_out"
+}
+
 hydrate_infra() {
     local project_root=$1
     local env=$2
+    local missing_out="${3:-}"
     local infra_file="$project_root/infra/infra.yaml"
 
     if [[ ! -f "$infra_file" ]]; then
@@ -114,41 +130,78 @@ hydrate_infra() {
 
     check_yq_installed || return 1
 
-    # Project-level (set once)
+    # Project-level (set once); hydrate with blank if missing and record for warning
     if [[ -n "${MANAGEMENT_ACCOUNT_ID:-}" ]]; then
         yq -i ".project.management_account_id = strenv(MANAGEMENT_ACCOUNT_ID)" "$infra_file"
+    else
+        yq -i '.project.management_account_id = ""' "$infra_file"
+        record_missing "MANAGEMENT_ACCOUNT_ID" "$missing_out"
     fi
     if [[ -n "${REPO:-}" ]]; then
         yq -i ".github.github_repo = strenv(REPO)" "$infra_file"
+    else
+        yq -i '.github.github_repo = ""' "$infra_file"
+        record_missing "REPO" "$missing_out"
     fi
     if [[ -n "${BUDGET_EMAIL:-}" ]]; then
         yq -i ".budgets.budget_email = strenv(BUDGET_EMAIL)" "$infra_file"
+        yq -i ".cost_control.notifications.warning_email = strenv(BUDGET_EMAIL)" "$infra_file"
+        yq -i ".cost_control.notifications.critical_email = strenv(BUDGET_EMAIL)" "$infra_file"
+    else
+        yq -i '.budgets.budget_email = ""' "$infra_file"
+        yq -i '.cost_control.notifications.warning_email = ""' "$infra_file"
+        yq -i '.cost_control.notifications.critical_email = ""' "$infra_file"
+        record_missing "BUDGET_EMAIL" "$missing_out"
     fi
 
     # Current environment only
     if [[ -n "${ACCOUNT_ID:-}" ]]; then
         yq -i ".environments.${env}.account_id = strenv(ACCOUNT_ID)" "$infra_file"
+    else
+        yq -i ".environments.${env}.account_id = \"\"" "$infra_file"
+        record_missing "ACCOUNT_ID" "$missing_out"
     fi
     if [[ -n "${EMAIL:-}" ]]; then
         yq -i ".environments.${env}.email = strenv(EMAIL)" "$infra_file"
+    else
+        yq -i ".environments.${env}.email = \"\"" "$infra_file"
+        record_missing "EMAIL" "$missing_out"
     fi
     if [[ -n "${DEPLOYER_ROLE_ARN:-}" ]]; then
         yq -i ".environments.${env}.github_actions_deployer_role_arn = strenv(DEPLOYER_ROLE_ARN)" "$infra_file"
+    else
+        yq -i ".environments.${env}.github_actions_deployer_role_arn = \"\"" "$infra_file"
+        record_missing "DEPLOYER_ROLE_ARN" "$missing_out"
     fi
     if [[ -n "${VPC_ID:-}" ]]; then
         yq -i ".environments.${env}.vpc_id = strenv(VPC_ID)" "$infra_file"
+    else
+        yq -i ".environments.${env}.vpc_id = \"\"" "$infra_file"
+        record_missing "VPC_ID" "$missing_out"
     fi
     if [[ -n "${SUBNET_IDS:-}" ]]; then
         yq -i ".environments.${env}.subnet_ids = strenv(SUBNET_IDS)" "$infra_file"
+    else
+        yq -i ".environments.${env}.subnet_ids = \"\"" "$infra_file"
+        record_missing "SUBNET_IDS" "$missing_out"
     fi
     if [[ -n "${DB_CLUSTER_ARN:-}" ]]; then
         yq -i ".environments.${env}.db_cluster_arn = strenv(DB_CLUSTER_ARN)" "$infra_file"
+    else
+        yq -i ".environments.${env}.db_cluster_arn = \"\"" "$infra_file"
+        record_missing "DB_CLUSTER_ARN" "$missing_out"
     fi
     if [[ -n "${DB_CREDENTIALS_SECRET_ARN:-}" ]]; then
         yq -i ".environments.${env}.db_credentials_secret_arn = strenv(DB_CREDENTIALS_SECRET_ARN)" "$infra_file"
+    else
+        yq -i ".environments.${env}.db_credentials_secret_arn = \"\"" "$infra_file"
+        record_missing "DB_CREDENTIALS_SECRET_ARN" "$missing_out"
     fi
     if [[ -n "${KNOWLEDGE_BASE_ID:-}" ]]; then
         yq -i ".environments.${env}.knowledge_base_id = strenv(KNOWLEDGE_BASE_ID)" "$infra_file"
+    else
+        yq -i ".environments.${env}.knowledge_base_id = \"\"" "$infra_file"
+        record_missing "KNOWLEDGE_BASE_ID" "$missing_out"
     fi
 
     print_info "Hydrated infra/infra.yaml for environment: $env"
@@ -157,51 +210,52 @@ hydrate_infra() {
 
 # -----------------------------------------------------------------------------
 # Hydrate app_config.yaml (sed text replacement)
+# Use temp file instead of sed -i for portability (BSD/macOS sed -i is quirky).
 # -----------------------------------------------------------------------------
+
+do_sed_replace() {
+    local placeholder=$1
+    local replacement=$2
+    local app_config_file=$3
+    [[ -z "$app_config_file" ]] || [[ ! -f "$app_config_file" ]] && return 1
+    local escaped
+    escaped=$(sed_escape "$replacement")
+    local tmp_file
+    tmp_file=$(mktemp)
+    sed -e "s|${placeholder}|${escaped}|g" "$app_config_file" > "$tmp_file" && mv "$tmp_file" "$app_config_file"
+    rm -f "$tmp_file" 2>/dev/null || true
+}
 
 hydrate_app_config() {
     local app_config_file=$1
+    local missing_out="${2:-}"
 
+    if [[ -z "$app_config_file" ]]; then
+        print_warning "Hydrate app_config: path is empty (skipping)"
+        return 0
+    fi
     if [[ ! -f "$app_config_file" ]]; then
         print_warning "App config not found: $app_config_file (skipping)"
         return 0
     fi
 
-    local need_sed=0
-    if has_placeholders "$app_config_file"; then
-        need_sed=1
-    fi
-    if [[ $need_sed -eq 0 ]]; then
+    if ! has_placeholders "$app_config_file"; then
         return 0
     fi
 
-    # Use | delimiter to avoid issues with / in ARNs
-    if [[ -n "${KNOWLEDGE_BASE_ID:-}" ]]; then
-        local escaped
-        escaped=$(sed_escape "$KNOWLEDGE_BASE_ID")
-        if [[ "$(uname -s)" = "Darwin" ]]; then
-            sed -i '' "s|\${KNOWLEDGE_BASE_ID}|${escaped}|g" "$app_config_file"
-        else
-            sed -i "s|\${KNOWLEDGE_BASE_ID}|${escaped}|g" "$app_config_file"
-        fi
+    # Replace each placeholder; use "" when secret is missing and record for warning
+    # Pattern uses \$ so sed treats $ as literal
+    if grep -q '${KNOWLEDGE_BASE_ID}' "$app_config_file" 2>/dev/null; then
+        do_sed_replace '\${KNOWLEDGE_BASE_ID}' "${KNOWLEDGE_BASE_ID:-}" "$app_config_file"
+        [[ -z "${KNOWLEDGE_BASE_ID:-}" ]] && record_missing "KNOWLEDGE_BASE_ID" "$missing_out"
     fi
-    if [[ -n "${DB_CLUSTER_ARN:-}" ]]; then
-        local escaped
-        escaped=$(sed_escape "$DB_CLUSTER_ARN")
-        if [[ "$(uname -s)" = "Darwin" ]]; then
-            sed -i '' "s|\${DB_CLUSTER_ARN}|${escaped}|g" "$app_config_file"
-        else
-            sed -i "s|\${DB_CLUSTER_ARN}|${escaped}|g" "$app_config_file"
-        fi
+    if grep -q '${DB_CLUSTER_ARN}' "$app_config_file" 2>/dev/null; then
+        do_sed_replace '\${DB_CLUSTER_ARN}' "${DB_CLUSTER_ARN:-}" "$app_config_file"
+        [[ -z "${DB_CLUSTER_ARN:-}" ]] && record_missing "DB_CLUSTER_ARN" "$missing_out"
     fi
-    if [[ -n "${DB_CREDENTIALS_SECRET_ARN:-}" ]]; then
-        local escaped
-        escaped=$(sed_escape "$DB_CREDENTIALS_SECRET_ARN")
-        if [[ "$(uname -s)" = "Darwin" ]]; then
-            sed -i '' "s|\${DB_CREDENTIALS_SECRET_ARN}|${escaped}|g" "$app_config_file"
-        else
-            sed -i "s|\${DB_CREDENTIALS_SECRET_ARN}|${escaped}|g" "$app_config_file"
-        fi
+    if grep -q '${DB_CREDENTIALS_SECRET_ARN}' "$app_config_file" 2>/dev/null; then
+        do_sed_replace '\${DB_CREDENTIALS_SECRET_ARN}' "${DB_CREDENTIALS_SECRET_ARN:-}" "$app_config_file"
+        [[ -z "${DB_CREDENTIALS_SECRET_ARN:-}" ]] && record_missing "DB_CREDENTIALS_SECRET_ARN" "$missing_out"
     fi
 
     print_info "Hydrated $app_config_file"
@@ -227,8 +281,14 @@ check_yq_installed() {
 
 run_hydrate() {
     local env=$1
+    local missing_out="${2:-}"  # optional: file to write missing secret keys (one per line)
     local project_root
-    project_root=$(get_project_root)
+    project_root=$(cd "$(get_project_root)" && pwd)
+
+    if [[ "${HYDRATE_CONFIGS:-}" = "false" ]]; then
+        print_info "HYDRATE_CONFIGS=false; skipping hydration"
+        return 0
+    fi
 
     local infra_file="$project_root/infra/infra.yaml"
     local app_config_file="$project_root/config/$env/app_config.yaml"
@@ -237,6 +297,9 @@ run_hydrate() {
         local secrets_file="$project_root/infra/secrets/${env}_secrets.yaml"
         load_config_secrets_from_file "$secrets_file" || return 1
     fi
+
+    # Clear missing-secrets report so caller can warn if any placeholders were hydrated with blank
+    [[ -n "$missing_out" ]] && : > "$missing_out"
 
     local infra_has_placeholders=0
     local app_has_placeholders=0
@@ -253,13 +316,102 @@ run_hydrate() {
     fi
 
     if [[ $infra_has_placeholders -eq 1 ]]; then
-        hydrate_infra "$project_root" "$env" || return 1
+        hydrate_infra "$project_root" "$env" "$missing_out" || return 1
     fi
-    if [[ $app_has_placeholders -eq 1 ]]; then
-        hydrate_app_config "$app_config_file" || return 1
+    if [[ -n "$app_config_file" ]] && [[ -f "$app_config_file" ]] && has_placeholders "$app_config_file"; then
+        hydrate_app_config "$app_config_file" "$missing_out" || return 1
     fi
 
     return 0
+}
+
+# -----------------------------------------------------------------------------
+# Runtime hydration wrapper (hydrate -> run command -> restore files)
+# -----------------------------------------------------------------------------
+
+RUNTIME_ACTIVE=false
+RUNTIME_BACKUP_DIR=""
+RUNTIME_PROJECT_ROOT=""
+RUNTIME_ENV=""
+
+runtime_backup_files() {
+    local project_root=$1
+    local env=$2
+    local backup_dir
+    backup_dir=$(mktemp -d)
+
+    local infra_file="$project_root/infra/infra.yaml"
+    local app_config_file="$project_root/config/$env/app_config.yaml"
+
+    if [[ -f "$infra_file" ]]; then
+        cp "$infra_file" "$backup_dir/infra.yaml"
+    fi
+
+    if [[ -f "$app_config_file" ]]; then
+        cp "$app_config_file" "$backup_dir/app_config.yaml"
+        echo "present" > "$backup_dir/app_config.state"
+    else
+        echo "missing" > "$backup_dir/app_config.state"
+    fi
+
+    echo "$backup_dir"
+}
+
+runtime_restore_files() {
+    if [[ "$RUNTIME_ACTIVE" != "true" ]]; then
+        return 0
+    fi
+    if [[ -z "$RUNTIME_BACKUP_DIR" ]] || [[ ! -d "$RUNTIME_BACKUP_DIR" ]]; then
+        return 0
+    fi
+
+    local infra_file="$RUNTIME_PROJECT_ROOT/infra/infra.yaml"
+    local app_config_file="$RUNTIME_PROJECT_ROOT/config/$RUNTIME_ENV/app_config.yaml"
+    local app_state=""
+
+    if [[ -f "$RUNTIME_BACKUP_DIR/infra.yaml" ]]; then
+        cp "$RUNTIME_BACKUP_DIR/infra.yaml" "$infra_file"
+    fi
+
+    if [[ -f "$RUNTIME_BACKUP_DIR/app_config.state" ]]; then
+        app_state=$(cat "$RUNTIME_BACKUP_DIR/app_config.state" 2>/dev/null || echo "")
+    fi
+    if [[ "$app_state" = "present" ]] && [[ -f "$RUNTIME_BACKUP_DIR/app_config.yaml" ]]; then
+        cp "$RUNTIME_BACKUP_DIR/app_config.yaml" "$app_config_file"
+    elif [[ "$app_state" = "missing" ]]; then
+        rm -f "$app_config_file" 2>/dev/null || true
+    fi
+
+    rm -rf "$RUNTIME_BACKUP_DIR" 2>/dev/null || true
+    RUNTIME_ACTIVE=false
+}
+
+run_hydrate_runtime() {
+    local env=$1
+    local missing_out="${2:-}"
+    shift 2
+    if [[ $# -eq 0 ]]; then
+        print_error "--run requires a command after '--'"
+        return 1
+    fi
+
+    if [[ "${HYDRATE_CONFIGS:-}" = "false" ]]; then
+        print_info "HYDRATE_CONFIGS=false; running command without hydration"
+        "$@"
+        return $?
+    fi
+
+    local project_root
+    project_root=$(cd "$(get_project_root)" && pwd)
+
+    RUNTIME_PROJECT_ROOT="$project_root"
+    RUNTIME_ENV="$env"
+    RUNTIME_BACKUP_DIR=$(runtime_backup_files "$project_root" "$env") || return 1
+    RUNTIME_ACTIVE=true
+    trap runtime_restore_files EXIT
+
+    run_hydrate "$env" "$missing_out" || return 1
+    "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -267,11 +419,6 @@ run_hydrate() {
 # -----------------------------------------------------------------------------
 
 main() {
-    if [[ "${HYDRATE_CONFIGS:-}" = "false" ]]; then
-        print_info "HYDRATE_CONFIGS=false; skipping hydration"
-        return 0
-    fi
-
     if [[ $# -lt 1 ]]; then
         print_error "Environment or --restore or --all required"
         show_usage
@@ -301,9 +448,46 @@ main() {
             print_complete "Hydrated all environments"
             exit 0
             ;;
+        --run)
+            if [[ $# -lt 4 ]]; then
+                print_error "--run requires: <environment> [missing_secrets_file] -- <command ...>"
+                show_usage
+                exit 1
+            fi
+            shift
+            local env="$1"
+            shift
+            validate_environment "$env" || exit 1
+
+            local missing_out=""
+            if [[ "${1:-}" != "--" ]]; then
+                missing_out="$1"
+                shift
+            fi
+
+            if [[ "${1:-}" != "--" ]]; then
+                print_error "--run requires '--' before command"
+                show_usage
+                exit 1
+            fi
+            shift
+
+            if [[ $# -eq 0 ]]; then
+                print_error "--run requires a command after '--'"
+                show_usage
+                exit 1
+            fi
+
+            if run_hydrate_runtime "$env" "$missing_out" "$@"; then
+                print_complete "Hydration runtime command complete for $env"
+                exit 0
+            else
+                exit $?
+            fi
+            ;;
         dev|staging|prod)
             validate_environment "$1" || exit 1
-            run_hydrate "$1" || exit 1
+            run_hydrate "$1" "${2:-}" || exit 1
             print_complete "Hydration complete for $1"
             exit 0
             ;;

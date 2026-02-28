@@ -45,6 +45,7 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
+ORIGINAL_ARGS=("$@")
 ENVIRONMENT=$1
 shift
 
@@ -52,6 +53,17 @@ ACTION="deploy"
 AUTO_CONFIRM=false
 REGION_OVERRIDE=""
 IMAGE_TAG=""
+
+print_missing_hydrate_warnings() {
+    local missing_file=$1
+    if [ -s "$missing_file" ]; then
+        print_warning "Some config_secrets were missing or empty; placeholders were hydrated with blank values."
+        print_warning "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml (config_secrets) to fix:"
+        while IFS= read -r key; do
+            [ -n "$key" ] && print_warning "  - $key"
+        done < "$missing_file"
+    fi
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -87,35 +99,37 @@ if [ -z "$IMAGE_TAG" ]; then
     IMAGE_TAG="latest"
 fi
 
-print_header "$RESOURCE_DISPLAY_NAME Deployment"
-
 validate_environment "$ENVIRONMENT" || exit 1
 
-# Hydrate templated config values from infra/secrets/<env>_secrets.yaml (or env in CI).
-# Placeholders are replaced with values from config_secrets; missing values become blank and are reported.
-if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update" ]; then
+# Hydrate in a runtime-only scope for deploy/update, then re-run this script with hydration disabled.
+if { [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update" ]; } && [ "${HYDRATE_RUNTIME_ACTIVE:-false}" != "true" ]; then
     HYDRATE_SCRIPT="$(get_project_root)/scripts/utils/hydrate_configs.sh"
     if [ -f "$HYDRATE_SCRIPT" ]; then
-        print_step "Hydrating config values for $ENVIRONMENT"
+        print_step "Hydrating config values for $ENVIRONMENT (runtime-only)"
         chmod +x "$HYDRATE_SCRIPT"
         HYDRATE_MISSING_FILE=""
+        RUNTIME_CMD=(env HYDRATE_RUNTIME_ACTIVE=true "$0" "${ORIGINAL_ARGS[@]}")
         if HYDRATE_MISSING_FILE=$(mktemp 2>/dev/null); then
-            "$HYDRATE_SCRIPT" "$ENVIRONMENT" "$HYDRATE_MISSING_FILE"
-            if [ -s "$HYDRATE_MISSING_FILE" ]; then
-                print_warning "Some config_secrets were missing or empty; placeholders were hydrated with blank values."
-                print_warning "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml (config_secrets) to fix:"
-                while IFS= read -r key; do
-                    [ -n "$key" ] && print_warning "  - $key"
-                done < "$HYDRATE_MISSING_FILE"
+            if "$HYDRATE_SCRIPT" --run "$ENVIRONMENT" "$HYDRATE_MISSING_FILE" -- "${RUNTIME_CMD[@]}"; then
+                print_missing_hydrate_warnings "$HYDRATE_MISSING_FILE"
+                rm -f "$HYDRATE_MISSING_FILE"
+                exit 0
+            else
+                status=$?
+                print_missing_hydrate_warnings "$HYDRATE_MISSING_FILE"
+                rm -f "$HYDRATE_MISSING_FILE"
+                exit $status
             fi
-            rm -f "$HYDRATE_MISSING_FILE"
         else
-            "$HYDRATE_SCRIPT" "$ENVIRONMENT"
+            "$HYDRATE_SCRIPT" --run "$ENVIRONMENT" -- "${RUNTIME_CMD[@]}"
+            exit $?
         fi
     else
         print_warning "Hydrate script not found at $HYDRATE_SCRIPT; continuing without hydration"
     fi
 fi
+
+print_header "$RESOURCE_DISPLAY_NAME Deployment"
 
 load_infra_config || exit 1
 validate_config "$ENVIRONMENT" || exit 1

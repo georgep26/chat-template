@@ -609,6 +609,68 @@ run_deployment_script() {
 }
 
 # =============================================================================
+# Hydration Backup/Restore
+# =============================================================================
+
+HYDRATE_BACKUP_ACTIVE=false
+HYDRATE_BACKUP_DIR=""
+HYDRATE_BACKUP_ENV=""
+
+create_hydrate_backup() {
+    local project_root=$1
+    local env=$2
+    local infra_file="$project_root/infra/infra.yaml"
+    local app_config_file="$project_root/config/$env/app_config.yaml"
+
+    HYDRATE_BACKUP_DIR=$(mktemp -d) || return 1
+    cp "$infra_file" "$HYDRATE_BACKUP_DIR/infra.yaml" || return 1
+
+    if [ -f "$app_config_file" ]; then
+        cp "$app_config_file" "$HYDRATE_BACKUP_DIR/app_config.yaml" || return 1
+        echo "present" > "$HYDRATE_BACKUP_DIR/app_config.state"
+    else
+        echo "missing" > "$HYDRATE_BACKUP_DIR/app_config.state"
+    fi
+
+    HYDRATE_BACKUP_ENV="$env"
+    HYDRATE_BACKUP_ACTIVE=true
+    return 0
+}
+
+restore_hydrate_backup() {
+    if [ "$HYDRATE_BACKUP_ACTIVE" != true ]; then
+        return 0
+    fi
+
+    local project_root="${PROJECT_ROOT:-$(get_project_root)}"
+    local infra_file="$project_root/infra/infra.yaml"
+    local app_config_file="$project_root/config/$HYDRATE_BACKUP_ENV/app_config.yaml"
+    local app_state=""
+
+    set +e
+    if [ -f "$HYDRATE_BACKUP_DIR/infra.yaml" ]; then
+        cp "$HYDRATE_BACKUP_DIR/infra.yaml" "$infra_file"
+    fi
+
+    if [ -f "$HYDRATE_BACKUP_DIR/app_config.state" ]; then
+        app_state=$(cat "$HYDRATE_BACKUP_DIR/app_config.state" 2>/dev/null)
+    fi
+    if [ "$app_state" = "present" ] && [ -f "$HYDRATE_BACKUP_DIR/app_config.yaml" ]; then
+        cp "$HYDRATE_BACKUP_DIR/app_config.yaml" "$app_config_file"
+    elif [ "$app_state" = "missing" ]; then
+        rm -f "$app_config_file" 2>/dev/null || true
+    fi
+
+    rm -rf "$HYDRATE_BACKUP_DIR" 2>/dev/null || true
+    set -e
+
+    HYDRATE_BACKUP_ACTIVE=false
+    HYDRATE_BACKUP_DIR=""
+    HYDRATE_BACKUP_ENV=""
+    return 0
+}
+
+# =============================================================================
 # Main Deployment
 # =============================================================================
 
@@ -699,6 +761,14 @@ fi
 # =============================================================================
 
 if [ -f "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" ]; then
+    if [ "${HYDRATE_CONFIGS:-}" != "false" ]; then
+        if ! create_hydrate_backup "$PROJECT_ROOT" "$ENVIRONMENT"; then
+            print_error "Failed to create hydration backup"
+            exit 1
+        fi
+        trap restore_hydrate_backup EXIT
+    fi
+
     chmod +x "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh"
     if "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" "$ENVIRONMENT"; then
         : # no-op on success (hydrate runs inline)
@@ -749,6 +819,9 @@ else
     print_warning "deploy_configs.sh not found, skipping"
     SKIPPED_STEPS+=("Deploy Configs")
 fi
+
+restore_hydrate_backup
+trap - EXIT
 
 # =============================================================================
 # Summary
