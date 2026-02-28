@@ -36,7 +36,7 @@ show_usage() {
     echo "Options:"
     echo "  -y, --yes         - Skip confirmation prompts"
     echo "  --region <region> - Override region"
-    echo "  --image-tag <tag> - Docker image tag (default: UTC timestamp)"
+    echo "  --image-tag <tag> - Docker image tag (default: latest)"
 }
 
 if [ $# -lt 1 ]; then
@@ -84,12 +84,39 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$IMAGE_TAG" ]; then
-    IMAGE_TAG="$(date -u +"%Y%m%dT%H%M%SZ")"
+    IMAGE_TAG="latest"
 fi
 
 print_header "$RESOURCE_DISPLAY_NAME Deployment"
 
 validate_environment "$ENVIRONMENT" || exit 1
+
+# Hydrate templated config values from infra/secrets/<env>_secrets.yaml (or env in CI).
+# Placeholders are replaced with values from config_secrets; missing values become blank and are reported.
+if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update" ]; then
+    HYDRATE_SCRIPT="$(get_project_root)/scripts/utils/hydrate_configs.sh"
+    if [ -f "$HYDRATE_SCRIPT" ]; then
+        print_step "Hydrating config values for $ENVIRONMENT"
+        chmod +x "$HYDRATE_SCRIPT"
+        HYDRATE_MISSING_FILE=""
+        if HYDRATE_MISSING_FILE=$(mktemp 2>/dev/null); then
+            "$HYDRATE_SCRIPT" "$ENVIRONMENT" "$HYDRATE_MISSING_FILE"
+            if [ -s "$HYDRATE_MISSING_FILE" ]; then
+                print_warning "Some config_secrets were missing or empty; placeholders were hydrated with blank values."
+                print_warning "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml (config_secrets) to fix:"
+                while IFS= read -r key; do
+                    [ -n "$key" ] && print_warning "  - $key"
+                done < "$HYDRATE_MISSING_FILE"
+            fi
+            rm -f "$HYDRATE_MISSING_FILE"
+        else
+            "$HYDRATE_SCRIPT" "$ENVIRONMENT"
+        fi
+    else
+        print_warning "Hydrate script not found at $HYDRATE_SCRIPT; continuing without hydration"
+    fi
+fi
+
 load_infra_config || exit 1
 validate_config "$ENVIRONMENT" || exit 1
 
@@ -123,6 +150,51 @@ aws_cmd() {
     else
         aws --region "$AWS_REGION" "$@"
     fi
+}
+
+is_placeholder_value() {
+    local value=$1
+    [[ "$value" == *'${'* ]] || [[ "$value" == *'$('* ]]
+}
+
+is_valid_email() {
+    local value=$1
+    [[ "$value" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
+is_valid_e164_sms() {
+    local value=$1
+    [[ "$value" =~ ^\+[1-9][0-9]{7,14}$ ]]
+}
+
+# Trim whitespace/newlines so CloudFormation never sees invalid characters
+trim_param_value() {
+    local v=$1
+    v=$(printf '%s' "$v" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr -d '\n\r')
+    echo -n "$v"
+}
+
+sanitize_notification_targets() {
+    local field_name=$1
+    local raw_value=$2
+    local validator=$3
+
+    raw_value=$(trim_param_value "$raw_value")
+    if [ -z "$raw_value" ] || [ "$raw_value" = "null" ]; then
+        echo ""
+        return 0
+    fi
+    if is_placeholder_value "$raw_value"; then
+        print_warning "Ignoring $field_name because it contains an unresolved placeholder: $raw_value"
+        echo ""
+        return 0
+    fi
+    if ! $validator "$raw_value"; then
+        print_warning "Ignoring $field_name because format is invalid: $raw_value"
+        echo ""
+        return 0
+    fi
+    echo "$raw_value"
 }
 
 do_validate_template() {
@@ -200,10 +272,10 @@ build_parameter_file() {
     warning_sms=$(get_cost_control_value "notifications.warning_sms")
     critical_email=$(get_cost_control_value "notifications.critical_email")
     critical_sms=$(get_cost_control_value "notifications.critical_sms")
-    [ "$warning_email" = "null" ] && warning_email=""
-    [ "$warning_sms" = "null" ] && warning_sms=""
-    [ "$critical_email" = "null" ] && critical_email=""
-    [ "$critical_sms" = "null" ] && critical_sms=""
+    warning_email=$(sanitize_notification_targets "warning_email" "$warning_email" is_valid_email)
+    warning_sms=$(sanitize_notification_targets "warning_sms" "$warning_sms" is_valid_e164_sms)
+    critical_email=$(sanitize_notification_targets "critical_email" "$critical_email" is_valid_email)
+    critical_sms=$(sanitize_notification_targets "critical_sms" "$critical_sms" is_valid_e164_sms)
 
     cost_control_json=$(get_cost_control_json "$ENVIRONMENT")
 
@@ -228,6 +300,12 @@ build_parameter_file() {
 import json
 import os
 
+def safe_param(v):
+    if v is None:
+        return ""
+    s = str(v).strip().replace("\r", "").replace("\n", "")
+    return s
+
 params = [
     {"ParameterKey": "ProjectName", "ParameterValue": os.environ["PROJECT_NAME"]},
     {"ParameterKey": "Environment", "ParameterValue": os.environ["ENVIRONMENT"]},
@@ -241,10 +319,10 @@ params = [
     {"ParameterKey": "ConsecutiveBreachCount", "ParameterValue": str(os.environ["BREACH_COUNT"])},
     {"ParameterKey": "CooldownMinutes", "ParameterValue": str(os.environ["COOLDOWN_MINS"])},
     {"ParameterKey": "PricingRefreshHourUtc", "ParameterValue": str(os.environ["PRICING_HOUR"])},
-    {"ParameterKey": "WarningEmail", "ParameterValue": os.environ["WARNING_EMAIL"]},
-    {"ParameterKey": "WarningSms", "ParameterValue": os.environ["WARNING_SMS"]},
-    {"ParameterKey": "CriticalEmail", "ParameterValue": os.environ["CRITICAL_EMAIL"]},
-    {"ParameterKey": "CriticalSms", "ParameterValue": os.environ["CRITICAL_SMS"]},
+    {"ParameterKey": "WarningEmail", "ParameterValue": safe_param(os.environ.get("WARNING_EMAIL", ""))},
+    {"ParameterKey": "WarningSms", "ParameterValue": safe_param(os.environ.get("WARNING_SMS", ""))},
+    {"ParameterKey": "CriticalEmail", "ParameterValue": safe_param(os.environ.get("CRITICAL_EMAIL", ""))},
+    {"ParameterKey": "CriticalSms", "ParameterValue": safe_param(os.environ.get("CRITICAL_SMS", ""))},
 ]
 
 with open(os.environ["PARAM_FILE"], "w", encoding="utf-8") as f:
