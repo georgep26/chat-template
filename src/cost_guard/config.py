@@ -8,6 +8,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+try:
+    import boto3
+except ImportError:
+    boto3 = None  # type: ignore[assignment]
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
@@ -51,6 +56,9 @@ DEFAULT_PRICING: dict[str, float] = {
     "sns_publish_request_per_million": 0.50,
     "cloudwatch_metric_per_1000": 0.01,
     "cloudwatch_logs_ingestion_gb": 0.50,
+    "s3_get_request_per_million": 0.40,
+    "s3_storage_gb_month": 0.023,
+    "aurora_acu_hour_usd": 0.12,
 }
 
 
@@ -82,6 +90,24 @@ def parse_cost_guard_config(raw_json: str | None) -> dict[str, Any]:
     return _deep_merge(DEFAULT_CONFIG, parsed)
 
 
+def _fetch_config_from_s3(bucket: str, key: str) -> str:
+    """Fetch config JSON from S3. Used when env vars would exceed Lambda 4KB limit."""
+    if boto3 is None:
+        raise RuntimeError("boto3 is required to load config from S3")
+    client = boto3.client("s3")
+    response = client.get_object(Bucket=bucket, Key=key)
+    return response["Body"].read().decode("utf-8")
+
+
+def _get_config_json() -> str:
+    """Get config JSON from S3 (Lambda) or COST_GUARD_CONFIG_JSON env (local/testing)."""
+    s3_bucket = os.getenv("COST_GUARD_CONFIG_S3_BUCKET", "").strip()
+    s3_key = os.getenv("COST_GUARD_CONFIG_S3_KEY", "config.json").strip() or "config.json"
+    if s3_bucket:
+        return _fetch_config_from_s3(s3_bucket, s3_key)
+    return os.getenv("COST_GUARD_CONFIG_JSON", "{}")
+
+
 def load_runtime_context() -> RuntimeContext:
     project_name = os.getenv("PROJECT_NAME", "chat-template")
     environment = os.getenv("ENVIRONMENT", "dev")
@@ -89,7 +115,7 @@ def load_runtime_context() -> RuntimeContext:
     warning_topic_arn = os.getenv("WARNING_TOPIC_ARN", "")
     critical_topic_arn = os.getenv("CRITICAL_TOPIC_ARN", "")
     enforcer_function_name = os.getenv("ENFORCER_FUNCTION_NAME", "")
-    raw_json = os.getenv("COST_GUARD_CONFIG_JSON", "{}")
+    raw_json = _get_config_json()
     config = parse_cost_guard_config(raw_json)
     return RuntimeContext(
         project_name=project_name,
