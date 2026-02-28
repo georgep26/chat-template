@@ -115,11 +115,11 @@ budgets:
 # v1 uses scheduled polling (Option 1); v1.2 can add app-metered events (Option 3).
 cost_control:
   enabled: true
-  mode: observe  # observe | enforce
+  mode: enforce  # observe | enforce
   stack_name: "{project}-cost-guard-{env}"
   budget:
     period: monthly
-    amount_usd: 20
+    amount_usd: 3.5
     warning_percent: 80
     hard_percent: 100
   monitor:
@@ -162,6 +162,12 @@ cost_control:
       enforcement: "attach_bedrock_deny_policy"
       enabled: true
       priority: 20
+    - id: "chat_db"
+      type: "aurora_cluster"
+      identifier: "{project}-light-db-cluster-{env}"
+      enforcement: "aurora_stop_cluster"
+      enabled: true
+      priority: 15
     - id: "cost_guard_monitor_lambda"
       type: "lambda"
       identifier: "{project}-{env}-cost-guard-monitor"
