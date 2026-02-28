@@ -30,6 +30,25 @@ def write_json_file(path: Path, payload: dict[str, Any] | list[dict[str, Any]]) 
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def _render_pricing_metadata_section(pricing_metadata: dict[str, Any]) -> str:
+    """Render a table showing price source (pricing_api or default_stored_price) and timestamp per rate."""
+    if not pricing_metadata:
+        return ""
+    table_rows = "".join(
+        f"<tr><td>{key}</td><td>{m.get('source', '')}</td><td>{m.get('at', '')}</td></tr>"
+        for key, m in sorted(pricing_metadata.items())
+        if isinstance(m, dict)
+    )
+    return f"""
+  <h2>Price source (per rate)</h2>
+  <p>Values are from <code>pricing_api</code> (with pull timestamp) or <code>default_stored_price</code> (with last update date).</p>
+  <table>
+    <thead><tr><th>Rate key</th><th>Source</th><th>At</th></tr></thead>
+    <tbody>{table_rows}</tbody>
+  </table>
+"""
+
+
 def render_html_report(
     summary: dict[str, Any],
     resources: list[dict[str, Any]],
@@ -114,7 +133,10 @@ def render_html_report(
     <div><strong>Estimated MTD:</strong> ${float(budget.get("estimated_mtd_usd", 0.0)):.4f}</div>
     <div><strong>Forecast Month-End:</strong> ${float(budget.get("forecast_month_end_usd", 0.0)):.4f}</div>
     <div><strong>Signal:</strong> ${float(summary.get("signal_usd", 0.0)):.4f}</div>
+    {f'<div><strong>Pricing state updated:</strong> {summary.get("pricing_state_updated_at", "—")}</div>' if summary.get("pricing_state_updated_at") else ""}
   </div>
+
+  {_render_pricing_metadata_section(summary.get("pricing_metadata") or {})}
 
   <h2>Resources</h2>
   <table>
