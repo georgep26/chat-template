@@ -15,7 +15,7 @@ This document describes the configuration files used by the project: application
 - API: host, port, timeout
 - Logging: formatters, handlers, log levels
 
-**Placeholders:** The committed per-env files use `${PLACEHOLDER}` for values that must not be in git (e.g. `${KNOWLEDGE_BASE_ID}`, `${DB_CLUSTER_ARN}`, `${DB_CREDENTIALS_SECRET_ARN}`). At deploy time, [scripts/utils/hydrate_configs.sh](../scripts/utils/hydrate_configs.sh) replaces these with real values: locally from `infra/secrets/<env>_secrets.yaml` (section `config_secrets`), and in CI from GitHub Environment secrets.
+**Placeholders:** The committed per-env files use `${PLACEHOLDER}` for values that must not be in git (e.g. `${KNOWLEDGE_BASE_ID}`, `${DB_CLUSTER_ARN}`, `${DB_CREDENTIALS_SECRET_ARN}`). At deploy time, [scripts/utils/hydrate_configs.sh](../scripts/utils/hydrate_configs.sh) replaces these with real values: locally from `infra/secrets/<env>_secrets.yaml` (section `config_secrets`), and in CI from GitHub Environment secrets. Deployment flows use runtime hydration/restore so hydrated values are submitted but not left in tracked files after completion.
 
 **Lambda:** The deployed Lambda loads the final config from S3 (the S3 URI is defined in infra and passed into the deploy workflow). If the Lambda runs inside a VPC, the VPC must allow access to S3 (e.g. S3 Gateway VPC Endpoint). See [lambda_vpc_s3_setup.md](lambda_vpc_s3_setup.md) for details.
 
@@ -36,7 +36,7 @@ This document describes the configuration files used by the project: application
 - **roles:** OIDC provider, deployer, evals, CLI, RAG Lambda execution, management-account policy and user. Each has `enabled`, template path, stack name, and (for some) policies.
 - **resources:** Deploy order: network, s3_bucket, chat_db, rag_knowledge_base, rag_lambda_ecr, rag_lambda. Each has `enabled`, template(s), stack name(s), and config (bucket names, ACU, etc.).
 
-**Placeholders:** Values like `${ACCOUNT_ID}`, `${VPC_ID}`, `${DEPLOYER_ROLE_ARN}` are filled by `scripts/utils/hydrate_configs.sh` from the environment’s secrets file (`config_secrets`) or from GitHub Environment secrets in CI.
+**Placeholders:** Values like `${ACCOUNT_ID}`, `${VPC_ID}`, `${DEPLOYER_ROLE_ARN}` are filled by `scripts/utils/hydrate_configs.sh` from the environment’s secrets file (`config_secrets`) or from GitHub Environment secrets in CI. Use `hydrate_configs.sh --run <env> -- <command ...>` when you need runtime-only hydration with automatic restore.
 
 ---
 
