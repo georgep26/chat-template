@@ -31,8 +31,8 @@ def _fetch_pricing_defaults(config: dict[str, Any]) -> dict[str, float]:
     pricing = dict(DEFAULT_PRICING)
     markup = as_float(config.get("pricing", {}).get("safety_markup_percent"), 10.0)
     multiplier = 1.0 + (markup / 100.0)
-    pricing["lambda_request_per_million"] = pricing["lambda_request_per_million"] * multiplier
-    pricing["lambda_gb_second"] = pricing["lambda_gb_second"] * multiplier
+    for key in list(pricing.keys()):
+        pricing[key] = pricing[key] * multiplier
     return pricing
 
 
@@ -124,4 +124,3 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "pricing_source": pricing_state["source"],
         "reconciliation": reconciliation,
     }
-
