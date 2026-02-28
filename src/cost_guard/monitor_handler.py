@@ -5,6 +5,7 @@ from __future__ import annotations
 from calendar import monthrange
 import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -34,6 +35,7 @@ BEDROCK_EVENT_NAMES = {
 ENFORCEABLE_ACTIONS = {
     "lambda_reserved_concurrency_zero",
     "attach_bedrock_deny_policy",
+    "aurora_stop_cluster",
 }
 
 
@@ -453,6 +455,150 @@ def _collect_dynamodb_costs(
     return outputs, len(metric_queries)
 
 
+def _cluster_to_instance_id(cluster_id: str) -> str:
+    """Derive DB instance identifier from cluster identifier (light_db naming)."""
+    if "-light-db-cluster-" in cluster_id:
+        return cluster_id.replace("-light-db-cluster-", "-light-db-instance-")
+    return cluster_id
+
+
+def _collect_aurora_costs(
+    cloudwatch_client: Any,
+    resources: list[dict[str, Any]],
+    start_time: datetime,
+    end_time: datetime,
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+) -> tuple[list[dict[str, Any]], int]:
+    if not resources:
+        return [], 0
+
+    # Aurora Serverless v2: ServerlessDatabaseCapacity (ACU) with DBClusterIdentifier.
+    # Fallback: CPUUtilization with DBInstanceIdentifier to approximate ACU-hours.
+    period_seconds = 300
+    period_hours = period_seconds / 3600.0
+    acu_price = as_float(pricing.get("aurora_acu_hour_usd"), 0.12)
+
+    metric_queries: list[dict[str, Any]] = []
+    query_map: dict[str, tuple[str, str]] = {}  # query_id -> (resource_id, "acu" | "cpu")
+    for idx, resource in enumerate(resources):
+        rid = resource["id"]
+        cluster_id = resource["identifier"]
+        acu_id = f"aurora_acu_{idx}"
+        metric_queries.append(
+            {
+                "Id": acu_id,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/RDS",
+                        "MetricName": "ServerlessDatabaseCapacity",
+                        "Dimensions": [{"Name": "DBClusterIdentifier", "Value": cluster_id}],
+                    },
+                    "Period": period_seconds,
+                    "Stat": "Average",
+                },
+                "ReturnData": True,
+            }
+        )
+        query_map[acu_id] = (rid, "acu")
+
+    result = cloudwatch_client.get_metric_data(
+        MetricDataQueries=metric_queries,
+        StartTime=start_time,
+        EndTime=end_time,
+        ScanBy="TimestampAscending",
+    )
+
+    # If ServerlessDatabaseCapacity has no data (e.g. cluster stopped or v1), try CPUUtilization fallback.
+    rid_acu_hours: dict[str, float] = {r["id"]: 0.0 for r in resources}
+    for metric_result in result.get("MetricDataResults", []):
+        query_id = metric_result.get("Id", "")
+        mapped = query_map.get(query_id)
+        if not mapped:
+            continue
+        rid, kind = mapped
+        values = metric_result.get("Values", []) or []
+        if kind == "acu" and values:
+            # ACU-hours = sum(ACU_avg_per_period) * period_hours
+            rid_acu_hours[rid] = sum(values) * period_hours
+            query_map.pop(query_id, None)
+
+    # Fallback: resources with zero ACU hours may need CPUUtilization (e.g. cluster idled or metric missing).
+    fallback_resources = [r for r in resources if rid_acu_hours[r["id"]] == 0.0]
+    cpu_query_count = 0
+    if fallback_resources:
+        cpu_queries: list[dict[str, Any]] = []
+        cpu_query_map: dict[str, str] = {}
+        for idx, resource in enumerate(fallback_resources):
+            rid = resource["id"]
+            instance_id = _cluster_to_instance_id(resource["identifier"])
+            max_acu = as_float(resource.get("max_acu"), 1.0)
+            cpu_id = f"aurora_cpu_{idx}"
+            cpu_queries.append(
+                {
+                    "Id": cpu_id,
+                    "MetricStat": {
+                        "Metric": {
+                            "Namespace": "AWS/RDS",
+                            "MetricName": "CPUUtilization",
+                            "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": instance_id}],
+                        },
+                        "Period": period_seconds,
+                        "Stat": "Average",
+                    },
+                    "ReturnData": True,
+                }
+            )
+            cpu_query_map[cpu_id] = rid
+        cpu_query_count = len(cpu_queries)
+        if cpu_queries:
+            fallback_result = cloudwatch_client.get_metric_data(
+                MetricDataQueries=cpu_queries,
+                StartTime=start_time,
+                EndTime=end_time,
+                ScanBy="TimestampAscending",
+            )
+            for metric_result in fallback_result.get("MetricDataResults", []):
+                query_id = metric_result.get("Id", "")
+                rid = cpu_query_map.get(query_id)
+                if not rid:
+                    continue
+                values = metric_result.get("Values", []) or []
+                if values:
+                    resource = next((r for r in fallback_resources if r["id"] == rid), None)
+                    max_acu = as_float(resource.get("max_acu"), 1.0) if resource else 1.0
+                    # Approximate ACU-hours: (CPU% / 100) * max_acu * period_hours per datapoint
+                    rid_acu_hours[rid] = sum(v / 100.0 * max_acu for v in values) * period_hours
+
+    outputs: list[dict[str, Any]] = []
+    for resource in resources:
+        rid = resource["id"]
+        cluster_id = resource["identifier"]
+        acu_hours = rid_acu_hours.get(rid, 0.0)
+        estimated_mtd = acu_hours * acu_price
+        previous_state = state_store.get_resource_state(rid)
+        previous_month = previous_state.get("month_key")
+        previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+        if previous_month != month_key:
+            previous_mtd = 0.0
+        interval_usd = max(estimated_mtd - previous_mtd, 0.0)
+        outputs.append(
+            {
+                "id": rid,
+                "type": resource.get("type"),
+                "identifier": cluster_id,
+                "enforcement": resource.get("enforcement"),
+                "priority": as_int(resource.get("priority"), 999),
+                "aurora_acu_hours_mtd": acu_hours,
+                "interval_usd": interval_usd,
+                "estimated_mtd_usd": estimated_mtd,
+            }
+        )
+    total_queries = len(metric_queries) + cpu_query_count
+    return outputs, total_queries
+
+
 def _collect_sns_costs(
     cloudwatch_client: Any,
     resources: list[dict[str, Any]],
@@ -608,6 +754,115 @@ def _collect_cloudwatch_logs_costs(
     return outputs, len(metric_queries)
 
 
+def _collect_s3_config_bucket_costs(
+    cloudwatch_client: Any,
+    bucket_name: str,
+    start_time: datetime,
+    end_time: datetime,
+    now: datetime,
+    config: dict[str, Any],
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Estimate S3 cost for the cost guard config bucket (GET requests + storage)."""
+    if not bucket_name:
+        return [], 0
+
+    interval_minutes = as_int(config.get("monitor", {}).get("interval_minutes"), 5)
+    elapsed_fraction = _month_elapsed_fraction(now)
+    days_in_month = monthrange(now.year, now.month)[1]
+    day_of_month = now.day
+    days_elapsed = min(day_of_month, days_in_month)
+
+    metric_queries: list[dict[str, Any]] = [
+        {
+            "Id": "s3_get",
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/S3",
+                    "MetricName": "GetRequests",
+                    "Dimensions": [
+                        {"Name": "BucketName", "Value": bucket_name},
+                        {"Name": "FilterId", "Value": "EntireBucket"},
+                    ],
+                },
+                "Period": 300,
+                "Stat": "Sum",
+            },
+            "ReturnData": True,
+        },
+        {
+            "Id": "s3_size",
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/S3",
+                    "MetricName": "BucketSizeBytes",
+                    "Dimensions": [
+                        {"Name": "BucketName", "Value": bucket_name},
+                        {"Name": "StorageType", "Value": "StandardStorage"},
+                    ],
+                },
+                "Period": 86400,
+                "Stat": "Average",
+            },
+            "ReturnData": True,
+        },
+    ]
+
+    get_requests_mtd = 0.0
+    storage_bytes = 0.0
+    try:
+        result = cloudwatch_client.get_metric_data(
+            MetricDataQueries=metric_queries,
+            StartTime=start_time,
+            EndTime=end_time,
+            ScanBy="TimestampAscending",
+        )
+        for metric_result in result.get("MetricDataResults", []):
+            values = metric_result.get("Values", []) or []
+            if metric_result.get("Id") == "s3_get" and values:
+                get_requests_mtd = float(sum(values))
+            elif metric_result.get("Id") == "s3_size" and values:
+                storage_bytes = float(values[-1])
+    except Exception as exc:  # pragma: no cover - AWS/network
+        LOGGER.warning("S3 metrics unavailable for bucket %s: %s", bucket_name, exc)
+
+    if get_requests_mtd <= 0:
+        invocations_per_day = (24 * 60 / max(interval_minutes, 1)) + 1
+        get_requests_mtd = invocations_per_day * days_elapsed
+
+    request_price = as_float(pricing.get("s3_get_request_per_million"), 0.40)
+    storage_price = as_float(pricing.get("s3_storage_gb_month"), 0.023)
+    request_cost = (get_requests_mtd / 1_000_000.0) * request_price
+    storage_gb = storage_bytes / float(1024**3)
+    storage_cost = storage_gb * storage_price * elapsed_fraction
+    estimated_mtd_usd = request_cost + storage_cost
+
+    resource_id = "cost_guard_config_bucket"
+    previous_state = state_store.get_resource_state(resource_id)
+    previous_month = previous_state.get("month_key")
+    previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+    if previous_month != month_key:
+        previous_mtd = 0.0
+    interval_usd = max(estimated_mtd_usd - previous_mtd, 0.0)
+
+    output: list[dict[str, Any]] = [
+        {
+            "id": resource_id,
+            "type": "s3_bucket",
+            "identifier": bucket_name,
+            "enforcement": "none",
+            "priority": 500,
+            "s3_get_requests_mtd": get_requests_mtd,
+            "s3_storage_bytes": storage_bytes,
+            "interval_usd": interval_usd,
+            "estimated_mtd_usd": estimated_mtd_usd,
+        }
+    ]
+    return output, len(metric_queries)
+
+
 def _collect_cloudwatch_control_costs(
     resources: list[dict[str, Any]],
     metric_query_count: int,
@@ -724,6 +979,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     cloudwatch_control_resources = [
         resource for resource in resources if resource.get("type") == "cloudwatch_control"
     ]
+    aurora_resources = [resource for resource in resources if resource.get("type") == "aurora_cluster"]
 
     lambda_costs, lambda_metric_query_count = _collect_lambda_costs(
         cloudwatch_client=cw,
@@ -745,6 +1001,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         month_key=current_month_key,
         now=now,
     )
+    aurora_costs, aurora_metric_query_count = _collect_aurora_costs(
+        cloudwatch_client=cw,
+        resources=aurora_resources,
+        start_time=month_start(now),
+        end_time=now,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+    )
     sns_costs, sns_metric_query_count = _collect_sns_costs(
         cloudwatch_client=cw,
         resources=sns_resources,
@@ -763,13 +1028,27 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         state_store=state_store,
         month_key=current_month_key,
     )
+    config_bucket = os.getenv("COST_GUARD_CONFIG_S3_BUCKET", "").strip()
+    s3_costs, s3_metric_query_count = _collect_s3_config_bucket_costs(
+        cloudwatch_client=cw,
+        bucket_name=config_bucket,
+        start_time=month_start(now),
+        end_time=now,
+        now=now,
+        config=config,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+    )
     cloudwatch_control_costs = _collect_cloudwatch_control_costs(
         resources=cloudwatch_control_resources,
         metric_query_count=(
             lambda_metric_query_count
             + ddb_metric_query_count
+            + aurora_metric_query_count
             + sns_metric_query_count
             + logs_metric_query_count
+            + s3_metric_query_count
         ),
         pricing=pricing,
         state_store=state_store,
@@ -789,8 +1068,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         lambda_costs
         + bedrock_costs
         + ddb_costs
+        + aurora_costs
         + sns_costs
         + cloudwatch_logs_costs
+        + s3_costs
         + cloudwatch_control_costs
     )
     estimated_mtd_usd = sum(as_float(item.get("estimated_mtd_usd"), 0.0) for item in all_resources)

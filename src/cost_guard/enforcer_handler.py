@@ -144,6 +144,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "blocked_model_ids": blocked,
             }
         )
+    elif enforcement == "aurora_stop_cluster":
+        rds_client = boto3.client("rds")
+        rds_client.stop_db_cluster(DBClusterIdentifier=identifier)
+        details.update({"cluster_id": identifier})
     else:
         return {"status": "ignored", "resource_id": resource_id, "reason": "unknown_enforcement"}
 
