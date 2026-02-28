@@ -22,12 +22,6 @@ Parameters:
     Type: String
     Description: 'ECR image URI for cost guard Lambda functions'
 
-  CostGuardConfigJson:
-    Type: String
-    Default: '{}'
-    Description: 'Serialized cost_control config JSON'
-    MaxLength: 4096
-
   BudgetAmountUsd:
     Type: Number
     Default: 20
@@ -83,6 +77,23 @@ Conditions:
   HasCriticalSms: !Not [!Equals [!Ref CriticalSms, '']]
 
 Resources:
+  CostGuardConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-cg-config-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-cost-guard-config-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
   CostGuardStateTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -206,6 +217,10 @@ Resources:
                 Resource:
                   - !Ref CostGuardWarningTopic
                   - !Ref CostGuardCriticalTopic
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${CostGuardConfigBucket.Arn}/*'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-cost-guard-monitor-role'
@@ -254,8 +269,18 @@ Resources:
                 Resource: '*'
               - Effect: Allow
                 Action:
+                  - rds:StopDBCluster
+                  - rds:StartDBCluster
+                  - rds:DescribeDBClusters
+                Resource: '*'
+              - Effect: Allow
+                Action:
                   - sns:Publish
                 Resource: !Ref CostGuardCriticalTopic
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${CostGuardConfigBucket.Arn}/*'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer-role'
@@ -301,6 +326,10 @@ Resources:
                 Action:
                   - sns:Publish
                 Resource: !Ref CostGuardCriticalTopic
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${CostGuardConfigBucket.Arn}/*'
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-cost-guard-pricing-role'
@@ -328,7 +357,8 @@ Resources:
           ENVIRONMENT: !Ref Environment
           STATE_TABLE_NAME: !Ref CostGuardStateTable
           CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
-          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+          COST_GUARD_CONFIG_S3_BUCKET: !Ref CostGuardConfigBucket
+          COST_GUARD_CONFIG_S3_KEY: config.json
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-cost-guard-enforcer'
@@ -358,7 +388,8 @@ Resources:
           WARNING_TOPIC_ARN: !Ref CostGuardWarningTopic
           CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
           ENFORCER_FUNCTION_NAME: !Ref CostGuardEnforcerFunction
-          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+          COST_GUARD_CONFIG_S3_BUCKET: !Ref CostGuardConfigBucket
+          COST_GUARD_CONFIG_S3_KEY: config.json
           BUDGET_AMOUNT_USD: !Ref BudgetAmountUsd
           WARNING_PERCENT: !Ref WarningPercent
           HARD_PERCENT: !Ref HardPercent
@@ -392,7 +423,8 @@ Resources:
           STATE_TABLE_NAME: !Ref CostGuardStateTable
           CRITICAL_TOPIC_ARN: !Ref CostGuardCriticalTopic
           WARNING_TOPIC_ARN: !Ref CostGuardWarningTopic
-          COST_GUARD_CONFIG_JSON: !Ref CostGuardConfigJson
+          COST_GUARD_CONFIG_S3_BUCKET: !Ref CostGuardConfigBucket
+          COST_GUARD_CONFIG_S3_KEY: config.json
           PRICING_REFRESH_HOUR_UTC: !Ref PricingRefreshHourUtc
       Tags:
         - Key: Name
@@ -439,6 +471,12 @@ Resources:
       SourceArn: !GetAtt CostGuardPricingScheduleRule.Arn
 
 Outputs:
+  CostGuardConfigBucketName:
+    Description: 'S3 bucket containing cost guard config JSON'
+    Value: !Ref CostGuardConfigBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-CostGuardConfigBucketName'
+
   CostGuardStateTableName:
     Description: 'DynamoDB table used for cost guard state'
     Value: !Ref CostGuardStateTable
