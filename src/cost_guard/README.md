@@ -29,6 +29,7 @@ All three Lambdas are deployed from one Docker image (`src/cost_guard/Dockerfile
 - Lambda metrics (`Invocations`, `Duration`)
 - Bedrock CloudTrail events (role-attributed estimate)
 - DynamoDB CloudWatch metrics
+- Aurora Serverless v2 CloudWatch metrics (`ServerlessDatabaseCapacity` or `CPUUtilization` fallback)
 - SNS CloudWatch metrics
 - CloudWatch Logs ingestion metrics
 - CloudWatch `GetMetricData` API usage estimate
@@ -84,15 +85,17 @@ Supported resource `type` values currently:
 1. `lambda`
 2. `iam_role`
 3. `dynamodb_table`
-4. `sns_topic`
-5. `cloudwatch_log_group`
-6. `cloudwatch_control`
+4. `aurora_cluster` (Aurora Serverless v2; identifier = DB cluster identifier)
+5. `sns_topic`
+6. `cloudwatch_log_group`
+7. `cloudwatch_control`
 
 Enforcement actions currently supported:
 
 1. `lambda_reserved_concurrency_zero`
 2. `attach_bedrock_deny_policy`
-3. `none` (monitor-only)
+3. `aurora_stop_cluster` (stops the DB cluster via RDS `StopDBCluster`; restore with `StartDBCluster`. AWS does not allow setting max ACU to 0; stopping the cluster is the supported kill switch.)
+4. `none` (monitor-only)
 
 ## Deployment Commands
 
