@@ -162,6 +162,69 @@ cost_control:
       enforcement: "attach_bedrock_deny_policy"
       enabled: true
       priority: 20
+    - id: "cost_guard_monitor_lambda"
+      type: "lambda"
+      identifier: "{project}-{env}-cost-guard-monitor"
+      enforcement: "none"
+      disable_event_sources: false
+      enabled: true
+      priority: 500
+    - id: "cost_guard_enforcer_lambda"
+      type: "lambda"
+      identifier: "{project}-{env}-cost-guard-enforcer"
+      enforcement: "none"
+      disable_event_sources: false
+      enabled: true
+      priority: 501
+    - id: "cost_guard_pricing_sync_lambda"
+      type: "lambda"
+      identifier: "{project}-{env}-cost-guard-pricing-sync"
+      enforcement: "none"
+      disable_event_sources: false
+      enabled: true
+      priority: 502
+    - id: "cost_guard_state_table"
+      type: "dynamodb_table"
+      identifier: "{project}-cost-guard-{env}"
+      enforcement: "none"
+      enabled: true
+      priority: 510
+    - id: "cost_guard_warning_topic"
+      type: "sns_topic"
+      identifier: "{project}-{env}-cost-guard-warning"
+      enforcement: "none"
+      enabled: true
+      priority: 511
+    - id: "cost_guard_critical_topic"
+      type: "sns_topic"
+      identifier: "{project}-{env}-cost-guard-critical"
+      enforcement: "none"
+      enabled: true
+      priority: 512
+    - id: "cost_guard_monitor_log_group"
+      type: "cloudwatch_log_group"
+      identifier: "/aws/lambda/{project}-{env}-cost-guard-monitor"
+      enforcement: "none"
+      enabled: true
+      priority: 520
+    - id: "cost_guard_enforcer_log_group"
+      type: "cloudwatch_log_group"
+      identifier: "/aws/lambda/{project}-{env}-cost-guard-enforcer"
+      enforcement: "none"
+      enabled: true
+      priority: 521
+    - id: "cost_guard_pricing_sync_log_group"
+      type: "cloudwatch_log_group"
+      identifier: "/aws/lambda/{project}-{env}-cost-guard-pricing-sync"
+      enforcement: "none"
+      enabled: true
+      priority: 522
+    - id: "cost_guard_cloudwatch_metric_api"
+      type: "cloudwatch_control"
+      identifier: "cloudwatch:GetMetricData"
+      enforcement: "none"
+      enabled: true
+      priority: 530
 # Required and optional tags for all resources
 tags:
   required:
