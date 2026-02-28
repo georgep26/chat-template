@@ -295,3 +295,6 @@ accounts.json
 
 # Add github pm notes (contains IDs, do not commit)
 docs/github-pm-notes.md
+
+# Cost reports
+docs/cost_reports/*
