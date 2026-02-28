@@ -189,11 +189,16 @@ Resources:
                   - s3:ListBucket
                   - s3:GetBucketPublicAccessBlock
                   - s3:PutBucketPublicAccessBlock
+                  - s3:TagResource
+                  - s3:UntagResource
+                  - s3:ListTagsForResource
                 Resource:
                   - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}'
                   - !Sub 'arn:aws:s3:::${ProjectName}-*-${Environment}/*'
                   - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-s3-bucket'
                   - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-s3-bucket/*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-cg-config-${Environment}-*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-cg-config-${Environment}-*/*'
               # RDS: Aurora cluster and instance scoped to project and environment
               - Sid: RDSDeployment
                 Effect: Allow
