@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,10 @@ BEDROCK_EVENT_NAMES = {
     "Converse",
     "ConverseStream",
 }
+ENFORCEABLE_ACTIONS = {
+    "lambda_reserved_concurrency_zero",
+    "attach_bedrock_deny_policy",
+}
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -49,6 +54,22 @@ def _safe_json(data: dict[str, Any]) -> str:
     return json.dumps(data, separators=(",", ":"), default=str)
 
 
+def _month_elapsed_fraction(now: datetime) -> float:
+    start = month_start(now)
+    elapsed_seconds = max((now - start).total_seconds(), 0.0)
+    days_in_month = monthrange(now.year, now.month)[1]
+    month_seconds = days_in_month * 86400.0
+    if month_seconds <= 0:
+        return 0.0
+    return min(max(elapsed_seconds / month_seconds, 0.0), 1.0)
+
+
+def _topic_name(identifier: str) -> str:
+    if identifier.startswith("arn:aws:sns:"):
+        return identifier.rsplit(":", maxsplit=1)[-1]
+    return identifier
+
+
 def _build_pricing(config: dict[str, Any], pricing_state: dict[str, Any]) -> dict[str, float]:
     pricing = dict(DEFAULT_PRICING)
     dynamic = pricing_state.get("pricing", {}) if pricing_state else {}
@@ -60,11 +81,13 @@ def _build_pricing(config: dict[str, Any], pricing_state: dict[str, Any]) -> dic
     pricing["lambda_request_per_million"] = as_float(
         pricing.get("lambda_request_per_million"),
         LAMBDA_REQUESTS_PER_MILLION_DEFAULT,
-    ) * multiplier
+    )
     pricing["lambda_gb_second"] = as_float(
         pricing.get("lambda_gb_second"),
         LAMBDA_GB_SECOND_DEFAULT,
-    ) * multiplier
+    )
+    for key, value in list(pricing.items()):
+        pricing[key] = as_float(value, 0.0) * multiplier
     return pricing
 
 
@@ -109,9 +132,9 @@ def _collect_lambda_costs(
     pricing: dict[str, float],
     state_store: StateStore,
     month_key: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     if not resources:
-        return []
+        return [], 0
 
     metric_queries: list[dict[str, Any]] = []
     query_to_resource: dict[str, tuple[str, str]] = {}
@@ -207,7 +230,7 @@ def _collect_lambda_costs(
             }
         )
 
-    return outputs
+    return outputs, len(metric_queries)
 
 
 def _lookup_cloudtrail_events(
@@ -295,6 +318,336 @@ def _collect_bedrock_costs(
     return outputs
 
 
+def _collect_dynamodb_costs(
+    cloudwatch_client: Any,
+    resources: list[dict[str, Any]],
+    start_time: datetime,
+    end_time: datetime,
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], int]:
+    if not resources:
+        return [], 0
+
+    metric_queries: list[dict[str, Any]] = []
+    query_map: dict[str, tuple[str, str, str]] = {}
+    for idx, resource in enumerate(resources):
+        rid = resource["id"]
+        table_name = resource["identifier"]
+        read_id = f"ddb_read_{idx}"
+        write_id = f"ddb_write_{idx}"
+        size_id = f"ddb_size_{idx}"
+        metric_queries.extend(
+            [
+                {
+                    "Id": read_id,
+                    "MetricStat": {
+                        "Metric": {
+                            "Namespace": "AWS/DynamoDB",
+                            "MetricName": "ConsumedReadCapacityUnits",
+                            "Dimensions": [{"Name": "TableName", "Value": table_name}],
+                        },
+                        "Period": 300,
+                        "Stat": "Sum",
+                    },
+                    "ReturnData": True,
+                },
+                {
+                    "Id": write_id,
+                    "MetricStat": {
+                        "Metric": {
+                            "Namespace": "AWS/DynamoDB",
+                            "MetricName": "ConsumedWriteCapacityUnits",
+                            "Dimensions": [{"Name": "TableName", "Value": table_name}],
+                        },
+                        "Period": 300,
+                        "Stat": "Sum",
+                    },
+                    "ReturnData": True,
+                },
+                {
+                    "Id": size_id,
+                    "MetricStat": {
+                        "Metric": {
+                            "Namespace": "AWS/DynamoDB",
+                            "MetricName": "TableSizeBytes",
+                            "Dimensions": [{"Name": "TableName", "Value": table_name}],
+                        },
+                        "Period": 86400,
+                        "Stat": "Average",
+                    },
+                    "ReturnData": True,
+                },
+            ]
+        )
+        query_map[read_id] = (rid, "read_units", "sum")
+        query_map[write_id] = (rid, "write_units", "sum")
+        query_map[size_id] = (rid, "storage_bytes", "last")
+
+    result = cloudwatch_client.get_metric_data(
+        MetricDataQueries=metric_queries,
+        StartTime=start_time,
+        EndTime=end_time,
+        ScanBy="TimestampAscending",
+    )
+
+    totals: dict[str, dict[str, float]] = {
+        resource["id"]: {"read_units": 0.0, "write_units": 0.0, "storage_bytes": 0.0}
+        for resource in resources
+    }
+    for metric_result in result.get("MetricDataResults", []):
+        query_id = metric_result.get("Id", "")
+        mapped = query_map.get(query_id)
+        if not mapped:
+            continue
+        resource_id, field, mode = mapped
+        values = metric_result.get("Values", []) or []
+        if not values:
+            continue
+        if mode == "last":
+            totals[resource_id][field] = float(values[-1])
+        else:
+            totals[resource_id][field] = float(sum(values))
+
+    elapsed_fraction = _month_elapsed_fraction(now)
+    outputs: list[dict[str, Any]] = []
+    for resource in resources:
+        rid = resource["id"]
+        table_name = resource["identifier"]
+        read_units = totals[rid]["read_units"]
+        write_units = totals[rid]["write_units"]
+        storage_bytes = totals[rid]["storage_bytes"]
+        request_cost = (read_units / 1_000_000.0) * as_float(
+            pricing.get("dynamodb_read_request_unit_per_million"),
+            0.125,
+        ) + (write_units / 1_000_000.0) * as_float(
+            pricing.get("dynamodb_write_request_unit_per_million"),
+            0.625,
+        )
+        storage_gb = storage_bytes / float(1024**3)
+        storage_cost = storage_gb * as_float(pricing.get("dynamodb_storage_gb_month"), 0.25) * elapsed_fraction
+        estimated_mtd = request_cost + storage_cost
+
+        previous_state = state_store.get_resource_state(rid)
+        previous_month = previous_state.get("month_key")
+        previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+        if previous_month != month_key:
+            previous_mtd = 0.0
+        interval_usd = max(estimated_mtd - previous_mtd, 0.0)
+        outputs.append(
+            {
+                "id": rid,
+                "type": resource.get("type"),
+                "identifier": table_name,
+                "enforcement": resource.get("enforcement"),
+                "priority": as_int(resource.get("priority"), 999),
+                "dynamodb_read_units_mtd": read_units,
+                "dynamodb_write_units_mtd": write_units,
+                "dynamodb_storage_bytes": storage_bytes,
+                "interval_usd": interval_usd,
+                "estimated_mtd_usd": estimated_mtd,
+            }
+        )
+    return outputs, len(metric_queries)
+
+
+def _collect_sns_costs(
+    cloudwatch_client: Any,
+    resources: list[dict[str, Any]],
+    start_time: datetime,
+    end_time: datetime,
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+) -> tuple[list[dict[str, Any]], int]:
+    if not resources:
+        return [], 0
+
+    metric_queries: list[dict[str, Any]] = []
+    query_map: dict[str, str] = {}
+    for idx, resource in enumerate(resources):
+        rid = resource["id"]
+        topic_name = _topic_name(resource["identifier"])
+        pub_id = f"sns_pub_{idx}"
+        metric_queries.append(
+            {
+                "Id": pub_id,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/SNS",
+                        "MetricName": "NumberOfMessagesPublished",
+                        "Dimensions": [{"Name": "TopicName", "Value": topic_name}],
+                    },
+                    "Period": 300,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            }
+        )
+        query_map[pub_id] = rid
+
+    result = cloudwatch_client.get_metric_data(
+        MetricDataQueries=metric_queries,
+        StartTime=start_time,
+        EndTime=end_time,
+        ScanBy="TimestampAscending",
+    )
+    totals: dict[str, float] = {resource["id"]: 0.0 for resource in resources}
+    for metric_result in result.get("MetricDataResults", []):
+        query_id = metric_result.get("Id", "")
+        rid = query_map.get(query_id)
+        if not rid:
+            continue
+        totals[rid] = float(sum(metric_result.get("Values", []) or []))
+
+    outputs: list[dict[str, Any]] = []
+    request_price = as_float(pricing.get("sns_publish_request_per_million"), 0.50)
+    for resource in resources:
+        rid = resource["id"]
+        topic_identifier = resource["identifier"]
+        published = totals[rid]
+        estimated_mtd = (published / 1_000_000.0) * request_price
+        previous_state = state_store.get_resource_state(rid)
+        previous_month = previous_state.get("month_key")
+        previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+        if previous_month != month_key:
+            previous_mtd = 0.0
+        interval_usd = max(estimated_mtd - previous_mtd, 0.0)
+        outputs.append(
+            {
+                "id": rid,
+                "type": resource.get("type"),
+                "identifier": topic_identifier,
+                "enforcement": resource.get("enforcement"),
+                "priority": as_int(resource.get("priority"), 999),
+                "sns_messages_published_mtd": published,
+                "interval_usd": interval_usd,
+                "estimated_mtd_usd": estimated_mtd,
+            }
+        )
+    return outputs, len(metric_queries)
+
+
+def _collect_cloudwatch_logs_costs(
+    cloudwatch_client: Any,
+    resources: list[dict[str, Any]],
+    start_time: datetime,
+    end_time: datetime,
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+) -> tuple[list[dict[str, Any]], int]:
+    if not resources:
+        return [], 0
+
+    metric_queries: list[dict[str, Any]] = []
+    query_map: dict[str, str] = {}
+    for idx, resource in enumerate(resources):
+        rid = resource["id"]
+        log_group_name = resource["identifier"]
+        incoming_id = f"logs_ing_{idx}"
+        metric_queries.append(
+            {
+                "Id": incoming_id,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/Logs",
+                        "MetricName": "IncomingBytes",
+                        "Dimensions": [{"Name": "LogGroupName", "Value": log_group_name}],
+                    },
+                    "Period": 300,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            }
+        )
+        query_map[incoming_id] = rid
+
+    result = cloudwatch_client.get_metric_data(
+        MetricDataQueries=metric_queries,
+        StartTime=start_time,
+        EndTime=end_time,
+        ScanBy="TimestampAscending",
+    )
+    totals: dict[str, float] = {resource["id"]: 0.0 for resource in resources}
+    for metric_result in result.get("MetricDataResults", []):
+        query_id = metric_result.get("Id", "")
+        rid = query_map.get(query_id)
+        if not rid:
+            continue
+        totals[rid] = float(sum(metric_result.get("Values", []) or []))
+
+    ingestion_price = as_float(pricing.get("cloudwatch_logs_ingestion_gb"), 0.50)
+    outputs: list[dict[str, Any]] = []
+    for resource in resources:
+        rid = resource["id"]
+        log_group_name = resource["identifier"]
+        incoming_bytes = totals[rid]
+        incoming_gb = incoming_bytes / float(1024**3)
+        estimated_mtd = incoming_gb * ingestion_price
+        previous_state = state_store.get_resource_state(rid)
+        previous_month = previous_state.get("month_key")
+        previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+        if previous_month != month_key:
+            previous_mtd = 0.0
+        interval_usd = max(estimated_mtd - previous_mtd, 0.0)
+        outputs.append(
+            {
+                "id": rid,
+                "type": resource.get("type"),
+                "identifier": log_group_name,
+                "enforcement": resource.get("enforcement"),
+                "priority": as_int(resource.get("priority"), 999),
+                "cloudwatch_logs_incoming_bytes_mtd": incoming_bytes,
+                "interval_usd": interval_usd,
+                "estimated_mtd_usd": estimated_mtd,
+            }
+        )
+    return outputs, len(metric_queries)
+
+
+def _collect_cloudwatch_control_costs(
+    resources: list[dict[str, Any]],
+    metric_query_count: int,
+    pricing: dict[str, float],
+    state_store: StateStore,
+    month_key: str,
+) -> list[dict[str, Any]]:
+    if not resources:
+        return []
+
+    total_interval = (float(metric_query_count) / 1000.0) * as_float(
+        pricing.get("cloudwatch_metric_per_1000"),
+        0.01,
+    )
+    per_resource_interval = total_interval / max(len(resources), 1)
+    per_resource_query_count = float(metric_query_count) / max(len(resources), 1)
+    outputs: list[dict[str, Any]] = []
+    for resource in resources:
+        rid = resource["id"]
+        previous_state = state_store.get_resource_state(rid)
+        previous_month = previous_state.get("month_key")
+        previous_mtd = as_float(previous_state.get("estimated_mtd_usd"), 0.0)
+        if previous_month != month_key:
+            previous_mtd = 0.0
+        estimated_mtd = previous_mtd + per_resource_interval
+        outputs.append(
+            {
+                "id": rid,
+                "type": resource.get("type"),
+                "identifier": resource.get("identifier"),
+                "enforcement": resource.get("enforcement"),
+                "priority": as_int(resource.get("priority"), 999),
+                "cloudwatch_metric_queries_interval": per_resource_query_count,
+                "interval_usd": per_resource_interval,
+                "estimated_mtd_usd": estimated_mtd,
+            }
+        )
+    return outputs
+
+
 def _publish_sns(topic_arn: str, subject: str, payload: dict[str, Any]) -> None:
     if not topic_arn:
         return
@@ -316,6 +669,14 @@ def _invoke_enforcer(function_name: str, payload: dict[str, Any]) -> None:
 def _enabled_resources(config: dict[str, Any]) -> list[dict[str, Any]]:
     resources = config.get("resources", [])
     return [resource for resource in resources if resource.get("enabled", True)]
+
+
+def _enforceable_resources(resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        resource
+        for resource in resources
+        if resource.get("enforcement") in ENFORCEABLE_ACTIONS
+    ]
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -355,13 +716,61 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     resources = _enabled_resources(config)
     lambda_resources = [resource for resource in resources if resource.get("type") == "lambda"]
     role_resources = [resource for resource in resources if resource.get("type") == "iam_role"]
+    dynamodb_resources = [resource for resource in resources if resource.get("type") == "dynamodb_table"]
+    sns_resources = [resource for resource in resources if resource.get("type") == "sns_topic"]
+    cloudwatch_log_resources = [
+        resource for resource in resources if resource.get("type") == "cloudwatch_log_group"
+    ]
+    cloudwatch_control_resources = [
+        resource for resource in resources if resource.get("type") == "cloudwatch_control"
+    ]
 
-    lambda_costs = _collect_lambda_costs(
+    lambda_costs, lambda_metric_query_count = _collect_lambda_costs(
         cloudwatch_client=cw,
         lambda_client=lambda_client,
         resources=lambda_resources,
         start_time=month_start(now),
         end_time=now,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+    )
+    ddb_costs, ddb_metric_query_count = _collect_dynamodb_costs(
+        cloudwatch_client=cw,
+        resources=dynamodb_resources,
+        start_time=month_start(now),
+        end_time=now,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+        now=now,
+    )
+    sns_costs, sns_metric_query_count = _collect_sns_costs(
+        cloudwatch_client=cw,
+        resources=sns_resources,
+        start_time=month_start(now),
+        end_time=now,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+    )
+    cloudwatch_logs_costs, logs_metric_query_count = _collect_cloudwatch_logs_costs(
+        cloudwatch_client=cw,
+        resources=cloudwatch_log_resources,
+        start_time=month_start(now),
+        end_time=now,
+        pricing=pricing,
+        state_store=state_store,
+        month_key=current_month_key,
+    )
+    cloudwatch_control_costs = _collect_cloudwatch_control_costs(
+        resources=cloudwatch_control_resources,
+        metric_query_count=(
+            lambda_metric_query_count
+            + ddb_metric_query_count
+            + sns_metric_query_count
+            + logs_metric_query_count
+        ),
         pricing=pricing,
         state_store=state_store,
         month_key=current_month_key,
@@ -376,7 +785,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         month_key=current_month_key,
     )
 
-    all_resources = lambda_costs + bedrock_costs
+    all_resources = (
+        lambda_costs
+        + bedrock_costs
+        + ddb_costs
+        + sns_costs
+        + cloudwatch_logs_costs
+        + cloudwatch_control_costs
+    )
     estimated_mtd_usd = sum(as_float(item.get("estimated_mtd_usd"), 0.0) for item in all_resources)
 
     budget_cfg = config.get("budget", {})
@@ -396,6 +812,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     hard_streak = update_hard_breach_streak(previous_hard_streak, signal.hard_breached)
     culprit = choose_culprit(all_resources)
+    enforceable_culprit = choose_culprit(_enforceable_resources(all_resources))
 
     cooldown_minutes = as_int(monitor_cfg.get("cooldown_minutes"), 30)
     warning_sent = False
@@ -426,26 +843,27 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         signal.hard_breached
         and hard_streak >= consecutive_breach_count
         and config.get("mode", "observe") == "enforce"
-        and culprit
+        and enforceable_culprit
     ):
         action_payload = {
             "event_type": "enforce",
             "environment": runtime.environment,
             "project": runtime.project_name,
-            "resource": culprit,
+            "resource": enforceable_culprit,
             "reason": {
                 "signal_usd": signal.signal_usd,
                 "estimated_mtd_usd": signal.estimated_mtd_usd,
                 "forecast_month_end_usd": signal.forecast_month_end_usd,
                 "hard_threshold_usd": signal.hard_threshold_usd,
                 "hard_breach_streak": hard_streak,
+                "top_interval_resource_id": culprit.get("id") if culprit else None,
             },
             "triggered_at": now.isoformat(),
         }
         _invoke_enforcer(runtime.enforcer_function_name, action_payload)
         state_store.record_event(
             severity="critical",
-            resource_id=culprit["id"],
+            resource_id=enforceable_culprit["id"],
             message="Hard threshold reached; enforcement triggered",
             details=action_payload,
         )
@@ -459,6 +877,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 breach_state = "hard"
             elif signal.warning_breached:
                 breach_state = "warning"
+        metadata = {
+            key: value
+            for key, value in item.items()
+            if key
+            not in {
+                "id",
+                "type",
+                "identifier",
+                "enforcement",
+                "priority",
+                "interval_usd",
+                "estimated_mtd_usd",
+            }
+        }
 
         state_store.put_resource_state(
             item["id"],
@@ -475,12 +907,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "last_action": existing.get("last_action", "none"),
                 "last_action_at": existing.get("last_action_at"),
                 "action_active": existing.get("action_active", False),
-                "metadata": {
-                    "invocations": item.get("invocations"),
-                    "duration_ms": item.get("duration_ms"),
-                    "memory_mb": item.get("memory_mb"),
-                    "bedrock_invocations_interval": item.get("bedrock_invocations_interval"),
-                },
+                "metadata": metadata,
                 "month_key": current_month_key,
                 "updated_at": now.isoformat(),
             },
@@ -519,4 +946,3 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "hard_breach_streak": hard_streak,
         "culprit_resource_id": culprit.get("id") if culprit else None,
     }
-
