@@ -80,6 +80,7 @@ def main() -> None:
     table_name = args.table_name or f"{project_name}-cost-guard-{args.env}"
     state_store = StateStore(table_name=table_name, environment=args.env)
     project_state = state_store.get_project_state()
+    pricing_state = state_store.get_pricing_state()
     resources = [_normalize_resource(item) for item in state_store.list_resource_states()]
     events = state_store.list_events_for_date(args.date)
 
@@ -115,6 +116,8 @@ def main() -> None:
             "estimated_mtd_usd": estimated_mtd,
             "forecast_month_end_usd": forecast_month_end,
         },
+        "pricing_state_updated_at": pricing_state.get("updated_at"),
+        "pricing_metadata": pricing_state.get("pricing_metadata", {}),
         "resources": resources,
         "events": [
             {
