@@ -1,6 +1,8 @@
 # Cost Reports
 
 This folder stores generated cost reports for the cost guard system.
+By default, reports include monitored workload resources and Cost Guard control-plane resources
+(cost guard Lambdas, state table, SNS topics, and cost guard log/API estimates).
 
 ## Report Structure
 
