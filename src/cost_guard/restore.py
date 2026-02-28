@@ -51,6 +51,14 @@ def _restore_role(resource_state: dict[str, Any]) -> dict[str, Any]:
     return {"restored_role": role_name, "deleted_policy_name": policy_name}
 
 
+def _restore_aurora(resource_state: dict[str, Any]) -> dict[str, Any]:
+    rds_client = boto3.client("rds")
+    restore_details = resource_state.get("restore_details", {}) or {}
+    cluster_id = restore_details.get("cluster_id") or resource_state.get("identifier")
+    rds_client.start_db_cluster(DBClusterIdentifier=cluster_id)
+    return {"cluster_id": cluster_id}
+
+
 def restore_resource(
     table_name: str,
     environment: str,
@@ -66,6 +74,8 @@ def restore_resource(
         details = _restore_lambda(resource_state)
     elif enforcement == "attach_bedrock_deny_policy":
         details = _restore_role(resource_state)
+    elif enforcement == "aurora_stop_cluster":
+        details = _restore_aurora(resource_state)
     else:
         raise ValueError(f"Unsupported enforcement action: {enforcement}")
 
