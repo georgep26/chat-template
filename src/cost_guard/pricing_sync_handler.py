@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import boto3
 
 from cost_guard.config import DEFAULT_PRICING, as_float, load_runtime_context
+from cost_guard.pricing_api import fetch_pricing_with_metadata
 from cost_guard.state_store import StateStore
 
 LOGGER = logging.getLogger(__name__)
@@ -26,14 +28,18 @@ def _publish_critical(topic_arn: str, subject: str, payload: dict[str, Any]) -> 
     )
 
 
-def _fetch_pricing_defaults(config: dict[str, Any]) -> dict[str, float]:
-    # v1 intentionally uses conservative defaults + safety markup for low complexity.
-    pricing = dict(DEFAULT_PRICING)
+def _fetch_pricing_with_fallback(config: dict[str, Any], region: str, at_time: datetime) -> tuple[dict[str, float], dict[str, dict[str, str]]]:
+    """Use Pricing API first; fall back to config defaults. Apply safety markup to values."""
+    rates, metadata = fetch_pricing_with_metadata(
+        default_pricing=DEFAULT_PRICING,
+        region=region,
+        at_time=at_time,
+    )
     markup = as_float(config.get("pricing", {}).get("safety_markup_percent"), 10.0)
     multiplier = 1.0 + (markup / 100.0)
-    for key in list(pricing.keys()):
-        pricing[key] = pricing[key] * multiplier
-    return pricing
+    for key in list(rates.keys()):
+        rates[key] = rates[key] * multiplier
+    return rates, metadata
 
 
 def _project_actual_cost(project_name: str) -> float | None:
@@ -75,11 +81,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     config = runtime.config
     state_store = StateStore(table_name=runtime.table_name, environment=runtime.environment)
     now = datetime.now(tz=UTC)
+    region = os.environ.get("AWS_REGION", "us-east-1")
 
-    pricing = _fetch_pricing_defaults(config)
+    pricing, pricing_metadata = _fetch_pricing_with_fallback(config, region, now)
     pricing_state = {
         "pricing": pricing,
-        "source": "default_with_safety_markup",
+        "pricing_metadata": pricing_metadata,
+        "source": "pricing_api_with_fallback",
         "updated_at": now.isoformat(),
     }
     state_store.put_pricing_state(pricing_state)
@@ -122,5 +130,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     return {
         "status": "ok",
         "pricing_source": pricing_state["source"],
+        "pricing_metadata_sample": dict(list(pricing_state.get("pricing_metadata", {}).items())[:3]),
         "reconciliation": reconciliation,
     }
