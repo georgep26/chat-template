@@ -192,6 +192,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
   - Runs **hydrate_configs.sh** for the environment (injects secrets into infra.yaml and app_config placeholders; see below).
   - Runs **sync_app_config.sh --env <env>** to copy knowledge_base_id, db_cluster_arn, db_credentials_secret_arn from infra into `config/<env>/app_config.yaml`.
   - Runs **deploy_configs.sh <env>** to upload `config/<env>/` to the environment’s S3 bucket under `config/`.
+  - When hydration is enabled, restores `infra/infra.yaml` and `config/<env>/app_config.yaml` to their pre-hydrate local state after config submission, so hydrated values do not remain in the working tree.
   - Prints a completion summary.
 
 ---
@@ -280,6 +281,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
   - **Local:** Values come from `infra/secrets/<env>_secrets.yaml` section `config_secrets`; each key is exported as an env var.
   - **infra.yaml:** For the given env, set (if env vars present) e.g. `project.management_account_id`, `github.github_repo`, `budgets.budget_email`, and `environments.<env>.*` (account_id, email, github_actions_deployer_role_arn, vpc_id, subnet_ids, db_cluster_arn, db_credentials_secret_arn, knowledge_base_id).
   - **app_config.yaml:** Replace `${KNOWLEDGE_BASE_ID}`, `${DB_CLUSTER_ARN}`, `${DB_CREDENTIALS_SECRET_ARN}` with the same env vars (sed). Skip if `HYDRATE_CONFIGS=false` or no placeholders found.
+  - **Runtime mode:** `--run <env> [missing_file] -- <command ...>` hydrates, executes the command, then restores `infra/infra.yaml` and `config/<env>/app_config.yaml` automatically.
 
 ---
 
