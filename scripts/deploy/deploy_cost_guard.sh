@@ -293,7 +293,6 @@ build_parameter_file() {
 
     cost_control_json=$(get_cost_control_json "$ENVIRONMENT")
 
-    COST_GUARD_CONFIG_JSON="$cost_control_json" \
     PROJECT_NAME="$PROJECT_NAME" \
     ENVIRONMENT="$ENVIRONMENT" \
     AWS_REGION="$AWS_REGION" \
@@ -325,7 +324,6 @@ params = [
     {"ParameterKey": "Environment", "ParameterValue": os.environ["ENVIRONMENT"]},
     {"ParameterKey": "AWSRegion", "ParameterValue": os.environ["AWS_REGION"]},
     {"ParameterKey": "CostGuardImageUri", "ParameterValue": os.environ["COST_GUARD_IMAGE_URI"]},
-    {"ParameterKey": "CostGuardConfigJson", "ParameterValue": os.environ["COST_GUARD_CONFIG_JSON"]},
     {"ParameterKey": "BudgetAmountUsd", "ParameterValue": str(os.environ["BUDGET_AMOUNT"])},
     {"ParameterKey": "WarningPercent", "ParameterValue": str(os.environ["WARNING_PERCENT"])},
     {"ParameterKey": "HardPercent", "ParameterValue": str(os.environ["HARD_PERCENT"])},
@@ -407,6 +405,17 @@ deploy_stack() {
             aws_cmd cloudformation wait stack-create-complete --stack-name "$STACK_NAME"
         fi
     fi
+
+    print_step "Uploading cost guard config to S3"
+    config_bucket=$(aws_cmd cloudformation describe-stacks --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CostGuardConfigBucketName`].OutputValue' --output text)
+    if [ -z "$config_bucket" ]; then
+        print_error "Could not get CostGuardConfigBucketName from stack outputs"
+        exit 1
+    fi
+    cost_control_json=$(get_cost_control_json "$ENVIRONMENT")
+    echo "$cost_control_json" | aws_cmd s3 cp - "s3://${config_bucket}/config.json" --content-type "application/json"
+    print_complete "Config uploaded to s3://${config_bucket}/config.json"
 
     print_complete "Cost guard deployment finished"
     echo ""
