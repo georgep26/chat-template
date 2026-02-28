@@ -20,7 +20,7 @@ Development uses a branch model: **main** (stable/production), **development** (
 
 Full details are in [docs/deployment_process.md](docs/deployment_process.md). Summary:
 
-> **Important:** This repo is set up for a **public** repo: sensitive values live in `infra/secrets/` (gitignored) and placeholders in `infra/infra.yaml` and `config/<env>/app_config.yaml` are filled at deploy time by [scripts/utils/hydrate_configs.sh](scripts/utils/hydrate_configs.sh) (CI uses GitHub Environment secrets; local runs use the secrets files). For a **private** repo you can set `HYDRATE_CONFIGS=false` and commit real values, or keep the same flow with secrets only in GitHub or local files.
+> **Important:** This repo is set up for a **public** repo: sensitive values live in `infra/secrets/` (gitignored) and placeholders in `infra/infra.yaml` and `config/<env>/app_config.yaml` are filled at deploy time by [scripts/utils/hydrate_configs.sh](scripts/utils/hydrate_configs.sh) (CI uses GitHub Environment secrets; local runs use the secrets files). Deploy scripts use runtime hydration/restore so hydrated values are not left in tracked files after deploy completes. For a **private** repo you can set `HYDRATE_CONFIGS=false` and commit real values, or keep the same flow with secrets only in GitHub or local files.
 
 ### 4.1 Local development environment setup
 
