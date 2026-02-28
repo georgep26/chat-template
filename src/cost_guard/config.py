@@ -45,6 +45,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
 DEFAULT_PRICING: dict[str, float] = {
     "lambda_request_per_million": 0.20,
     "lambda_gb_second": 0.0000166667,
+    "dynamodb_read_request_unit_per_million": 0.125,
+    "dynamodb_write_request_unit_per_million": 0.625,
+    "dynamodb_storage_gb_month": 0.25,
+    "sns_publish_request_per_million": 0.50,
+    "cloudwatch_metric_per_1000": 0.01,
+    "cloudwatch_logs_ingestion_gb": 0.50,
 }
 
 
@@ -108,4 +114,3 @@ def as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
