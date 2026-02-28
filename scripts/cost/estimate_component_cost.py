@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,16 @@ class CostEstimate:
     notes: str
 
 
+def _cf_constructor(loader: Any, node: Any) -> Any:
+    """Parse CloudFormation intrinsic tags (!Ref, !Not, !Equals, etc.) so YAML load succeeds."""
+    import yaml
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_scalar(node)
+
+
 def _load_yaml(path: Path) -> dict[str, Any]:
     try:
         import yaml
@@ -51,7 +62,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         raise RuntimeError(
             "PyYAML is required. Install dependencies (e.g. `pip install -r requirements.txt`)."
         ) from exc
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    # CloudFormation templates use intrinsic tags (!Ref, !Not, !Equals, etc.); SafeLoader rejects them.
+    loader = yaml.SafeLoader
+    for tag in (
+        "!Ref", "!Sub", "!GetAtt", "!Not", "!Equals", "!And", "!Or", "!If",
+        "!FindInMap", "!Select", "!Split", "!Join", "!ImportValue", "!Condition",
+    ):
+        loader.add_constructor(tag, _cf_constructor)
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=loader) or {}
 
 
 def _resolve_ref(value: Any, parameter_defaults: dict[str, Any]) -> Any:
