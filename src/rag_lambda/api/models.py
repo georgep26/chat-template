@@ -2,16 +2,17 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
     """Request model for chat API."""
 
     conversation_id: str
-    user_id: str
+    # Deprecated for authenticated clients. The backend derives identity from JWT when auth is enabled.
+    user_id: Optional[str] = None
     message: str
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     retrieval_filters: Optional[Dict[str, List[str]]] = None
 
 
@@ -29,7 +30,6 @@ class ChatResponse(BaseModel):
 
     conversation_id: str
     answer: str
-    sources: List[Source] = []
+    sources: List[Source] = Field(default_factory=list)
     trace_id: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
-
