@@ -285,11 +285,37 @@ Resources:
                   - lambda:PublishVersion
                   - lambda:AddPermission
                   - lambda:RemovePermission
+                  - lambda:CreateFunctionUrlConfig
+                  - lambda:DeleteFunctionUrlConfig
+                  - lambda:GetFunctionUrlConfig
+                  - lambda:UpdateFunctionUrlConfig
+                  - lambda:ListFunctionUrlConfigs
+                  - lambda:InvokeFunctionUrl
                   - lambda:ListVersionsByFunction
                   - lambda:TagResource
                   - lambda:UntagResource
                   - lambda:ListTags
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
+              # Cognito: user pool + app client + optional hosted UI domain lifecycle
+              - Sid: CognitoDeployment
+                Effect: Allow
+                Action:
+                  - cognito-idp:CreateUserPool
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:UpdateUserPoolClient
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:CreateUserPoolDomain
+                  - cognito-idp:DeleteUserPoolDomain
+                  - cognito-idp:DescribeUserPoolDomain
+                  - cognito-idp:ListUserPools
+                  - cognito-idp:ListUserPoolClients
+                  - cognito-idp:TagResource
+                  - cognito-idp:UntagResource
+                Resource: '*'
               # DynamoDB: cost guard state table scoped to project and environment
               - Sid: DynamoDBDeployment
                 Effect: Allow
