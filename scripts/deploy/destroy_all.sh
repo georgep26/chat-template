@@ -14,15 +14,16 @@
 #   # Destroy with single confirmation (auto-confirm each component)
 #   ./scripts/deploy/destroy_all.sh dev --force
 #
-#   # Destroy only Lambda and Knowledge Base (skip DB, S3, Network)
-#   ./scripts/deploy/destroy_all.sh dev --skip-db --skip-s3 --skip-network
+#   # Destroy only Lambda and Knowledge Base (skip Cognito, DB, S3, Network)
+#   ./scripts/deploy/destroy_all.sh dev --skip-cognito --skip-db --skip-s3 --skip-network
 #
 # Destroy order (reverse of deploy, so dependencies are removed first):
 #   1. Lambda
-#   2. Knowledge Base
-#   3. Database
-#   4. S3 Bucket
-#   5. Network
+#   2. Cognito
+#   3. Knowledge Base
+#   4. Database
+#   5. S3 Bucket
+#   6. Network
 
 set -e
 
@@ -43,6 +44,7 @@ show_usage() {
     echo "  --region <region>     - AWS region (default: us-east-1)"
     echo "  --force, -y           - Skip per-component confirmation prompts (single prompt at start)"
     echo "  --skip-lambda         - Do not destroy Lambda stack"
+    echo "  --skip-cognito        - Do not destroy Cognito stack"
     echo "  --skip-kb             - Do not destroy Knowledge Base stack"
     echo "  --skip-db             - Do not destroy Database stack"
     echo "  --skip-s3             - Do not destroy S3 bucket stack"
@@ -54,7 +56,7 @@ show_usage() {
     echo "  $0 dev --force"
     echo "  $0 prod --skip-network   # Destroy all except VPC/network"
     echo ""
-    echo "Destroy order: Lambda → Knowledge Base → Database → S3 → Network"
+    echo "Destroy order: Lambda → Cognito → Knowledge Base → Database → S3 → Network"
 }
 
 # Check if environment is provided
@@ -68,6 +70,7 @@ ENVIRONMENT=$1
 AWS_REGION="us-east-1"
 FORCE=false
 SKIP_LAMBDA=false
+SKIP_COGNITO=false
 SKIP_KB=false
 SKIP_DB=false
 SKIP_S3=false
@@ -90,6 +93,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-lambda)
             SKIP_LAMBDA=true
+            shift
+            ;;
+        --skip-cognito)
+            SKIP_COGNITO=true
             shift
             ;;
         --skip-kb)
@@ -132,9 +139,10 @@ case $ENVIRONMENT in
 esac
 
 # Optional skip summary
-if [ "$SKIP_LAMBDA" = true ] || [ "$SKIP_KB" = true ] || [ "$SKIP_DB" = true ] || [ "$SKIP_S3" = true ] || [ "$SKIP_NETWORK" = true ]; then
+if [ "$SKIP_LAMBDA" = true ] || [ "$SKIP_COGNITO" = true ] || [ "$SKIP_KB" = true ] || [ "$SKIP_DB" = true ] || [ "$SKIP_S3" = true ] || [ "$SKIP_NETWORK" = true ]; then
     print_warning "Skipping:"
     [ "$SKIP_LAMBDA" = true ] && print_warning "  - Lambda"
+    [ "$SKIP_COGNITO" = true ] && print_warning "  - Cognito"
     [ "$SKIP_KB" = true ] && print_warning "  - Knowledge Base"
     [ "$SKIP_DB" = true ] && print_warning "  - Database"
     [ "$SKIP_S3" = true ] && print_warning "  - S3 Bucket"
@@ -192,7 +200,15 @@ if [ "$SKIP_LAMBDA" = false ]; then
     echo ""
 fi
 
-# 2. Knowledge Base
+# 2. Cognito
+if [ "$SKIP_COGNITO" = false ]; then
+    DESTROY_STEPS=$((DESTROY_STEPS + 1))
+    print_step "Step $DESTROY_STEPS: Destroying Cognito"
+    run_destroy_script "deploy_cognito.sh" "Cognito" || FAILED_STEPS+=("Cognito")
+    echo ""
+fi
+
+# 3. Knowledge Base
 if [ "$SKIP_KB" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying Knowledge Base"
@@ -200,7 +216,7 @@ if [ "$SKIP_KB" = false ]; then
     echo ""
 fi
 
-# 3. Database
+# 4. Database
 if [ "$SKIP_DB" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying Database"
@@ -208,7 +224,7 @@ if [ "$SKIP_DB" = false ]; then
     echo ""
 fi
 
-# 4. S3 Bucket
+# 5. S3 Bucket
 if [ "$SKIP_S3" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying S3 Bucket"
@@ -216,7 +232,7 @@ if [ "$SKIP_S3" = false ]; then
     echo ""
 fi
 
-# 5. Network
+# 6. Network
 if [ "$SKIP_NETWORK" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying Network"
