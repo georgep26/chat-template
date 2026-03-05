@@ -75,8 +75,50 @@ Parameters:
     Type: String
     Description: 'ARN of the Lambda execution role (from lambda_execution_role stack)'
 
+  AuthRequired:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(|true|false)$'
+    Description: 'Optional override for JWT auth requirement. When empty, defaults to true in all environments.'
+
+  CognitoRegion:
+    Type: String
+    Default: ''
+    Description: 'AWS region for Cognito user pool (required when auth is enabled)'
+
+  CognitoUserPoolId:
+    Type: String
+    Default: ''
+    Description: 'Cognito User Pool ID (required when auth is enabled)'
+
+  CognitoAppClientId:
+    Type: String
+    Default: ''
+    Description: 'Cognito App Client ID (required when auth is enabled)'
+
+  FunctionUrlCorsAllowOrigins:
+    Type: CommaDelimitedList
+    Default: 'http://localhost:5173'
+    Description: 'Allowed CORS origins for the Lambda Function URL'
+
+  FunctionUrlCorsAllowHeaders:
+    Type: CommaDelimitedList
+    Default: 'Content-Type,Authorization'
+    Description: 'Allowed CORS headers for the Lambda Function URL'
+
+  FunctionUrlCorsAllowMethods:
+    Type: CommaDelimitedList
+    Default: 'POST'
+    Description: 'Allowed CORS methods for the Lambda Function URL (OPTIONS is handled automatically for preflight)'
+
+  FunctionUrlCorsMaxAge:
+    Type: Number
+    Default: 600
+    Description: 'CORS max age in seconds for preflight caching'
+
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
+  HasAuthRequiredOverride: !Not [!Equals [!Ref AuthRequired, '']]
   HasVpcConfig: !And
     - !Not [!Equals [!Ref VpcId, '']]
     - !Not [!Equals [!Ref SubnetIds, '']]
@@ -114,6 +156,13 @@ Resources:
         Variables:
           APP_CONFIG_PATH: !Ref AppConfigPath
           ENVIRONMENT: !Ref Environment
+          AUTH_REQUIRED: !If
+            - HasAuthRequiredOverride
+            - !Ref AuthRequired
+            - 'true'
+          COGNITO_REGION: !Ref CognitoRegion
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          COGNITO_APP_CLIENT_ID: !Ref CognitoAppClientId
       VpcConfig: !If
         - HasVpcConfig
         - SubnetIds: !Split [',', !Ref SubnetIds]
@@ -129,6 +178,33 @@ Resources:
           Value: !Ref Environment
         - Key: Project
           Value: !Ref ProjectName
+
+  RAGChatFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt RAGChatLambda.Arn
+      AuthType: NONE
+      Cors:
+        AllowOrigins: !Ref FunctionUrlCorsAllowOrigins
+        AllowHeaders: !Ref FunctionUrlCorsAllowHeaders
+        AllowMethods: !Ref FunctionUrlCorsAllowMethods
+        MaxAge: !Ref FunctionUrlCorsMaxAge
+
+  RAGChatFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref RAGChatLambda
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  RAGChatFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RAGChatLambda
+      Principal: '*'
+      InvokedViaFunctionUrl: true
 
   # Inline policy to grant S3 access for config bucket
   # Extract role name from ARN (format: arn:aws:iam::account:role/role-name)
@@ -176,3 +252,8 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LambdaLogGroupName'
 
+  LambdaFunctionUrl:
+    Description: 'Function URL for the Lambda function'
+    Value: !GetAtt RAGChatFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionUrl'
