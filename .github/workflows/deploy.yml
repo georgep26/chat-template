@@ -4,7 +4,7 @@
 #
 # Role Strategy:
 #   The deployer role (assumed via OIDC) has permissions for application resources only:
-#   knowledge base, ECR, and Lambda. Infrastructure resources (network, S3, DB) require
+#   knowledge base, Cognito, ECR, and Lambda. Infrastructure resources (network, S3, DB) require
 #   the CLI admin role and should be skipped in CI (they default to skipped).
 #   To deploy infrastructure via CI, override the skip flags and use an admin role.
 name: Deploy Application
@@ -39,6 +39,11 @@ on:
       # Application resources (default: deploy - deployer role handles these)
       skip_kb:
         description: 'Skip knowledge base deployment'
+        required: false
+        default: false
+        type: boolean
+      skip_cognito:
+        description: 'Skip Cognito deployment'
         required: false
         default: false
         type: boolean
@@ -105,6 +110,10 @@ on:
         default: true
         type: boolean
       skip_kb:
+        required: false
+        default: false
+        type: boolean
+      skip_cognito:
         required: false
         default: false
         type: boolean
@@ -190,6 +199,13 @@ jobs:
           KNOWLEDGE_BASE_ID: ${{ secrets.KNOWLEDGE_BASE_ID }}
           DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
           DB_CREDENTIALS_SECRET_ARN: ${{ secrets.DB_CREDENTIALS_SECRET_ARN }}
+          COGNITO_REGION: ${{ secrets.COGNITO_REGION }}
+          COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
+          COGNITO_APP_CLIENT_ID: ${{ secrets.COGNITO_APP_CLIENT_ID }}
+          COGNITO_CALLBACK_URLS: ${{ secrets.COGNITO_CALLBACK_URLS }}
+          COGNITO_LOGOUT_URLS: ${{ secrets.COGNITO_LOGOUT_URLS }}
+          COGNITO_DOMAIN_PREFIX: ${{ secrets.COGNITO_DOMAIN_PREFIX }}
+          COGNITO_GENERATE_CLIENT_SECRET: ${{ secrets.COGNITO_GENERATE_CLIENT_SECRET }}
         run: |
           ./scripts/utils/hydrate_configs.sh ${{ inputs.environment }}
 
@@ -217,6 +233,7 @@ jobs:
           if [ "${{ inputs.skip_s3 }}" == "true" ]; then CMD="$CMD --skip-s3"; fi
           if [ "${{ inputs.skip_db }}" == "true" ]; then CMD="$CMD --skip-db"; fi
           if [ "${{ inputs.skip_kb }}" == "true" ]; then CMD="$CMD --skip-kb"; fi
+          if [ "${{ inputs.skip_cognito }}" == "true" ]; then CMD="$CMD --skip-cognito"; fi
           if [ "${{ inputs.skip_ecr }}" == "true" ]; then CMD="$CMD --skip-ecr"; fi
           if [ "${{ inputs.skip_lambda }}" == "true" ]; then CMD="$CMD --skip-lambda"; fi
           if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then CMD="$CMD --skip-cost-tags"; fi
