@@ -203,6 +203,37 @@ hydrate_infra() {
         yq -i ".environments.${env}.knowledge_base_id = \"\"" "$infra_file"
         record_missing "KNOWLEDGE_BASE_ID" "$missing_out"
     fi
+    if [[ -n "${COGNITO_REGION:-}" ]]; then
+        yq -i '.resources.rag_lambda.config.cognito_region = strenv(COGNITO_REGION)' "$infra_file"
+    else
+        yq -i '.resources.rag_lambda.config.cognito_region = ""' "$infra_file"
+        record_missing "COGNITO_REGION" "$missing_out"
+    fi
+    if [[ -n "${COGNITO_USER_POOL_ID:-}" ]]; then
+        yq -i '.resources.rag_lambda.config.cognito_user_pool_id = strenv(COGNITO_USER_POOL_ID)' "$infra_file"
+    else
+        yq -i '.resources.rag_lambda.config.cognito_user_pool_id = ""' "$infra_file"
+        record_missing "COGNITO_USER_POOL_ID" "$missing_out"
+    fi
+    if [[ -n "${COGNITO_APP_CLIENT_ID:-}" ]]; then
+        yq -i '.resources.rag_lambda.config.cognito_app_client_id = strenv(COGNITO_APP_CLIENT_ID)' "$infra_file"
+    else
+        yq -i '.resources.rag_lambda.config.cognito_app_client_id = ""' "$infra_file"
+        record_missing "COGNITO_APP_CLIENT_ID" "$missing_out"
+    fi
+    # Optional Cognito deploy config overrides (keep defaults when omitted).
+    if [[ -n "${COGNITO_CALLBACK_URLS:-}" ]]; then
+        yq -i '.resources.cognito.config.callback_urls = strenv(COGNITO_CALLBACK_URLS)' "$infra_file"
+    fi
+    if [[ -n "${COGNITO_LOGOUT_URLS:-}" ]]; then
+        yq -i '.resources.cognito.config.logout_urls = strenv(COGNITO_LOGOUT_URLS)' "$infra_file"
+    fi
+    if [[ -n "${COGNITO_DOMAIN_PREFIX:-}" ]]; then
+        yq -i '.resources.cognito.config.domain_prefix = strenv(COGNITO_DOMAIN_PREFIX)' "$infra_file"
+    fi
+    if [[ -n "${COGNITO_GENERATE_CLIENT_SECRET:-}" ]]; then
+        yq -i '.resources.cognito.config.generate_client_secret = strenv(COGNITO_GENERATE_CLIENT_SECRET)' "$infra_file"
+    fi
 
     print_info "Hydrated infra/infra.yaml for environment: $env"
     return 0
