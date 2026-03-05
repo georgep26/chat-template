@@ -197,6 +197,31 @@ Deploy the IAM role used by the **deploy workflow** (`.github/workflows/deploy.y
 
 After deployment, add the role ARN to the **GitHub environment** secret `AWS_DEPLOYER_ROLE_ARN` (Repository Settings → Environments → &lt;env&gt; → Environment secrets) so the deploy workflow can assume this role. For evaluation workflows (run-evals), set `AWS_EVALS_ROLE_ARN` on the same or different environments as needed.
 
+### Cognito Deployment (`deploy_cognito.sh`)
+
+Deploy Cognito User Pool infrastructure used by frontend login and Lambda JWT validation.
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_cognito.sh <environment> [action] [options]
+```
+
+**Environments:** `dev`, `staging`, `prod`
+
+**Actions:**
+- `deploy` (default) - Deploy or update stack
+- `update` - Update existing stack
+- `delete` - Delete stack
+- `validate` - Validate template
+- `status` - Show stack status and outputs
+
+**Key Options:**
+- `--callback-urls <csv>` - OAuth callback URLs
+- `--logout-urls <csv>` - OAuth logout URLs
+- `--domain-prefix <prefix>` - Optional hosted UI domain prefix
+
+**Output Persistence:** On successful deploy, Cognito outputs are written to `infra/secrets/<env>_secrets.yaml` under `config_secrets` (`COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`) so other deploy scripts can consume them.
+
 ### Full Application Deployment (`deploy_all.sh`)
 
 Deploy the complete RAG chat application infrastructure to a specific environment. This script orchestrates all deployment components in the correct order.
@@ -220,6 +245,7 @@ Deploy the complete RAG chat application infrastructure to a specific environmen
 - `--skip-s3` - Skip S3 bucket deployment (use existing bucket)
 - `--skip-db` - Skip database deployment (use existing DB)
 - `--skip-kb` - Skip knowledge base deployment (use existing KB)
+- `--skip-cognito` - Skip Cognito deployment (use existing user pool/client)
 - `--skip-lambda` - Skip Lambda deployment (use existing Lambda)
 - `--vpc-id <vpc-id>` - VPC ID (for Lambda, if not using auto-detection)
 - `--subnet-ids <id1,id2,...>` - Subnet IDs (for Lambda, if not using auto-detection)
@@ -230,7 +256,8 @@ Deploy the complete RAG chat application infrastructure to a specific environmen
 2. S3 Bucket (for knowledge base documents)
 3. Database (Aurora PostgreSQL) - requires Network
 4. Knowledge Base (AWS Bedrock) - requires Database and S3
-5. Lambda Function - requires Database, Knowledge Base, and optionally Network
+5. Cognito (User Pool + App Client) - auth for frontend/API access
+6. Lambda Function - requires Database, Knowledge Base, and Cognito config
 
 **Examples:**
 ```bash
@@ -304,6 +331,7 @@ The following scripts are used by `deploy_all.sh` and can also be run individual
 - `deploy_s3_bucket.sh` - Deploy S3 bucket for knowledge base documents
 - `deploy_chat_template_db.sh` - Deploy Aurora Serverless v2 PostgreSQL database
 - `deploy_knowledge_base.sh` - Deploy AWS Bedrock Knowledge Base
+- `deploy_cognito.sh` - Deploy Cognito User Pool and app client
 - `deploy_rag_lambda.sh` - Deploy RAG Lambda function
 - `deploy_cost_guard.sh` - Deploy hybrid cost guard resources (monitor, enforcer, pricing sync)
 
