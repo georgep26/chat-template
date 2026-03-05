@@ -8,6 +8,7 @@ This directory contains AWS CloudFormation templates for deploying the RAG chat 
 cloudformation/
 ├── db_secret_template.yaml          # Database secret in Secrets Manager
 ├── cost_guard_template.yaml         # Hybrid cost guard resources
+├── cognito_template.yaml            # Cognito user pool + app client
 ├── knowledge_base_template.yaml     # AWS Bedrock Knowledge Base
 ├── lambda_template.yaml             # RAG Lambda function
 ├── light_db_template.yaml           # Aurora Serverless v2 PostgreSQL database
@@ -36,6 +37,10 @@ cloudformation/
   - Creates: Lambda function, CloudWatch log group
   - Requires: Lambda execution role (deployed separately via `infra/roles/lambda_execution_role.yaml`)
 
+- **`cognito_template.yaml`**: Cognito User Pool and app client for SPA authentication
+  - Deployed via: `./scripts/deploy/deploy_cognito.sh`
+  - Creates: User pool, app client, optional hosted UI domain
+
 - **`knowledge_base_template.yaml`**: AWS Bedrock Knowledge Base for RAG retrieval
   - Deployed via: `./scripts/deploy/deploy_knowledge_base.sh`
   - Creates: Knowledge base, data source, IAM roles for Bedrock
@@ -55,8 +60,9 @@ Deploy infrastructure in this order:
 1. **Database**: `./scripts/deploy/deploy_chat_template_db.sh dev deploy`
 2. **S3 Bucket** (optional): `./scripts/deploy/deploy_s3_bucket.sh dev deploy`
 3. **Knowledge Base**: `./scripts/deploy/deploy_knowledge_base.sh dev deploy`
-4. **Lambda Execution Role**: Deploy `infra/roles/lambda_execution_role.yaml` separately
-5. **Lambda Function**: `./scripts/deploy/deploy_rag_lambda.sh dev deploy`
+4. **Cognito**: `./scripts/deploy/deploy_cognito.sh dev deploy`
+5. **Lambda Execution Role**: Deploy `infra/roles/lambda_execution_role.yaml` separately
+6. **Lambda Function**: `./scripts/deploy/deploy_rag_lambda.sh dev deploy`
 
 ## Prerequisites
 
@@ -78,6 +84,9 @@ Each template has its own deployment script. See individual script help for deta
 
 # Knowledge Base
 ./scripts/deploy/deploy_knowledge_base.sh dev deploy --s3-bucket <bucket-name>
+
+# Cognito
+./scripts/deploy/deploy_cognito.sh dev deploy
 
 # Lambda Function
 ./scripts/deploy/deploy_rag_lambda.sh dev deploy
