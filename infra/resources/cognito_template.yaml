@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Cognito User Pool and App Client for RAG frontend authentication'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  UserPoolName:
+    Type: String
+    Default: ''
+    Description: 'Optional user pool name override'
+
+  AppClientName:
+    Type: String
+    Default: ''
+    Description: 'Optional app client name override'
+
+  CallbackUrls:
+    Type: CommaDelimitedList
+    Default: 'http://localhost:5173/callback'
+    Description: 'Comma-separated allowed callback URLs for OAuth code flow'
+
+  LogoutUrls:
+    Type: CommaDelimitedList
+    Default: 'http://localhost:5173/'
+    Description: 'Comma-separated allowed logout URLs'
+
+  CognitoDomainPrefix:
+    Type: String
+    Default: ''
+    Description: 'Optional hosted UI domain prefix (must be globally unique in region)'
+
+  GenerateClientSecret:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'Set true only for confidential clients (SPAs should keep false)'
+
+Conditions:
+  HasCustomUserPoolName: !Not [!Equals [!Ref UserPoolName, '']]
+  HasCustomAppClientName: !Not [!Equals [!Ref AppClientName, '']]
+  HasDomainPrefix: !Not [!Equals [!Ref CognitoDomainPrefix, '']]
+  UseClientSecret: !Equals [!Ref GenerateClientSecret, 'true']
+  IsProd: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !If
+        - HasCustomUserPoolName
+        - !Ref UserPoolName
+        - !Sub '${ProjectName}-${Environment}-users'
+      # Email verification only in prod; dev/staging can sign in without verifying
+      AutoVerifiedAttributes: !If [IsProd, [email], []]
+      UsernameAttributes:
+        - email
+      MfaConfiguration: 'OFF'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      UserPoolTags:
+        Name: !Sub '${ProjectName}-${Environment}-users'
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !If
+        - HasCustomAppClientName
+        - !Ref AppClientName
+        - !Sub '${ProjectName}-${Environment}-spa-client'
+      GenerateSecret: !If [UseClientSecret, true, false]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs: !Ref CallbackUrls
+      LogoutURLs: !Ref LogoutUrls
+      SupportedIdentityProviders:
+        - COGNITO
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Condition: HasDomainPrefix
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+
+Outputs:
+  UserPoolId:
+    Description: 'Cognito User Pool ID'
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolId'
+
+  UserPoolArn:
+    Description: 'Cognito User Pool ARN'
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolArn'
+
+  AppClientId:
+    Description: 'Cognito User Pool App Client ID'
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub '${AWS::StackName}-AppClientId'
+
+  CognitoRegion:
+    Description: 'AWS region where the user pool is deployed'
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub '${AWS::StackName}-CognitoRegion'
+
+  IssuerUrl:
+    Description: 'JWT issuer URL for token validation'
+    Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+    Export:
+      Name: !Sub '${AWS::StackName}-IssuerUrl'
+
+  HostedUiDomain:
+    Condition: HasDomainPrefix
+    Description: 'Hosted UI domain URL'
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedUiDomain'
