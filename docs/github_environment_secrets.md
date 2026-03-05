@@ -38,6 +38,13 @@ The deploy workflow runs a **Hydrate configs** step that injects secrets into `i
 | `KNOWLEDGE_BASE_ID` | Bedrock Knowledge Base ID |
 | `DB_CLUSTER_ARN` | RDS cluster ARN (for Aurora) |
 | `DB_CREDENTIALS_SECRET_ARN` | Secrets Manager secret ARN for DB credentials |
+| `COGNITO_REGION` | AWS region for Cognito user pool/JWT issuer |
+| `COGNITO_USER_POOL_ID` | Cognito User Pool ID for JWT validation |
+| `COGNITO_APP_CLIENT_ID` | Cognito app client ID (audience) |
+| `COGNITO_CALLBACK_URLS` | Optional OAuth callback URLs CSV for Cognito stack deploy |
+| `COGNITO_LOGOUT_URLS` | Optional OAuth logout URLs CSV for Cognito stack deploy |
+| `COGNITO_DOMAIN_PREFIX` | Optional hosted UI domain prefix |
+| `COGNITO_GENERATE_CLIENT_SECRET` | Optional `true|false` (SPA default is `false`) |
 
 These are synced from the `config_secrets` section of `infra/secrets/<env>_secrets.yaml` when you run `./scripts/setup/setup_github.sh`. To disable the hydrate step (e.g. private fork with real values committed), set repository or environment variable `HYDRATE_CONFIGS` to `false`.
 
