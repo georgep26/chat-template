@@ -18,6 +18,7 @@ dependencies = [
     "boto3",
     "pydantic>=2.0.0",
     "pyyaml",
+    "PyJWT[crypto]>=2.8.0",
     "plotly",
     "kaleido",
     "pytest",
