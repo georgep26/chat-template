@@ -10,7 +10,7 @@
 #
 # Role Strategy:
 #   Infrastructure resources (network, S3, database) use the CLI admin role.
-#   Application resources (knowledge base, ECR, Lambda) use the deployer role.
+#   Application resources (knowledge base, Cognito, ECR, Lambda) use the deployer role.
 #   In GitHub Actions, the deployer role is assumed via OIDC, so infrastructure
 #   steps should be skipped (use --only-app or --skip-network --skip-s3 --skip-db).
 #
@@ -18,7 +18,7 @@
 #   # Deploy everything to dev (all enabled resources)
 #   ./scripts/deploy/deploy_all.sh dev
 #
-#   # Deploy only application resources (KB, ECR, Lambda) - typical CI pattern
+#   # Deploy only application resources (KB, Cognito, ECR, Lambda) - typical CI pattern
 #   ./scripts/deploy/deploy_all.sh dev --only-app -y
 #
 #   # Deploy only infrastructure resources (network, S3, DB)
@@ -57,6 +57,7 @@ show_usage() {
     echo "  --skip-s3            Skip S3 bucket deployment"
     echo "  --skip-db            Skip database deployment"
     echo "  --skip-kb            Skip knowledge base deployment"
+    echo "  --skip-cognito       Skip Cognito auth deployment"
     echo "  --skip-ecr           Skip ECR repo deployment"
     echo "  --skip-lambda        Skip Lambda deployment"
     echo "  --skip-cost-tags     Skip cost allocation tags activation"
@@ -64,7 +65,7 @@ show_usage() {
     echo ""
     echo "Convenience Flags:"
     echo "  --only-infra         Only deploy infrastructure (network, S3, DB)"
-    echo "  --only-app           Only deploy application (KB, ECR, Lambda)"
+    echo "  --only-app           Only deploy application (KB, Cognito, ECR, Lambda)"
     echo ""
     echo "General Options:"
     echo "  -y, --yes            Skip all confirmation prompts"
@@ -124,6 +125,7 @@ SKIP_NETWORK=false
 SKIP_S3=false
 SKIP_DB=false
 SKIP_KB=false
+SKIP_COGNITO=false
 SKIP_ECR=false
 SKIP_LAMBDA=false
 SKIP_COST_TAGS=false
@@ -178,6 +180,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_KB=true
             shift
             ;;
+        --skip-cognito)
+            SKIP_COGNITO=true
+            shift
+            ;;
         --skip-ecr)
             SKIP_ECR=true
             shift
@@ -197,6 +203,7 @@ while [[ $# -gt 0 ]]; do
         # Convenience flags
         --only-infra)
             SKIP_KB=true
+            SKIP_COGNITO=true
             SKIP_ECR=true
             SKIP_LAMBDA=true
             SKIP_COST_TAGS=true
@@ -337,7 +344,7 @@ cd "$PROJECT_ROOT"
 # =============================================================================
 
 # Deployment order (matches infra.yaml resource order)
-DEPLOY_ORDER="network s3_bucket chat_db rag_knowledge_base rag_lambda_ecr rag_lambda"
+DEPLOY_ORDER="network s3_bucket chat_db rag_knowledge_base rag_lambda_ecr cognito rag_lambda"
 
 get_resource_script() {
     case "$1" in
@@ -345,6 +352,7 @@ get_resource_script() {
         s3_bucket)          echo "deploy_s3_bucket.sh" ;;
         chat_db)            echo "deploy_chat_template_db.sh" ;;
         rag_knowledge_base) echo "deploy_knowledge_base.sh" ;;
+        cognito)            echo "deploy_cognito.sh" ;;
         rag_lambda_ecr)     echo "deploy_ecr_repo.sh" ;;
         rag_lambda)         echo "deploy_rag_lambda.sh" ;;
     esac
@@ -356,6 +364,7 @@ get_resource_display_name() {
         s3_bucket)          echo "S3 Bucket" ;;
         chat_db)            echo "Database" ;;
         rag_knowledge_base) echo "Knowledge Base" ;;
+        cognito)            echo "Cognito Auth" ;;
         rag_lambda_ecr)     echo "ECR Repository" ;;
         rag_lambda)         echo "RAG Lambda" ;;
     esac
@@ -364,7 +373,7 @@ get_resource_display_name() {
 get_resource_category() {
     case "$1" in
         network|s3_bucket|chat_db) echo "infra" ;;
-        rag_knowledge_base|rag_lambda_ecr|rag_lambda) echo "app" ;;
+        rag_knowledge_base|cognito|rag_lambda_ecr|rag_lambda) echo "app" ;;
     esac
 }
 
@@ -374,6 +383,7 @@ is_resource_skipped() {
         s3_bucket)          [ "$SKIP_S3" = true ] ;;
         chat_db)            [ "$SKIP_DB" = true ] ;;
         rag_knowledge_base) [ "$SKIP_KB" = true ] ;;
+        cognito)            [ "$SKIP_COGNITO" = true ] ;;
         rag_lambda_ecr)     [ "$SKIP_ECR" = true ] ;;
         rag_lambda)         [ "$SKIP_LAMBDA" = true ] ;;
         *)                  return 1 ;;
@@ -418,7 +428,7 @@ for resource in network s3_bucket chat_db; do
 done
 draw_box_row "" $WIDTH
 draw_box_row "Application (deployer role):" $WIDTH
-for resource in rag_knowledge_base rag_lambda_ecr rag_lambda; do
+for resource in rag_knowledge_base rag_lambda_ecr cognito rag_lambda; do
     status=$(get_resource_status "$resource")
     name=$(get_resource_display_name "$resource")
     case "$status" in
@@ -554,6 +564,7 @@ build_args_for_resource() {
         s3_bucket)          build_common_args ;;
         chat_db)            build_db_args ;;
         rag_knowledge_base) build_kb_args ;;
+        cognito)            build_common_args ;;
         rag_lambda_ecr)     build_common_args ;;
         rag_lambda)         build_lambda_args ;;
     esac
