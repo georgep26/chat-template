@@ -82,6 +82,9 @@ python3 scripts/cost/estimate_component_cost.py --template infra/resources/lambd
 
 Application and infrastructure configuration (app config, `infra/infra.yaml`, secrets) is described in [docs/config_structure.md](docs/config_structure.md). Per-env app config lives in `config/<env>/app_config.yaml`; see [config/app_config.template.yaml](config/app_config.template.yaml) for structure and options. IAM roles (deployer, evals, Lambda execution) are deployed by the setup and deploy scripts; for the evals role and run-evals workflow, see [evals/README.md](evals/README.md).
 
+Frontend integration handoff docs:
+- [docs/frontend_interface.md](docs/frontend_interface.md) for Vue/client implementation guidance
+
 ## Run evals and tests
 
 ```bash
