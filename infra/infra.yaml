@@ -353,6 +353,18 @@ resources:
     config:
       repository_name: "{project}-rag-lambda-{env}"
       max_image_count: 5  # only this many images retained; older ones expired automatically
+  # Cognito auth for frontend + API JWT validation
+  cognito:
+    enabled: true
+    template: resources/cognito_template.yaml
+    stack_name: "{project}-cognito-{env}"
+    config:
+      user_pool_name: "{project}-{env}-users"
+      app_client_name: "{project}-{env}-spa-client"
+      callback_urls: "http://localhost:5173/auth/callback"
+      logout_urls: "http://localhost:5173/"
+      domain_prefix: ""
+      generate_client_secret: false
   # RAG Lambda function
   rag_lambda:
     enabled: true
@@ -363,3 +375,11 @@ resources:
       memory_size: 1024
       timeout: 300
       s3_app_config_uri: "s3://{project}-{env}-s3-bucket/config/app_config.yaml"
+      auth_required: "true"
+      cognito_region: "${COGNITO_REGION}"
+      cognito_user_pool_id: "${COGNITO_USER_POOL_ID}"
+      cognito_app_client_id: "${COGNITO_APP_CLIENT_ID}"
+      function_url_cors_allow_origins: "http://localhost:5173"
+      function_url_cors_allow_headers: "Content-Type,Authorization"
+      function_url_cors_allow_methods: "POST"
+      function_url_cors_max_age: 600
