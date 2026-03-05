@@ -89,6 +89,14 @@ show_usage() {
     echo "  --vpc-id <vpc-id>                 - VPC ID (default: no VPC unless set in infra.yaml rag_lambda config)"
     echo "  --subnet-ids <id1,id2,...>        - Subnet IDs (required when VPC is used)"
     echo "  --security-group-ids <id1,id2,...> - Security group IDs (auto-detected from DB stack)"
+    echo "  --auth-required <true|false>       - Force auth requirement override (default: true in all environments)"
+    echo "  --cognito-region <region>          - Cognito region for JWT validation"
+    echo "  --cognito-user-pool-id <id>        - Cognito user pool ID for JWT validation"
+    echo "  --cognito-app-client-id <id>       - Cognito app client ID for JWT validation"
+    echo "  --cors-allow-origins <csv>         - Function URL CORS allow origins (comma-separated)"
+    echo "  --cors-allow-headers <csv>         - Function URL CORS allow headers (comma-separated)"
+    echo "  --cors-allow-methods <csv>         - Function URL CORS allow methods (comma-separated)"
+    echo "  --cors-max-age <seconds>           - Function URL CORS max age (seconds)"
     echo "  -y, --yes                          - Skip confirmation prompt"
     echo ""
     echo "Note: Region, VPC, memory, timeout, ECR repo name, and other base settings"
@@ -126,6 +134,14 @@ LAMBDA_ROLE_ARN=""
 VPC_ID_OVERRIDE=""
 SUBNET_IDS_OVERRIDE=""
 SECURITY_GROUP_IDS=""
+AUTH_REQUIRED_OVERRIDE=""
+COGNITO_REGION_OVERRIDE=""
+COGNITO_USER_POOL_ID_OVERRIDE=""
+COGNITO_APP_CLIENT_ID_OVERRIDE=""
+CORS_ALLOW_ORIGINS_OVERRIDE=""
+CORS_ALLOW_HEADERS_OVERRIDE=""
+CORS_ALLOW_METHODS_OVERRIDE=""
+CORS_MAX_AGE_OVERRIDE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -190,6 +206,38 @@ while [[ $# -gt 0 ]]; do
             SECURITY_GROUP_IDS="$2"
             shift 2
             ;;
+        --auth-required)
+            AUTH_REQUIRED_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cognito-region)
+            COGNITO_REGION_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cognito-user-pool-id)
+            COGNITO_USER_POOL_ID_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cognito-app-client-id)
+            COGNITO_APP_CLIENT_ID_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cors-allow-origins)
+            CORS_ALLOW_ORIGINS_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cors-allow-headers)
+            CORS_ALLOW_HEADERS_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cors-allow-methods)
+            CORS_ALLOW_METHODS_OVERRIDE="$2"
+            shift 2
+            ;;
+        --cors-max-age)
+            CORS_MAX_AGE_OVERRIDE="$2"
+            shift 2
+            ;;
         -y|--yes)
             AUTO_CONFIRM=true
             shift
@@ -244,6 +292,43 @@ if [ -z "$APP_CONFIG_S3_URI" ]; then
     [ "$APP_CONFIG_S3_URI" = "null" ] && APP_CONFIG_S3_URI=""
 fi
 
+# Auth + Function URL configuration from infra.yaml (overridable via CLI)
+AUTH_REQUIRED=$(get_resource_config "$RESOURCE_NAME" "auth_required" "$ENVIRONMENT")
+[ "$AUTH_REQUIRED" = "null" ] && AUTH_REQUIRED=""
+[ -n "$AUTH_REQUIRED_OVERRIDE" ] && AUTH_REQUIRED="$AUTH_REQUIRED_OVERRIDE"
+
+COGNITO_REGION=$(get_resource_config "$RESOURCE_NAME" "cognito_region" "$ENVIRONMENT")
+[ "$COGNITO_REGION" = "null" ] && COGNITO_REGION=""
+[ -n "$COGNITO_REGION_OVERRIDE" ] && COGNITO_REGION="$COGNITO_REGION_OVERRIDE"
+
+COGNITO_USER_POOL_ID=$(get_resource_config "$RESOURCE_NAME" "cognito_user_pool_id" "$ENVIRONMENT")
+[ "$COGNITO_USER_POOL_ID" = "null" ] && COGNITO_USER_POOL_ID=""
+[ -n "$COGNITO_USER_POOL_ID_OVERRIDE" ] && COGNITO_USER_POOL_ID="$COGNITO_USER_POOL_ID_OVERRIDE"
+
+COGNITO_APP_CLIENT_ID=$(get_resource_config "$RESOURCE_NAME" "cognito_app_client_id" "$ENVIRONMENT")
+[ "$COGNITO_APP_CLIENT_ID" = "null" ] && COGNITO_APP_CLIENT_ID=""
+[ -n "$COGNITO_APP_CLIENT_ID_OVERRIDE" ] && COGNITO_APP_CLIENT_ID="$COGNITO_APP_CLIENT_ID_OVERRIDE"
+
+CORS_ALLOW_ORIGINS=$(get_resource_config "$RESOURCE_NAME" "function_url_cors_allow_origins" "$ENVIRONMENT")
+[ "$CORS_ALLOW_ORIGINS" = "null" ] && CORS_ALLOW_ORIGINS=""
+[ -n "$CORS_ALLOW_ORIGINS_OVERRIDE" ] && CORS_ALLOW_ORIGINS="$CORS_ALLOW_ORIGINS_OVERRIDE"
+[ -z "$CORS_ALLOW_ORIGINS" ] && CORS_ALLOW_ORIGINS="http://localhost:5173"
+
+CORS_ALLOW_HEADERS=$(get_resource_config "$RESOURCE_NAME" "function_url_cors_allow_headers" "$ENVIRONMENT")
+[ "$CORS_ALLOW_HEADERS" = "null" ] && CORS_ALLOW_HEADERS=""
+[ -n "$CORS_ALLOW_HEADERS_OVERRIDE" ] && CORS_ALLOW_HEADERS="$CORS_ALLOW_HEADERS_OVERRIDE"
+[ -z "$CORS_ALLOW_HEADERS" ] && CORS_ALLOW_HEADERS="Content-Type,Authorization"
+
+CORS_ALLOW_METHODS=$(get_resource_config "$RESOURCE_NAME" "function_url_cors_allow_methods" "$ENVIRONMENT")
+[ "$CORS_ALLOW_METHODS" = "null" ] && CORS_ALLOW_METHODS=""
+[ -n "$CORS_ALLOW_METHODS_OVERRIDE" ] && CORS_ALLOW_METHODS="$CORS_ALLOW_METHODS_OVERRIDE"
+[ -z "$CORS_ALLOW_METHODS" ] && CORS_ALLOW_METHODS="POST"
+
+CORS_MAX_AGE=$(get_resource_config "$RESOURCE_NAME" "function_url_cors_max_age" "$ENVIRONMENT")
+[ "$CORS_MAX_AGE" = "null" ] && CORS_MAX_AGE=""
+[ -n "$CORS_MAX_AGE_OVERRIDE" ] && CORS_MAX_AGE="$CORS_MAX_AGE_OVERRIDE"
+[ -z "$CORS_MAX_AGE" ] && CORS_MAX_AGE="600"
+
 # ECR configuration from infra.yaml
 ECR_REPO_NAME=$(get_resource_config "rag_lambda_ecr" "repository_name" "$ENVIRONMENT")
 ECR_MAX_IMAGE_COUNT=$(get_resource_config "rag_lambda_ecr" "max_image_count")
@@ -272,6 +357,29 @@ ROLE_TEMPLATE_FILE=$(get_role_template "rag_lambda_execution")
 # Change to project root
 PROJECT_ROOT=$(get_project_root)
 cd "$PROJECT_ROOT"
+
+# Validate auth/cors config values
+if [ -n "$AUTH_REQUIRED" ]; then
+    auth_required_normalized=$(echo "$AUTH_REQUIRED" | tr '[:upper:]' '[:lower:]')
+    case "$auth_required_normalized" in
+        true|false|1|0|yes|no)
+            ;;
+        *)
+            print_error "Invalid auth_required value: '$AUTH_REQUIRED' (expected true or false)"
+            exit 1
+            ;;
+    esac
+fi
+
+if ! [[ "$CORS_MAX_AGE" =~ ^[0-9]+$ ]]; then
+    print_error "Invalid cors max age: '$CORS_MAX_AGE' (expected integer seconds)"
+    exit 1
+fi
+
+if [ "$ENVIRONMENT" != "dev" ] && echo "$CORS_ALLOW_ORIGINS" | grep -q '\*'; then
+    print_warning "CORS allow origins contains wildcard in non-dev environment."
+    print_warning "Use explicit frontend origins in staging/prod for stronger security."
+fi
 
 # Require S3 app config URI for deploy/update
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
@@ -313,6 +421,15 @@ aws_cmd() {
     fi
 }
 
+aws_cognito_cmd() {
+    local region="${COGNITO_REGION:-$AWS_REGION}"
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" --region "$region" "$@"
+    else
+        aws --region "$region" "$@"
+    fi
+}
+
 aws_source_cmd() {
     if [ -n "$SOURCE_AWS_ACCESS_KEY_ID" ]; then
         AWS_ACCESS_KEY_ID="$SOURCE_AWS_ACCESS_KEY_ID" \
@@ -325,6 +442,100 @@ aws_source_cmd() {
         print_error "Source AWS credentials are not configured for promotion."
         return 1
     fi
+}
+
+is_unresolved_placeholder() {
+    local raw="$1"
+    [[ "$raw" =~ ^\$\{[A-Z_][A-Z0-9_]*\}$ ]]
+}
+
+get_config_secret_value() {
+    local key="$1"
+    if ! command -v yq >/dev/null 2>&1; then
+        echo ""
+        return 0
+    fi
+
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null || true)
+    if [ -z "$secrets_file" ] || [ ! -f "$secrets_file" ]; then
+        echo ""
+        return 0
+    fi
+
+    local value
+    value=$(yq -r ".config_secrets.${key} // \"\"" "$secrets_file" 2>/dev/null || true)
+    [ "$value" = "null" ] && value=""
+    echo "$value"
+}
+
+resolve_auth_value_from_secrets() {
+    local current="$1"
+    local key="$2"
+    if [ -n "$current" ] && ! is_unresolved_placeholder "$current"; then
+        echo "$current"
+        return 0
+    fi
+    get_config_secret_value "$key"
+}
+
+COGNITO_REGION=$(resolve_auth_value_from_secrets "$COGNITO_REGION" "COGNITO_REGION")
+COGNITO_USER_POOL_ID=$(resolve_auth_value_from_secrets "$COGNITO_USER_POOL_ID" "COGNITO_USER_POOL_ID")
+COGNITO_APP_CLIENT_ID=$(resolve_auth_value_from_secrets "$COGNITO_APP_CLIENT_ID" "COGNITO_APP_CLIENT_ID")
+
+normalize_bool() {
+    local raw="$1"
+    local lower
+    lower=$(echo "$raw" | tr '[:upper:]' '[:lower:]')
+    if [ "$lower" = "true" ] || [ "$lower" = "1" ] || [ "$lower" = "yes" ]; then
+        echo "true"
+    elif [ "$lower" = "false" ] || [ "$lower" = "0" ] || [ "$lower" = "no" ]; then
+        echo "false"
+    else
+        echo ""
+    fi
+}
+
+is_auth_required_for_env() {
+    local normalized
+    normalized=$(normalize_bool "$AUTH_REQUIRED")
+    if [ -n "$normalized" ]; then
+        echo "$normalized"
+    else
+        echo "true"
+    fi
+}
+
+validate_cognito_deploy_inputs() {
+    local auth_required
+    auth_required=$(is_auth_required_for_env)
+
+    if [ "$auth_required" != "true" ]; then
+        return 0
+    fi
+
+    if [ -z "$COGNITO_USER_POOL_ID" ] || [ -z "$COGNITO_APP_CLIENT_ID" ]; then
+        print_error "Auth is enabled, but Cognito settings are incomplete."
+        print_error "Required: --cognito-user-pool-id and --cognito-app-client-id (or infra.yaml equivalents)."
+        return 1
+    fi
+
+    print_info "Validating Cognito User Pool and App Client..."
+    if ! aws_cognito_cmd cognito-idp describe-user-pool --user-pool-id "$COGNITO_USER_POOL_ID" >/dev/null 2>&1; then
+        print_error "Cognito user pool not found or inaccessible: $COGNITO_USER_POOL_ID"
+        return 1
+    fi
+
+    if ! aws_cognito_cmd cognito-idp describe-user-pool-client \
+        --user-pool-id "$COGNITO_USER_POOL_ID" \
+        --client-id "$COGNITO_APP_CLIENT_ID" >/dev/null 2>&1; then
+        print_error "Cognito app client not found for user pool."
+        print_error "  User Pool ID: $COGNITO_USER_POOL_ID"
+        print_error "  App Client ID: $COGNITO_APP_CLIENT_ID"
+        return 1
+    fi
+
+    return 0
 }
 
 # =============================================================================
@@ -945,6 +1156,19 @@ deploy_stack() {
     [ -n "$LAMBDA_IMAGE_URI" ] && print_info "Lambda Image URI Override: $LAMBDA_IMAGE_URI"
     [ -n "$PROMOTE_LAMBDA_FROM_ENV" ] && print_info "Promote Lambda From Env: $PROMOTE_LAMBDA_FROM_ENV"
     [ -n "$VPC_ID" ] && print_info "VPC: $VPC_ID"
+    print_info "Auth Required (effective): $(is_auth_required_for_env)"
+    [ -n "$AUTH_REQUIRED" ] && print_info "Auth Required Override: $AUTH_REQUIRED"
+    [ -n "$COGNITO_REGION" ] && print_info "Cognito Region: $COGNITO_REGION"
+    [ -n "$COGNITO_USER_POOL_ID" ] && print_info "Cognito User Pool ID: $COGNITO_USER_POOL_ID"
+    [ -n "$COGNITO_APP_CLIENT_ID" ] && print_info "Cognito App Client ID: $COGNITO_APP_CLIENT_ID"
+    print_info "Function URL CORS Origins: $CORS_ALLOW_ORIGINS"
+    print_info "Function URL CORS Headers: $CORS_ALLOW_HEADERS"
+    print_info "Function URL CORS Methods: $CORS_ALLOW_METHODS"
+    print_info "Function URL CORS Max Age: $CORS_MAX_AGE"
+
+    if ! validate_cognito_deploy_inputs; then
+        exit 1
+    fi
 
     # Confirm deployment
     if [ "$AUTO_CONFIRM" = false ]; then
@@ -1125,6 +1349,8 @@ deploy_stack() {
     export PROJECT_NAME ENVIRONMENT AWS_REGION LAMBDA_MEMORY_SIZE LAMBDA_TIMEOUT
     export VPC_ID SUBNET_IDS SECURITY_GROUP_IDS DB_SECRET_ARN KNOWLEDGE_BASE_ID
     export LAMBDA_ROLE_ARN APP_CONFIG_S3_URI
+    export AUTH_REQUIRED COGNITO_REGION COGNITO_USER_POOL_ID COGNITO_APP_CLIENT_ID
+    export CORS_ALLOW_ORIGINS CORS_ALLOW_HEADERS CORS_ALLOW_METHODS CORS_MAX_AGE
 
     python3 - "$param_file" << 'PYEOF'
 import json
@@ -1149,6 +1375,14 @@ params = [
     {"ParameterKey": "LambdaExecutionRoleArn", "ParameterValue": v("LAMBDA_ROLE_ARN")},
     {"ParameterKey": "AppConfigPath", "ParameterValue": v("APP_CONFIG_S3_URI")},
     {"ParameterKey": "ConfigS3Bucket", "ParameterValue": v("CONFIG_BUCKET")},
+    {"ParameterKey": "AuthRequired", "ParameterValue": v("AUTH_REQUIRED")},
+    {"ParameterKey": "CognitoRegion", "ParameterValue": v("COGNITO_REGION")},
+    {"ParameterKey": "CognitoUserPoolId", "ParameterValue": v("COGNITO_USER_POOL_ID")},
+    {"ParameterKey": "CognitoAppClientId", "ParameterValue": v("COGNITO_APP_CLIENT_ID")},
+    {"ParameterKey": "FunctionUrlCorsAllowOrigins", "ParameterValue": v("CORS_ALLOW_ORIGINS")},
+    {"ParameterKey": "FunctionUrlCorsAllowHeaders", "ParameterValue": v("CORS_ALLOW_HEADERS")},
+    {"ParameterKey": "FunctionUrlCorsAllowMethods", "ParameterValue": v("CORS_ALLOW_METHODS")},
+    {"ParameterKey": "FunctionUrlCorsMaxAge", "ParameterValue": v("CORS_MAX_AGE")},
 ]
 with open(sys.argv[1], "w") as f:
     json.dump(params, f, indent=2)
@@ -1266,6 +1500,37 @@ PYEOF
     if [ -n "$lambda_name" ] && [ "$lambda_name" != "None" ]; then
         print_info "Lambda Function Name: $lambda_name"
 
+        # Ensure Function URL auth type is NONE and resource policy allows public invoke (browser + Cognito JWT).
+        # Both are in the CloudFormation template; drift or no-op updates can leave URL as AWS_IAM or drop the permission.
+        print_info "Ensuring Function URL auth type is NONE..."
+        if aws_cmd lambda update-function-url-config --function-name "$lambda_name" --auth-type NONE 2>/dev/null; then
+            print_complete "Function URL auth type set to NONE"
+        else
+            print_warning "Could not set Function URL auth type (may already be NONE or insufficient permissions)"
+        fi
+        print_info "Ensuring resource-based policy allows function URL invoke permissions..."
+        if aws_cmd lambda add-permission --function-name "$lambda_name" --statement-id "FunctionURLPublicInvoke" --action "lambda:InvokeFunctionUrl" --principal "*" --function-url-auth-type NONE 2>/dev/null; then
+            print_complete "Resource policy updated for public function URL invoke"
+        else
+            # ResourceConflictException if statement already exists
+            print_warning "add-permission skipped (permission may already exist)"
+        fi
+        # Newer Function URL behavior requires lambda:InvokeFunction for URL calls.
+        # Use --invoked-via-function-url when supported by the local AWS CLI.
+        invoke_perm_err_file="$(mktemp)"
+        if aws_cmd lambda add-permission --function-name "$lambda_name" --statement-id "FunctionURLPublicInvokeFunction" --action "lambda:InvokeFunction" --principal "*" --invoked-via-function-url 2>"$invoke_perm_err_file"; then
+            print_complete "Resource policy updated for function invocation via URL"
+        else
+            if grep -q "Unknown options: --invoked-via-function-url" "$invoke_perm_err_file"; then
+                print_warning "AWS CLI does not support --invoked-via-function-url; skipped CLI patch"
+                print_warning "Upgrade AWS CLI or rely on CloudFormation template permission RAGChatFunctionInvokePermission"
+            else
+                # ResourceConflictException if statement already exists
+                print_warning "add-permission (InvokeFunction) skipped (permission may already exist)"
+            fi
+        fi
+        rm -f "$invoke_perm_err_file"
+
         # Update Lambda to use the latest image (ensures function picks up new image even if tag unchanged)
         if [ "$SKIP_BUILD" = false ] || [ -n "$LAMBDA_IMAGE_URI" ] || [ -n "$PROMOTE_LAMBDA_FROM_ENV" ]; then
             # Wait for Lambda to be ready after stack create/update (avoids ResourceConflictException)
@@ -1324,6 +1589,15 @@ PYEOF
                 print_warning "You can retry manually: aws lambda update-function-code --function-name $lambda_name --image-uri $image_uri --region $AWS_REGION"
             fi
         fi
+    fi
+
+    local function_url
+    function_url=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`LambdaFunctionUrl`].OutputValue' \
+        --output text 2>/dev/null)
+    if [ -n "$function_url" ] && [ "$function_url" != "None" ]; then
+        print_info "Lambda Function URL: $function_url"
     fi
 
     print_complete "$RESOURCE_DISPLAY_NAME deployment finished"
