@@ -35,7 +35,7 @@ show_usage() {
     echo ""
     echo "Examples:"
     echo "  $0 dev deploy -y"
-    echo "  $0 staging deploy --callback-urls https://staging.example.com/callback --logout-urls https://staging.example.com/"
+    echo "  $0 staging deploy --callback-urls https://staging.example.com/auth/callback --logout-urls https://staging.example.com/"
 }
 
 if [ $# -lt 1 ]; then
@@ -147,7 +147,7 @@ APP_CLIENT_NAME=$(get_resource_config "$RESOURCE_NAME" "app_client_name" "$ENVIR
 CALLBACK_URLS=$(get_resource_config "$RESOURCE_NAME" "callback_urls" "$ENVIRONMENT")
 [ "$CALLBACK_URLS" = "null" ] && CALLBACK_URLS=""
 [ -n "$CALLBACK_URLS_OVERRIDE" ] && CALLBACK_URLS="$CALLBACK_URLS_OVERRIDE"
-[ -z "$CALLBACK_URLS" ] && CALLBACK_URLS="http://localhost:5173/callback"
+[ -z "$CALLBACK_URLS" ] && CALLBACK_URLS="http://localhost:5173/auth/callback"
 
 LOGOUT_URLS=$(get_resource_config "$RESOURCE_NAME" "logout_urls" "$ENVIRONMENT")
 [ "$LOGOUT_URLS" = "null" ] && LOGOUT_URLS=""

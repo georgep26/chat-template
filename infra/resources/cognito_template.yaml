@@ -25,7 +25,7 @@ Parameters:
 
   CallbackUrls:
     Type: CommaDelimitedList
-    Default: 'http://localhost:5173/callback'
+    Default: 'http://localhost:5173/auth/callback'
     Description: 'Comma-separated allowed callback URLs for OAuth code flow'
 
   LogoutUrls:
