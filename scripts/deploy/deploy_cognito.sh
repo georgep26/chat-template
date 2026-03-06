@@ -44,6 +44,7 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
+ORIGINAL_ARGS=("$@")
 ENVIRONMENT=$1
 shift
 
@@ -56,6 +57,17 @@ CALLBACK_URLS_OVERRIDE=""
 LOGOUT_URLS_OVERRIDE=""
 DOMAIN_PREFIX_OVERRIDE=""
 GENERATE_CLIENT_SECRET_OVERRIDE=""
+
+print_missing_hydrate_warnings() {
+    local missing_file=$1
+    if [ -s "$missing_file" ]; then
+        print_warning "Some config_secrets were missing or empty; placeholders were hydrated with blank values."
+        print_warning "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml (config_secrets) to fix:"
+        while IFS= read -r key; do
+            [ -n "$key" ] && print_warning "  - $key"
+        done < "$missing_file"
+    fi
+}
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -107,9 +119,38 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_header "$RESOURCE_DISPLAY_NAME Deployment"
-
 validate_environment "$ENVIRONMENT" || exit 1
+
+# Hydrate in a runtime-only scope for deploy/update, then re-run this script with hydration disabled.
+# This ensures summary/output reflects hydrated values while restoring files even on failure/cancel.
+if { [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update" ]; } && [ "${HYDRATE_RUNTIME_ACTIVE:-false}" != "true" ]; then
+    HYDRATE_SCRIPT="$(get_project_root)/scripts/utils/hydrate_configs.sh"
+    if [ -f "$HYDRATE_SCRIPT" ]; then
+        print_step "Hydrating config values for $ENVIRONMENT (runtime-only)"
+        chmod +x "$HYDRATE_SCRIPT"
+        HYDRATE_MISSING_FILE=""
+        RUNTIME_CMD=(env HYDRATE_RUNTIME_ACTIVE=true "$0" "${ORIGINAL_ARGS[@]}")
+        if HYDRATE_MISSING_FILE=$(mktemp 2>/dev/null); then
+            if "$HYDRATE_SCRIPT" --run "$ENVIRONMENT" "$HYDRATE_MISSING_FILE" -- "${RUNTIME_CMD[@]}"; then
+                print_missing_hydrate_warnings "$HYDRATE_MISSING_FILE"
+                rm -f "$HYDRATE_MISSING_FILE"
+                exit 0
+            else
+                status=$?
+                print_missing_hydrate_warnings "$HYDRATE_MISSING_FILE"
+                rm -f "$HYDRATE_MISSING_FILE"
+                exit $status
+            fi
+        else
+            "$HYDRATE_SCRIPT" --run "$ENVIRONMENT" -- "${RUNTIME_CMD[@]}"
+            exit $?
+        fi
+    else
+        print_warning "Hydrate script not found at $HYDRATE_SCRIPT; continuing without hydration"
+    fi
+fi
+
+print_header "$RESOURCE_DISPLAY_NAME Deployment"
 
 print_step "Loading configuration for $ENVIRONMENT environment"
 load_infra_config || exit 1
