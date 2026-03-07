@@ -234,6 +234,10 @@ hydrate_infra() {
     if [[ -n "${COGNITO_GENERATE_CLIENT_SECRET:-}" ]]; then
         yq -i '.resources.cognito.config.generate_client_secret = strenv(COGNITO_GENERATE_CLIENT_SECRET)' "$infra_file"
     fi
+    # Optional Function URL CORS override for frontend CloudFront origin(s).
+    if [[ -n "${FUNCTION_URL_CORS_ALLOW_ORIGINS:-}" ]]; then
+        yq -i '.resources.rag_lambda.config.function_url_cors_allow_origins = strenv(FUNCTION_URL_CORS_ALLOW_ORIGINS)' "$infra_file"
+    fi
 
     print_info "Hydrated infra/infra.yaml for environment: $env"
     return 0
