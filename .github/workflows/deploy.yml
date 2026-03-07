@@ -206,6 +206,7 @@ jobs:
           COGNITO_LOGOUT_URLS: ${{ secrets.COGNITO_LOGOUT_URLS }}
           COGNITO_DOMAIN_PREFIX: ${{ secrets.COGNITO_DOMAIN_PREFIX }}
           COGNITO_GENERATE_CLIENT_SECRET: ${{ secrets.COGNITO_GENERATE_CLIENT_SECRET }}
+          FUNCTION_URL_CORS_ALLOW_ORIGINS: ${{ secrets.FUNCTION_URL_CORS_ALLOW_ORIGINS }}
         run: |
           ./scripts/utils/hydrate_configs.sh ${{ inputs.environment }}
 
