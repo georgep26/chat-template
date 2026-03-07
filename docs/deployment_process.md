@@ -176,18 +176,18 @@ So: **for each environment** (dev, staging, prod, or the subset you passed), the
 
 ## 3. Phase 2: Deploy (Regular)
 
-Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource deployments in the order defined in infra (network → s3_bucket → chat_db → rag_knowledge_base → rag_lambda_ecr → rag_lambda), then cost tags, then config hydration, sync app config, and deploy configs to S3.
+Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource deployments in the order defined in infra (network → s3_bucket → chat_db → rag_knowledge_base → rag_lambda_ecr → cognito → frontend → rag_lambda), then cost tags, then config hydration, sync app config, and deploy configs to S3.
 
 ### 3.1. Deploy orchestrator
 
 **Script:** `scripts/deploy/deploy_all.sh`
 
 - **Purpose:** Deploy all enabled resources for an environment in order, then run config sync and S3 config upload.
-- **Arguments:** `<environment>`, skip flags (`--skip-network`, `--skip-s3`, `--skip-db`, `--skip-kb`, `--skip-ecr`, `--skip-lambda`, `--skip-cost-tags`), convenience flags (`--only-infra`, `--only-app`), `-y`, `--config`, and pass-through overrides (`--region`, `--vpc-id`, `--subnet-ids`, `--security-group-ids`, `--master-username`, `--master-password`, `--public-ip`, `--s3-app-config-uri`, `--local-app-config-path`, `--image-tag`).
+- **Arguments:** `<environment>`, skip flags (`--skip-network`, `--skip-s3`, `--skip-db`, `--skip-kb`, `--skip-cognito`, `--skip-frontend`, `--skip-ecr`, `--skip-lambda`, `--skip-cost-tags`), convenience flags (`--only-infra`, `--only-app`), `-y`, `--config`, and pass-through overrides (`--region`, `--vpc-id`, `--subnet-ids`, `--security-group-ids`, `--master-username`, `--master-password`, `--public-ip`, `--s3-app-config-uri`, `--local-app-config-path`, `--image-tag`).
 - **Logic:**
-  - Validates environment and loads infra. Builds a deployment plan: for each resource in order (network, s3_bucket, chat_db, rag_knowledge_base, rag_lambda_ecr, rag_lambda), status is **deploy** (enabled and not skipped), **skip-flag**, or **skip-disabled**. Infrastructure (network, S3, DB) uses CLI admin role; application (KB, ECR, Lambda) uses deployer role (see infra README).
+  - Validates environment and loads infra. Builds a deployment plan: for each resource in order (network, s3_bucket, chat_db, rag_knowledge_base, rag_lambda_ecr, cognito, frontend, rag_lambda), status is **deploy** (enabled and not skipped), **skip-flag**, or **skip-disabled**. Infrastructure (network, S3, DB, frontend) uses CLI admin role; application (KB, ECR, Cognito, Lambda) uses deployer role (see infra README).
   - Draws a box with the plan and (unless `-y`) asks for confirmation.
-  - For each resource with status **deploy**, builds the appropriate args (env, deploy, -y, plus any pass-through overrides), then runs the corresponding script: `deploy_network.sh`, `deploy_s3_bucket.sh`, `deploy_chat_template_db.sh`, `deploy_knowledge_base.sh`, `deploy_ecr_repo.sh`, `deploy_rag_lambda.sh`. Stops on first failure.
+  - For each resource with status **deploy**, builds the appropriate args (env, deploy, -y, plus any pass-through overrides), then runs the corresponding script: `deploy_network.sh`, `deploy_s3_bucket.sh`, `deploy_chat_template_db.sh`, `deploy_knowledge_base.sh`, `deploy_ecr_repo.sh`, `deploy_cognito.sh`, `deploy_frontend.sh`, `deploy_rag_lambda.sh`. Stops on first failure.
   - If not `--skip-cost-tags`, runs `deploy_cost_analysis_tags.sh activate`.
   - Runs **hydrate_configs.sh** for the environment (injects secrets into infra.yaml and app_config placeholders; see below).
   - Runs **sync_app_config.sh --env <env>** to copy knowledge_base_id, db_cluster_arn, db_credentials_secret_arn from infra into `config/<env>/app_config.yaml`.
@@ -250,7 +250,17 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 
 ---
 
-### 3.7. Deploy RAG Lambda
+### 3.7. Deploy frontend (CloudFront + S3)
+
+**Script:** `scripts/deploy/deploy_frontend.sh`
+
+- **Purpose:** Deploy the frontend static site stack (S3 bucket + CloudFront distribution) in the environment account. Uses **CLI admin profile** so it targets the correct sub-account. Does **not** build or upload the frontend app; that is done from the **chat-template-frontend** repo (see `docs/cloudfront_frontend_backend_handoff.md`).
+- **Arguments:** `<environment>`, action `deploy` | `update` | `delete` | `validate` | `status`, and `-y`.
+- **Logic:** Load infra, get stack name and template from `resources.frontend`, and `price_class` from config. Deploy or update CloudFormation stack from `infra/resources/frontend_static_site_template.yaml` with parameters ProjectName, EnvironmentName, PriceClass. On success, print CloudFront URL for use in Cognito callback URLs and Lambda CORS. **delete:** Empty the frontend S3 bucket (including versioned objects), then delete the stack.
+
+---
+
+### 3.8. Deploy RAG Lambda
 
 **Script:** `scripts/deploy/deploy_rag_lambda.sh`
 
@@ -262,7 +272,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 
 ---
 
-### 3.8. Cost allocation tags
+### 3.9. Cost allocation tags
 
 **Script:** `scripts/deploy/deploy_cost_analysis_tags.sh`
 
@@ -271,7 +281,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 
 ---
 
-### 3.9. Hydrate configs
+### 3.10. Hydrate configs
 
 **Script:** `scripts/utils/hydrate_configs.sh`
 
@@ -285,7 +295,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 
 ---
 
-### 3.10. Sync app config
+### 3.11. Sync app config
 
 **Script:** `scripts/deploy/sync_app_config.sh`
 
@@ -294,7 +304,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 
 ---
 
-### 3.11. Deploy configs to S3
+### 3.12. Deploy configs to S3
 
 **Script:** `scripts/deploy/deploy_configs.sh`
 
@@ -320,7 +330,7 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 **Script:** `scripts/deploy/destroy_all.sh`
 
 - **Purpose:** Tear down only the **resource** stacks (Lambda, KB, DB, S3, Network) in reverse deploy order, without tearing down IAM roles or OIDC. Useful for wiping an env and redeploying.
-- **Logic:** Calls each deploy script’s delete action in order: Lambda → Knowledge Base → Database → S3 → Network. Supports `--skip-*` and `--force` / `-y`.
+- **Logic:** Calls each deploy script’s delete action in order: Lambda → Cognito → Knowledge Base → Database → Frontend → S3 → Network. Supports `--skip-*` (including `--skip-frontend`) and `--force` / `-y`.
 
 ---
 
@@ -345,18 +355,19 @@ Deploy is orchestrated by **`scripts/deploy/deploy_all.sh`**. It runs resource d
 | Setup   | 3                 | deploy_deployer_github_action_role.sh    | Deployer IAM role for deploy workflow |
 | Setup   | 4                 | setup_github.sh                          | Branch protection (main + development), environments, env secrets |
 | Setup   | 5                 | deploy_evals_github_action_role.sh       | Evals IAM role + policies |
-| Deploy  | Orchestrator      | deploy_all.sh                            | Network → S3 → DB → KB → ECR → Lambda, then cost tags, hydrate, sync app config, deploy configs |
+| Deploy  | Orchestrator      | deploy_all.sh                            | Network → S3 → DB → KB → ECR → Cognito → Frontend → Lambda, then cost tags, hydrate, sync app config, deploy configs |
 | Deploy  | Network           | deploy_network.sh                        | Use existing/default VPC or deploy VPC stack; write vpc_id/subnet_ids to infra |
 | Deploy  | S3                | deploy_s3_bucket.sh                      | Deploy S3 bucket stack    |
 | Deploy  | DB                | deploy_chat_template_db.sh               | Aurora + Secrets Manager secret |
 | Deploy  | KB                | deploy_knowledge_base.sh                 | Bedrock KB + data source sync |
 | Deploy  | ECR               | deploy_ecr_repo.sh                       | ECR repo stack            |
+| Deploy  | Frontend          | deploy_frontend.sh                       | Deploy frontend static site (S3 + CloudFront) stack |
 | Deploy  | Lambda            | deploy_rag_lambda.sh                     | Docker build/push + Lambda stack |
 | Deploy  | Cost tags         | deploy_cost_analysis_tags.sh             | Activate cost allocation tags |
 | Deploy  | Hydrate           | hydrate_configs.sh                       | Replace placeholders in infra + app_config (CI: env vars; local: secrets file) |
 | Deploy  | Sync app config   | sync_app_config.sh                       | Copy KB/DB ARNs from infra to config/<env>/app_config.yaml |
 | Deploy  | Deploy configs    | deploy_configs.sh                        | Sync config/<env>/ to S3  |
 | Teardown| Full              | teardown.sh                              | Delete all stacks (resources + roles) in reverse order; CLI role last via org assume |
-| Teardown| Resources only    | destroy_all.sh                           | Delete Lambda, KB, DB, S3, Network only |
+| Teardown| Resources only    | destroy_all.sh                           | Delete Lambda, Cognito, KB, DB, Frontend, S3, Network only |
 
 This document reflects the behavior of the scripts and `infra/infra.yaml` as of the review. For required GitHub Environment secret names and usage in the deploy workflow, see `docs/github_environment_secrets.md` and `.github/workflows/deploy.yml`.
