@@ -54,13 +54,13 @@ One-time setup for an environment (dev, staging, prod): AWS accounts, OIDC provi
 
 ### 4.3 Initial deployment
 
-Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Lambda, config sync):
+Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Cognito, frontend, Lambda, config sync):
 
 ```bash
 ./scripts/deploy/deploy_all.sh <environment>
 ```
 
-See [docs/deployment_process.md](docs/deployment_process.md) for Phase 2 and options (e.g. `--skip-network`, `--only-app`).
+See [docs/deployment_process.md](docs/deployment_process.md) for Phase 2 and options (e.g. `--skip-network`, `--only-app`). For frontend build-and-push and CloudFront/Cognito handoff, see [docs/cloudfront_frontend_backend_handoff.md](docs/cloudfront_frontend_backend_handoff.md).
 
 Deploy cost guard controls (monitor, enforcer, pricing sync):
 
@@ -84,6 +84,7 @@ Application and infrastructure configuration (app config, `infra/infra.yaml`, se
 
 Frontend integration handoff docs:
 - [docs/frontend_interface.md](docs/frontend_interface.md) for Vue/client implementation guidance
+- [docs/cloudfront_frontend_backend_handoff.md](docs/cloudfront_frontend_backend_handoff.md) for manual CloudFront/frontend to backend config handoff
 
 ## Run evals and tests
 
@@ -160,6 +161,7 @@ chat-template/
 │   ├── deploy/          # Deployment automation scripts
 │   │   ├── deploy_chat_template_db.sh
 │   │   ├── deploy_evals_github_action_role.sh
+│   │   ├── deploy_frontend.sh
 │   │   ├── deploy_knowledge_base.sh
 │   │   ├── deploy_network.sh
 │   │   ├── deploy_rag_lambda.sh
@@ -222,7 +224,7 @@ chat-template/
 - **notebooks/**: Jupyter notebooks for data exploration, prototyping, and analysis. Useful for interactive development and sharing results.
 
 - **scripts/**: Automation, deployment, and setup scripts.
-  - `deploy/`: Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Lambda, configs)
+  - `deploy/`: Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Cognito, frontend, Lambda, configs)
   - `setup/`: Local dev env, branch protection, GitHub environments and secrets, OIDC, accounts
   - `utils/`: Shared helpers (config_parser.sh, hydrate_configs.sh, common.sh, etc.)
 
