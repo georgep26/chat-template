@@ -222,6 +222,23 @@ Deploy Cognito User Pool infrastructure used by frontend login and Lambda JWT va
 
 **Output Persistence:** On successful deploy, Cognito outputs are written to `infra/secrets/<env>_secrets.yaml` under `config_secrets` (`COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`) so other deploy scripts can consume them.
 
+### Frontend (CloudFront + S3) (`deploy_frontend.sh`)
+
+Deploy the frontend static site stack (S3 bucket + CloudFront) per environment. Infrastructure is deployed from this repo; the frontend **app** is built and uploaded from the **chat-template-frontend** repo. See [docs/cloudfront_frontend_backend_handoff.md](../../docs/cloudfront_frontend_backend_handoff.md) for full manual steps.
+
+**Usage:**
+```bash
+./scripts/deploy/deploy_frontend.sh <environment> [action] [options]
+```
+
+**Environments:** `dev`, `staging`, `prod`
+
+**Actions:** `deploy` (default), `update`, `delete`, `validate`, `status`
+
+**Options:** `-y`, `--yes` - Skip confirmation prompt
+
+**Note:** Uses CLI admin profile so the stack is created in the correct environment account. Does not build or upload the frontend app.
+
 ### Full Application Deployment (`deploy_all.sh`)
 
 Deploy the complete RAG chat application infrastructure to a specific environment. This script orchestrates all deployment components in the correct order.
@@ -246,6 +263,7 @@ Deploy the complete RAG chat application infrastructure to a specific environmen
 - `--skip-db` - Skip database deployment (use existing DB)
 - `--skip-kb` - Skip knowledge base deployment (use existing KB)
 - `--skip-cognito` - Skip Cognito deployment (use existing user pool/client)
+- `--skip-frontend` - Skip frontend (CloudFront + S3) deployment
 - `--skip-lambda` - Skip Lambda deployment (use existing Lambda)
 - `--vpc-id <vpc-id>` - VPC ID (for Lambda, if not using auto-detection)
 - `--subnet-ids <id1,id2,...>` - Subnet IDs (for Lambda, if not using auto-detection)
@@ -257,7 +275,8 @@ Deploy the complete RAG chat application infrastructure to a specific environmen
 3. Database (Aurora PostgreSQL) - requires Network
 4. Knowledge Base (AWS Bedrock) - requires Database and S3
 5. Cognito (User Pool + App Client) - auth for frontend/API access
-6. Lambda Function - requires Database, Knowledge Base, and Cognito config
+6. Frontend (CloudFront + S3) - static site bucket and distribution
+7. Lambda Function - requires Database, Knowledge Base, and Cognito config
 
 **Examples:**
 ```bash
@@ -299,10 +318,11 @@ Delete all infrastructure for a given environment by calling the `delete` action
 - `--skip-lambda` - Do not destroy Lambda stack
 - `--skip-kb` - Do not destroy Knowledge Base stack
 - `--skip-db` - Do not destroy Database stack
+- `--skip-frontend` - Do not destroy Frontend (CloudFront + S3) stack
 - `--skip-s3` - Do not destroy S3 bucket stack
 - `--skip-network` - Do not destroy Network stack
 
-**Destroy Order:** Lambda → Knowledge Base → Database → S3 Bucket → Network (dependencies removed first).
+**Destroy Order:** Lambda → Cognito → Knowledge Base → Database → Frontend → S3 Bucket → Network (dependencies removed first).
 
 **Examples:**
 ```bash
@@ -332,6 +352,7 @@ The following scripts are used by `deploy_all.sh` and can also be run individual
 - `deploy_chat_template_db.sh` - Deploy Aurora Serverless v2 PostgreSQL database
 - `deploy_knowledge_base.sh` - Deploy AWS Bedrock Knowledge Base
 - `deploy_cognito.sh` - Deploy Cognito User Pool and app client
+- `deploy_frontend.sh` - Deploy frontend static site (S3 + CloudFront)
 - `deploy_rag_lambda.sh` - Deploy RAG Lambda function
 - `deploy_cost_guard.sh` - Deploy hybrid cost guard resources (monitor, enforcer, pricing sync)
 
