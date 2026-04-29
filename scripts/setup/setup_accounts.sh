@@ -8,11 +8,23 @@
 # Reads defaults from infra/infra.yaml; CLI arguments override. Writes account info to infra/infra.yaml.
 # Must be run from the management account with Organizations permissions.
 #
+# Bootstrap credentials:
+#   This script requires CLI access to the management account. For initial setup,
+#   use "aws login" (AWS CLI identity-aware sign-in) to create a temporary profile:
+#     aws login                              # follow prompts to authenticate
+#   Then pass the profile name to this script:
+#     ./scripts/setup/setup_accounts.sh --management-setup-profile <profile-name>
+#   The script will create a long-lived IAM user (chat-template-management-admin-user)
+#   with scoped-down permissions. After that, the temporary profile is no longer needed.
+#
 # See docs/aws_organizations.md for background on Organizations and consolidated billing.
 #
 # Usage Examples:
 #   # Create accounts using defaults from infra/infra.yaml
 #   ./scripts/setup/setup_accounts.sh
+#
+#   # Bootstrap with a temporary profile from "aws login"
+#   ./scripts/setup/setup_accounts.sh --management-setup-profile adte_sandbox_management_account
 #
 #   # Override project name and emails via CLI
 #   ./scripts/setup/setup_accounts.sh --project-name myapp \
@@ -69,6 +81,7 @@ show_usage() {
     echo "  --poll-max-minutes <n>        - Max minutes to wait per account (default: 20)"
     echo "  --skip-iam-user               - Do not create the management-account IAM user for assuming member roles"
     echo "  --skip-cli-roles              - Do not deploy CLI roles or update ~/.aws/config and ~/.aws/credentials"
+    echo "  --management-setup-profile <p>- AWS CLI profile for management account (e.g. from 'aws login')"
     echo "  --set-console-password        - Prompt to set or update console sign-in password (default)"
     echo "  --no-console-password         - Do not prompt for console password"
     echo "  -y, --yes                     - Skip confirmation prompt"
@@ -77,7 +90,7 @@ show_usage() {
     echo "Environment variables (override options):"
     echo "  PROJECT_NAME, DEV_EMAIL, STAGING_EMAIL, PROD_EMAIL"
     echo "  BUDGET_ALERT_EMAIL, DEV_BUDGET_USD, STAGING_BUDGET_USD, PROD_BUDGET_USD"
-    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES, SKIP_IAM_USER, SKIP_CLI_ROLES, SET_CONSOLE_PASSWORD"
+    echo "  ORG_ACCESS_ROLE_NAME, OUT_JSON, POLL_SLEEP_SECONDS, POLL_MAX_MINUTES, SKIP_IAM_USER, SKIP_CLI_ROLES, SET_CONSOLE_PASSWORD, MANAGEMENT_SETUP_PROFILE"
 }
 
 # Load infra config and read defaults from infra.yaml (before CLI overrides)
@@ -130,6 +143,7 @@ ENV_SKIP_IAM_USER="${SKIP_IAM_USER:-}"
 ENV_SKIP_CLI_ROLES="${SKIP_CLI_ROLES:-}"
 ENV_SET_CONSOLE_PASSWORD="${SET_CONSOLE_PASSWORD:-}"
 ENV_AUTO_CONFIRM="${AUTO_CONFIRM:-}"
+ENV_MANAGEMENT_SETUP_PROFILE="${MANAGEMENT_SETUP_PROFILE:-}"
 
 # Script defaults (lowest precedence)
 PROJECT_NAME="chat-template"
@@ -148,6 +162,7 @@ SKIP_IAM_USER="0"
 SKIP_CLI_ROLES="0"
 SET_CONSOLE_PASSWORD="1"
 AUTO_CONFIRM="0"
+MANAGEMENT_SETUP_PROFILE=""
 
 DEV_EMAIL_SET=false
 STAGING_EMAIL_SET=false
@@ -180,6 +195,7 @@ read_defaults_from_infra
 [[ -n "$ENV_SKIP_CLI_ROLES" ]] && SKIP_CLI_ROLES="$ENV_SKIP_CLI_ROLES"
 [[ -n "$ENV_SET_CONSOLE_PASSWORD" ]] && SET_CONSOLE_PASSWORD="$ENV_SET_CONSOLE_PASSWORD"
 [[ -n "$ENV_AUTO_CONFIRM" ]] && AUTO_CONFIRM="$ENV_AUTO_CONFIRM"
+[[ -n "$ENV_MANAGEMENT_SETUP_PROFILE" ]] && MANAGEMENT_SETUP_PROFILE="$ENV_MANAGEMENT_SETUP_PROFILE"
 
 # Parse options (CLI overrides infra and env)
 while [[ $# -gt 0 ]]; do
@@ -243,6 +259,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_CLI_ROLES=1
             shift
             ;;
+        --management-setup-profile)
+            MANAGEMENT_SETUP_PROFILE="$2"
+            shift 2
+            ;;
         --set-console-password)
             SET_CONSOLE_PASSWORD=1
             shift
@@ -268,6 +288,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 apply_email_defaults
+
+# If a management setup profile was provided, export it so all aws commands use it
+if [[ -n "$MANAGEMENT_SETUP_PROFILE" ]]; then
+    export AWS_PROFILE="$MANAGEMENT_SETUP_PROFILE"
+fi
 
 PROJECT_ROOT="$(get_project_root)"
 cd "$PROJECT_ROOT"
@@ -818,6 +843,16 @@ else
 fi
 
 if [[ "${SKIP_CLI_ROLES}" -eq 0 ]]; then
+    # CLI role deployment requires sts:AssumeRole into member accounts.
+    # The management IAM user has this permission; the root user / setup profile does not.
+    # Switch to the management-admin profile if it exists and we were using a setup profile.
+    if [[ -n "$MANAGEMENT_SETUP_PROFILE" ]]; then
+        mgmt_admin_profile="${PROJECT_NAME}-management-admin"
+        if aws --profile "$mgmt_admin_profile" sts get-caller-identity &>/dev/null; then
+            print_info "Switching to $mgmt_admin_profile profile for CLI role deployment..."
+            export AWS_PROFILE="$mgmt_admin_profile"
+        fi
+    fi
     print_step "Deploying CLI roles in each account and updating AWS CLI config/credentials..."
     if deploy_cli_roles_in_member_accounts; then
         write_aws_cli_config_and_credentials
