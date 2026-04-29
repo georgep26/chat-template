@@ -45,6 +45,7 @@ The deploy workflow runs a **Hydrate configs** step that injects secrets into `i
 | `COGNITO_LOGOUT_URLS` | Optional OAuth logout URLs CSV for Cognito stack deploy |
 | `COGNITO_DOMAIN_PREFIX` | Optional hosted UI domain prefix |
 | `COGNITO_GENERATE_CLIENT_SECRET` | Optional `true|false` (SPA default is `false`) |
+| `FUNCTION_URL_CORS_ALLOW_ORIGINS` | Optional CSV of allowed frontend origins for Lambda Function URL CORS (for example `https://d123.cloudfront.net`) |
 
 These are synced from the `config_secrets` section of `infra/secrets/<env>_secrets.yaml` when you run `./scripts/setup/setup_github.sh`. To disable the hydrate step (e.g. private fork with real values committed), set repository or environment variable `HYDRATE_CONFIGS` to `false`.
 

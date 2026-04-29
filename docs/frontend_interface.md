@@ -33,7 +33,7 @@ Use env vars per frontend environment:
 | `VITE_COGNITO_REGION` | Required | Required | Required | Usually `us-east-1` |
 | `VITE_COGNITO_USER_POOL_ID` | Required | Required | Required | User pool for this environment |
 | `VITE_COGNITO_APP_CLIENT_ID` | Required | Required | Required | App client used by SPA |
-| `VITE_ALLOWED_API_ORIGIN` | Frontend origin | Frontend origin | Frontend origin | Must be in backend CORS allowlist |
+| `VITE_ALLOWED_API_ORIGIN` | API origin (same as `VITE_CHAT_API_BASE_URL` origin) | API origin (same as `VITE_CHAT_API_BASE_URL` origin) | API origin (same as `VITE_CHAT_API_BASE_URL` origin) | Frontend validates this matches API origin to prevent misconfiguration |
 | `VITE_CHAT_TIMEOUT_MS` | `65000` recommended | `65000` recommended | `65000` recommended | Requests may exceed 30s |
 
 ## 3. Authentication Flow (Authorization Code + PKCE)
