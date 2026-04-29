@@ -62,6 +62,7 @@ show_usage() {
     echo "  --skip-lambda        Skip Lambda deployment"
     echo "  --skip-cost-tags     Skip cost allocation tags activation"
     echo "  --skip-cost-guard    Skip cost guard deployment"
+    echo "  --skip-frontend      Skip frontend (CloudFront + S3) deployment"
     echo ""
     echo "Convenience Flags:"
     echo "  --only-infra         Only deploy infrastructure (network, S3, DB)"
@@ -130,6 +131,7 @@ SKIP_ECR=false
 SKIP_LAMBDA=false
 SKIP_COST_TAGS=false
 SKIP_COST_GUARD=false
+SKIP_FRONTEND=false
 
 # Pass-through overrides
 REGION_OVERRIDE=""
@@ -198,6 +200,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-cost-guard)
             SKIP_COST_GUARD=true
+            shift
+            ;;
+        --skip-frontend)
+            SKIP_FRONTEND=true
             shift
             ;;
         # Convenience flags
@@ -344,7 +350,7 @@ cd "$PROJECT_ROOT"
 # =============================================================================
 
 # Deployment order (matches infra.yaml resource order)
-DEPLOY_ORDER="network s3_bucket chat_db rag_knowledge_base rag_lambda_ecr cognito rag_lambda"
+DEPLOY_ORDER="network s3_bucket chat_db rag_knowledge_base rag_lambda_ecr cognito frontend rag_lambda"
 
 get_resource_script() {
     case "$1" in
@@ -353,6 +359,7 @@ get_resource_script() {
         chat_db)            echo "deploy_chat_template_db.sh" ;;
         rag_knowledge_base) echo "deploy_knowledge_base.sh" ;;
         cognito)            echo "deploy_cognito.sh" ;;
+        frontend)           echo "deploy_frontend.sh" ;;
         rag_lambda_ecr)     echo "deploy_ecr_repo.sh" ;;
         rag_lambda)         echo "deploy_rag_lambda.sh" ;;
     esac
@@ -365,6 +372,7 @@ get_resource_display_name() {
         chat_db)            echo "Database" ;;
         rag_knowledge_base) echo "Knowledge Base" ;;
         cognito)            echo "Cognito Auth" ;;
+        frontend)           echo "Frontend (CloudFront + S3)" ;;
         rag_lambda_ecr)     echo "ECR Repository" ;;
         rag_lambda)         echo "RAG Lambda" ;;
     esac
@@ -372,7 +380,7 @@ get_resource_display_name() {
 
 get_resource_category() {
     case "$1" in
-        network|s3_bucket|chat_db) echo "infra" ;;
+        network|s3_bucket|chat_db|frontend) echo "infra" ;;
         rag_knowledge_base|cognito|rag_lambda_ecr|rag_lambda) echo "app" ;;
     esac
 }
@@ -384,6 +392,7 @@ is_resource_skipped() {
         chat_db)            [ "$SKIP_DB" = true ] ;;
         rag_knowledge_base) [ "$SKIP_KB" = true ] ;;
         cognito)            [ "$SKIP_COGNITO" = true ] ;;
+        frontend)           [ "$SKIP_FRONTEND" = true ] ;;
         rag_lambda_ecr)     [ "$SKIP_ECR" = true ] ;;
         rag_lambda)         [ "$SKIP_LAMBDA" = true ] ;;
         *)                  return 1 ;;
@@ -417,7 +426,7 @@ draw_box_row "Region:       $AWS_REGION" $WIDTH
 [ -n "$AWS_PROFILE" ] && draw_box_row "Profile:      $AWS_PROFILE" $WIDTH
 draw_box_separator $WIDTH
 draw_box_row "Infrastructure (CLI admin role):" $WIDTH
-for resource in network s3_bucket chat_db; do
+for resource in network s3_bucket chat_db frontend; do
     status=$(get_resource_status "$resource")
     name=$(get_resource_display_name "$resource")
     case "$status" in
@@ -565,6 +574,7 @@ build_args_for_resource() {
         chat_db)            build_db_args ;;
         rag_knowledge_base) build_kb_args ;;
         cognito)            build_common_args ;;
+        frontend)           build_common_args ;;
         rag_lambda_ecr)     build_common_args ;;
         rag_lambda)         build_lambda_args ;;
     esac
