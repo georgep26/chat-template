@@ -200,7 +200,8 @@ Thumbs.db
 secrets.yaml
 .secrets/
 
-# Infrastructure secrets (keep template, ignore environment-specific)
+# Infrastructure secrets (keep template, ignore everything else)
+infra/secrets/**/*_secrets.yaml
 infra/secrets/*_secrets.yaml
 !infra/secrets/template.secrets.yaml
 
