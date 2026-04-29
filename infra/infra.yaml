@@ -365,6 +365,13 @@ resources:
       logout_urls: "http://localhost:5173/"
       domain_prefix: ""
       generate_client_secret: false
+  # Frontend static site (S3 + CloudFront)
+  frontend:
+    enabled: true
+    template: resources/frontend_static_site_template.yaml
+    stack_name: "{project}-frontend-{env}"
+    config:
+      price_class: PriceClass_100
   # RAG Lambda function
   rag_lambda:
     enabled: true
@@ -379,6 +386,7 @@ resources:
       cognito_region: "${COGNITO_REGION}"
       cognito_user_pool_id: "${COGNITO_USER_POOL_ID}"
       cognito_app_client_id: "${COGNITO_APP_CLIENT_ID}"
+      # Optional override via hydrate secret FUNCTION_URL_CORS_ALLOW_ORIGINS.
       function_url_cors_allow_origins: "http://localhost:5173"
       function_url_cors_allow_headers: "Content-Type,Authorization"
       function_url_cors_allow_methods: "POST"
