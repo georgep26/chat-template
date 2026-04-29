@@ -24,7 +24,7 @@ Full details are in [docs/deployment_process.md](docs/deployment_process.md). Su
 
 ### 4.1 Local development environment setup
 
-Run the local dev setup script so you have a conda env and PYTHONPATH set to the project root. The script detects OS (macOS, Linux, Windows), installs Miniconda if needed (e.g. via Homebrew on macOS or Chocolatey on Windows), creates the conda environment from `environment.yml`, and sets `PYTHONPATH` on activation. See [docs/deployment_process.md](docs/deployment_process.md) (Phase 1 step 0) for more detail.
+Run the local dev setup script (`setup_local_dev_env.sh`) so you have a conda env and PYTHONPATH set to the project root. The script detects OS (macOS, Linux, Windows), installs Miniconda if needed (e.g. via Homebrew on macOS or Chocolatey on Windows), creates the conda environment from `environment.yml`, and sets `PYTHONPATH` on activation. See [docs/deployment_process.md](docs/deployment_process.md) (Phase 1 step 0) for more detail.
 
 **Quick start:**
 
