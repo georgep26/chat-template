@@ -483,6 +483,14 @@ COGNITO_REGION=$(resolve_auth_value_from_secrets "$COGNITO_REGION" "COGNITO_REGI
 COGNITO_USER_POOL_ID=$(resolve_auth_value_from_secrets "$COGNITO_USER_POOL_ID" "COGNITO_USER_POOL_ID")
 COGNITO_APP_CLIENT_ID=$(resolve_auth_value_from_secrets "$COGNITO_APP_CLIENT_ID" "COGNITO_APP_CLIENT_ID")
 
+# CORS origins: prefer secrets value over the infra.yaml default (which is localhost)
+if [ -z "$CORS_ALLOW_ORIGINS_OVERRIDE" ]; then
+    cors_from_secrets=$(get_config_secret_value "FUNCTION_URL_CORS_ALLOW_ORIGINS")
+    if [ -n "$cors_from_secrets" ]; then
+        CORS_ALLOW_ORIGINS="$cors_from_secrets"
+    fi
+fi
+
 normalize_bool() {
     local raw="$1"
     local lower
