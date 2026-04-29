@@ -22,8 +22,9 @@
 #   2. Cognito
 #   3. Knowledge Base
 #   4. Database
-#   5. S3 Bucket
-#   6. Network
+#   5. Frontend (CloudFront + S3)
+#   6. S3 Bucket
+#   7. Network
 
 set -e
 
@@ -48,6 +49,7 @@ show_usage() {
     echo "  --skip-kb             - Do not destroy Knowledge Base stack"
     echo "  --skip-db             - Do not destroy Database stack"
     echo "  --skip-s3             - Do not destroy S3 bucket stack"
+    echo "  --skip-frontend       - Do not destroy Frontend (CloudFront + S3) stack"
     echo "  --skip-network        - Do not destroy Network stack"
     echo ""
     echo "Examples:"
@@ -56,7 +58,7 @@ show_usage() {
     echo "  $0 dev --force"
     echo "  $0 prod --skip-network   # Destroy all except VPC/network"
     echo ""
-    echo "Destroy order: Lambda → Cognito → Knowledge Base → Database → S3 → Network"
+    echo "Destroy order: Lambda → Cognito → Knowledge Base → Database → Frontend → S3 → Network"
 }
 
 # Check if environment is provided
@@ -74,6 +76,7 @@ SKIP_COGNITO=false
 SKIP_KB=false
 SKIP_DB=false
 SKIP_S3=false
+SKIP_FRONTEND=false
 SKIP_NETWORK=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,6 +114,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_S3=true
             shift
             ;;
+        --skip-frontend)
+            SKIP_FRONTEND=true
+            shift
+            ;;
         --skip-network)
             SKIP_NETWORK=true
             shift
@@ -139,12 +146,13 @@ case $ENVIRONMENT in
 esac
 
 # Optional skip summary
-if [ "$SKIP_LAMBDA" = true ] || [ "$SKIP_COGNITO" = true ] || [ "$SKIP_KB" = true ] || [ "$SKIP_DB" = true ] || [ "$SKIP_S3" = true ] || [ "$SKIP_NETWORK" = true ]; then
+if [ "$SKIP_LAMBDA" = true ] || [ "$SKIP_COGNITO" = true ] || [ "$SKIP_KB" = true ] || [ "$SKIP_DB" = true ] || [ "$SKIP_S3" = true ] || [ "$SKIP_FRONTEND" = true ] || [ "$SKIP_NETWORK" = true ]; then
     print_warning "Skipping:"
     [ "$SKIP_LAMBDA" = true ] && print_warning "  - Lambda"
     [ "$SKIP_COGNITO" = true ] && print_warning "  - Cognito"
     [ "$SKIP_KB" = true ] && print_warning "  - Knowledge Base"
     [ "$SKIP_DB" = true ] && print_warning "  - Database"
+    [ "$SKIP_FRONTEND" = true ] && print_warning "  - Frontend (CloudFront + S3)"
     [ "$SKIP_S3" = true ] && print_warning "  - S3 Bucket"
     [ "$SKIP_NETWORK" = true ] && print_warning "  - Network"
 fi
@@ -224,7 +232,15 @@ if [ "$SKIP_DB" = false ]; then
     echo ""
 fi
 
-# 5. S3 Bucket
+# 5. Frontend (CloudFront + S3)
+if [ "$SKIP_FRONTEND" = false ]; then
+    DESTROY_STEPS=$((DESTROY_STEPS + 1))
+    print_step "Step $DESTROY_STEPS: Destroying Frontend (CloudFront + S3)"
+    run_destroy_script "deploy_frontend.sh" "Frontend" || FAILED_STEPS+=("Frontend")
+    echo ""
+fi
+
+# 6. S3 Bucket
 if [ "$SKIP_S3" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying S3 Bucket"
@@ -232,7 +248,7 @@ if [ "$SKIP_S3" = false ]; then
     echo ""
 fi
 
-# 6. Network
+# 7. Network
 if [ "$SKIP_NETWORK" = false ]; then
     DESTROY_STEPS=$((DESTROY_STEPS + 1))
     print_step "Step $DESTROY_STEPS: Destroying Network"
