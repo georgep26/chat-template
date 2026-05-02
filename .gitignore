@@ -203,7 +203,15 @@ secrets.yaml
 # Infrastructure secrets (keep template, ignore everything else)
 infra/secrets/**/*_secrets.yaml
 infra/secrets/*_secrets.yaml
-!infra/secrets/template.secrets.yaml
+infra/secrets/*.secrets.yaml
+infra/secrets/accounts.secrets.yaml
+!infra/secrets/template.accounts.secrets.yaml
+!infra/secrets/template.environment.secrets.yaml
+
+# Generated infrastructure state and runtime hydration output
+infra/state/*
+!infra/state/.gitignore
+infra/build/
 
 # Infrastructure settings (templated version is tracked; hydrate_configs.sh injects secrets at runtime)
 !infra/infra.yaml
