@@ -204,7 +204,9 @@ secrets.yaml
 infra/secrets/**/*_secrets.yaml
 infra/secrets/*_secrets.yaml
 infra/secrets/*.secrets.yaml
+infra/secrets/**/*.secrets.yaml
 infra/secrets/accounts.secrets.yaml
+infra/secrets/**/accounts.secrets.yaml
 !infra/secrets/template.accounts.secrets.yaml
 !infra/secrets/template.environment.secrets.yaml
 
