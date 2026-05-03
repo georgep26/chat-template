@@ -10,7 +10,7 @@ A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AW
 - **Query Pipeline**: Intelligent query processing with rewrite, clarification, and multi-part query splitting
 - **Evaluation Framework**: Evaluation framework with support for standard RAGAS metrics and custom metrics.
 - **Lambda Deployment**: Standardized API interface for deployment as AWS Lambda function
-- **Standardized Deployment Process**: Standardized deployment process for all environments (dev, staging, prod) with evaluation framework integration.
+- **Standardized Deployment Process**: Config-driven deployment for any environment defined in `infra/infra.yaml`, with evaluation framework integration.
 
 ## Development process
 
@@ -42,25 +42,51 @@ bash scripts/setup/setup_local_dev_env.sh
 
 After setup, **activate** the conda environment: `conda activate chat-template-env`. Configure your IDE to use the conda interpreter (e.g. in VSCode: Command Palette → "Python: Select Interpreter" → choose the env). See [docs/deployment_process.md](docs/deployment_process.md) for more.
 
-### 4.2 Environments setup in GitHub and AWS
+### 4.2 Account and CI/CD setup
 
-One-time setup for an environment (dev, staging, prod): AWS accounts, OIDC provider, deployer role, GitHub environments and secrets, evals role. The recommended way is to run:
+Setup and deployment are separate.
+
+The setup scripts are for the standard production-style workflow: `dev`, `staging`, and `prod` accounts created through AWS Organizations with GitHub OIDC, GitHub environments, deployer roles, evals roles, budgets, and local AWS profiles.
 
 ```bash
+./scripts/setup/setup_accounts.sh
 ./scripts/setup/setup_all.sh <environment>
 ```
 
-(e.g. `./scripts/setup/setup_all.sh dev`). You can skip specific steps with flags (see [docs/deployment_process.md](docs/deployment_process.md)). If you prefer or need to do steps manually (e.g. scripts fail or you don’t use them), use [docs/github_environment_secrets.md](docs/github_environment_secrets.md) for setting GitHub environment secrets and [docs/oidc_github_identity_provider_setup.md](docs/oidc_github_identity_provider_setup.md) for creating the GitHub OIDC identity provider in AWS. Branch protection can be applied with `make branch-protection` or `bash scripts/setup/setup_branch_protection.sh` (requires GitHub CLI `gh`).
+Account IDs, account names, AWS profile names, and global suffixes live in the gitignored accounts file configured by `infra/infra.yaml` (`secrets.accounts_file`), not in committed account fields.
+
+For ad hoc local deployment to an existing account, you can skip the GitHub/OIDC setup path. Add a logical environment to `infra/infra.yaml`, add the real account/profile values to the configured accounts secrets file, and deploy with `--profile` or the profile configured in account secrets.
 
 ### 4.3 Initial deployment
 
-Deploy infrastructure and application (network, S3, DB, Knowledge Base, ECR, Cognito, frontend, Lambda, config sync):
+Deploy all enabled resources for an environment:
 
 ```bash
 ./scripts/deploy/deploy_all.sh <environment>
 ```
 
-See [docs/deployment_process.md](docs/deployment_process.md) for Phase 2 and options (e.g. `--skip-network`, `--only-app`). For frontend build-and-push and CloudFront/Cognito handoff, see [docs/cloudfront_frontend_backend_handoff.md](docs/cloudfront_frontend_backend_handoff.md).
+Preview the plan:
+
+```bash
+./scripts/deploy/deploy_all.sh <environment> --dry-run
+```
+
+Deploy one resource directly:
+
+```bash
+./scripts/deploy/resources/rag_lambda.sh <environment> deploy
+./scripts/deploy/resources/chat_db.sh <environment> status
+```
+
+Tear down an environment:
+
+```bash
+./scripts/deploy/teardown.sh <environment>
+```
+
+Resource order and enabled/disabled state are defined in `infra/infra.yaml`. Resource handlers are resolved by convention from `scripts/deploy/resources/<resource_key>.sh`, so adding a new resource should not require editing `deploy_all.sh`.
+
+See [docs/deployment_process.md](docs/deployment_process.md), [docs/config_structure.md](docs/config_structure.md), and [scripts/deploy/README.md](scripts/deploy/README.md) for details. For frontend build-and-push and CloudFront/Cognito handoff, see [docs/cloudfront_frontend_backend_handoff.md](docs/cloudfront_frontend_backend_handoff.md).
 
 Deploy cost guard controls (monitor, enforcer, pricing sync):
 
@@ -158,15 +184,12 @@ chat-template/
 ├── notebooks/           # Jupyter notebooks for exploratory analysis
 │   └── README.md
 ├── scripts/             # Utility and deployment scripts
-│   ├── deploy/          # Deployment automation scripts
-│   │   ├── deploy_chat_template_db.sh
-│   │   ├── deploy_evals_github_action_role.sh
-│   │   ├── deploy_frontend.sh
-│   │   ├── deploy_knowledge_base.sh
-│   │   ├── deploy_network.sh
-│   │   ├── deploy_rag_lambda.sh
-│   │   ├── deploy_s3_bucket.sh
-│   │   ├── NETWORK_DEPLOYMENT.md
+│   ├── deploy/          # Deployment orchestration and resource handlers
+│   │   ├── deploy_all.sh
+│   │   ├── teardown.sh
+│   │   ├── report_resources.sh
+│   │   ├── resources/   # Convention-based per-resource handlers
+│   │   ├── lib/         # Shared deployment wrapper/helpers
 │   │   └── README.md
 │   ├── setup/           # Setup scripts (local dev, branch protection, GitHub, etc.)
 │   │   ├── setup_local_dev_env.sh
