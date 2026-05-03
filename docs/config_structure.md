@@ -1,53 +1,107 @@
 # Configuration Structure
 
-This document describes the configuration files used by the project: application config, infrastructure definition (`infra/infra.yaml`), and secrets files. For a quick reference of secret names and when they are required, see [github_environment_secrets.md](github_environment_secrets.md).
+This project separates committed deployment intent from uncommitted account and runtime values.
 
----
+## Application Config
 
-## Application configuration
+Per-environment app config lives under:
 
-**Location:** Per-environment files under `config/<env>/app_config.yaml` (e.g. `config/dev/app_config.yaml`, `config/staging/app_config.yaml`, `config/prod/app_config.yaml`). A reference template with the same structure is at `config/app_config.template.yaml`.
+```text
+config/<env>/app_config.yaml
+```
 
-**Purpose:** Application settings for the RAG chat pipeline:
+These files may contain placeholders such as:
 
-- RAG/Bedrock: rewrite, clarify, split, retrieval, generation, and summarization model settings (region, model ID, temperature)
-- Memory backend: `memory_backend_type` (e.g. `aurora_data_api` or `postgres`), plus DB connection settings (cluster ARN, credentials secret ARN, database name, table name)
-- API: host, port, timeout
-- Logging: formatters, handlers, log levels
+```text
+${KNOWLEDGE_BASE_ID}
+${DB_CLUSTER_ARN}
+${DB_CREDENTIALS_SECRET_ARN}
+```
 
-**Placeholders:** The committed per-env files use `${PLACEHOLDER}` for values that must not be in git (e.g. `${KNOWLEDGE_BASE_ID}`, `${DB_CLUSTER_ARN}`, `${DB_CREDENTIALS_SECRET_ARN}`). At deploy time, [scripts/utils/hydrate_configs.sh](../scripts/utils/hydrate_configs.sh) replaces these with real values: locally from `infra/secrets/<env>_secrets.yaml` (section `config_secrets`), and in CI from GitHub Environment secrets. Deployment flows use runtime hydration/restore so hydrated values are submitted but not left in tracked files after completion.
+During deployment, `scripts/utils/hydrate_configs.sh --run` hydrates placeholders from environment secrets, runs config deployment, and restores tracked files.
 
-**Lambda:** The deployed Lambda loads the final config from S3 (the S3 URI is defined in infra and passed into the deploy workflow). If the Lambda runs inside a VPC, the VPC must allow access to S3 (e.g. S3 Gateway VPC Endpoint). See [lambda_vpc_s3_setup.md](lambda_vpc_s3_setup.md) for details.
+## Infrastructure Manifest
 
----
+`infra/infra.yaml` is committed and describes:
 
-## infra/infra.yaml
+- `project`: project name and default region;
+- `setup_profiles`: standard AWS Organizations setup profile;
+- `github`: repository and branch protection settings;
+- `accounts`: logical account references;
+- `environments`: deployable environments and CI/CD participation;
+- `roles`: IAM role and policy stack definitions;
+- `resources`: deployable resource definitions in deployment order.
 
-**Location:** `infra/infra.yaml`
+Do not commit account IDs, account names, real role ARNs, database credentials, or generated resource IDs to `infra.yaml`.
 
-**Purpose:** Single source of truth for deployment. All setup and deploy scripts read from this file (via `scripts/utils/config_parser.sh`); account IDs, regions, and resource names are not hardcoded in scripts.
+## Account Secrets
 
-**Main sections:**
+Real account values live in:
 
-- **project:** Name, default region, management account ID (placeholder).
-- **github:** Repo (placeholder), solo mode, branch protection rules for `main` and `development`.
-- **environments:** Per-environment (dev, staging, prod) settings: account_id, account_name, region, deployer_profile, secrets_file path, email, org_role_name, cli_role_name, cli_profile_name, github_actions_deployer_role_arn, vpc_id, subnet_ids, and (after deploy) db_cluster_arn, db_credentials_secret_arn, knowledge_base_id. Values may be placeholders (e.g. `${ACCOUNT_ID}`, `${VPC_ID}`) until hydrated.
-- **cost_tags / budgets / tags:** Cost allocation tags, budget limits, and required/optional tags for resources.
-- **roles:** OIDC provider, deployer, evals, CLI, RAG Lambda execution, management-account policy and user. Each has `enabled`, template path, stack name, and (for some) policies.
-- **resources:** Deploy order: network, s3_bucket, chat_db, rag_knowledge_base, rag_lambda_ecr, rag_lambda. Each has `enabled`, template(s), stack name(s), and config (bucket names, ACU, etc.).
+```text
+infra/secrets/accounts.secrets.yaml
+```
 
-**Placeholders:** Values like `${ACCOUNT_ID}`, `${VPC_ID}`, `${DEPLOYER_ROLE_ARN}` are filled by `scripts/utils/hydrate_configs.sh` from the environment’s secrets file (`config_secrets`) or from GitHub Environment secrets in CI. Use `hydrate_configs.sh --run <env> -- <command ...>` when you need runtime-only hydration with automatic restore.
+`infra/infra.yaml` can override this with `secrets.accounts_file`. The current active file is:
 
----
+```text
+infra/secrets/adte_sandbox/accounts.secrets.yaml
+```
 
-## Secrets files
+Create it from:
 
-**Location:** `infra/secrets/<env>_secrets.yaml` (e.g. `infra/secrets/dev_secrets.yaml`). These files are **gitignored**. A reference template is [infra/secrets/template.secrets.yaml](../infra/secrets/template.secrets.yaml).
+```bash
+cp infra/secrets/template.accounts.secrets.yaml infra/secrets/adte_sandbox/accounts.secrets.yaml
+```
 
-**Sections:**
+This file stores values such as:
 
-- **database:** `master_username`, `master_password`. Used by deploy scripts and can be synced to GitHub as `MASTER_DB_USERNAME` / `MASTER_DB_PASSWORD`.
-- **github_environment_secrets:** Map of name → value for GitHub Environment secrets used by the deploy and run-evals workflows (e.g. `AWS_DEPLOYER_ROLE_ARN`, `AWS_REGION`, `S3_APP_CONFIG_URI`, `MASTER_DB_USERNAME`, `MASTER_DB_PASSWORD`, `VPC_ID`, `SUBNET_IDS`, `SECURITY_GROUP_IDS`).
-- **config_secrets:** Map of name → value used by `hydrate_configs.sh` to replace placeholders in `infra/infra.yaml` and `config/<env>/app_config.yaml` (e.g. `ACCOUNT_ID`, `DEPLOYER_ROLE_ARN`, `VPC_ID`, `KNOWLEDGE_BASE_ID`, `DB_CLUSTER_ARN`, `DB_CREDENTIALS_SECRET_ARN`).
+- account IDs;
+- account names;
+- local AWS profile names;
+- organization access role names;
+- stable global suffixes for globally unique resource names.
 
-**Syncing to GitHub:** Run `./scripts/setup/setup_github.sh` to push secrets from the local `infra/secrets/<env>_secrets.yaml` files into the corresponding GitHub Environment secrets. For the full list of secret names and when each is required, see [github_environment_secrets.md](github_environment_secrets.md).
+## Environment Secrets
+
+Per-environment secrets live in:
+
+```text
+infra/secrets/<env>.secrets.yaml
+```
+
+Create one from:
+
+```bash
+cp infra/secrets/template.environment.secrets.yaml infra/secrets/adte_sandbox/sandbox.secrets.yaml
+```
+
+This file stores values such as:
+
+- database credentials;
+- GitHub environment secrets;
+- VPC and subnet IDs;
+- DB cluster ARN;
+- DB credentials secret ARN;
+- Knowledge Base ID;
+- Cognito IDs.
+
+## Generated State
+
+Generated outputs may be written under:
+
+```text
+infra/state/<env>.outputs.json
+```
+
+This directory is gitignored. It is local convenience state and should be reconstructable from CloudFormation outputs and AWS APIs.
+
+## Deployment Scripts
+
+`deploy_all.sh` reads enabled resources from `infra.yaml` and calls handlers by convention:
+
+```text
+resources.<resource_key> -> scripts/deploy/resources/<resource_key>.sh
+```
+
+See [scripts/deploy/README.md](../scripts/deploy/README.md) for command usage.
