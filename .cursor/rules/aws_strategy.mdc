@@ -12,9 +12,10 @@ This rule provides guidelines for AWS resource management, naming conventions, t
 All infrastructure configuration is centralized in `infra/infra.yaml`. When making changes:
 
 - Read configuration from `infra/infra.yaml` - never hardcode account IDs, regions, or credentials
-- Use AWS profiles for authentication as defined in the environments section
-- Reference secrets via the `secrets_file` path for each environment
-- Secrets are stored in `infra/secrets/{env}_secrets.yaml` (gitignored)
+- Use AWS profiles from the configured accounts secrets file (`secrets.accounts_file`)
+- Reference per-environment secrets via each environment's `secrets_file`
+- Environment secrets use `infra/secrets/<account-set>/<env>.secrets.yaml` and account secrets use `infra/secrets/<account-set>/accounts.secrets.yaml`; both are gitignored
+- The active account set is configured in `infra.yaml` under `secrets.accounts_file`
 
 ## ECR Image Management
 
@@ -41,7 +42,7 @@ Follow the patterns defined in @docs/aws_naming_convention.md:
 | Resource Type | Naming Pattern | Example |
 |--------------|----------------|---------|
 | VPC | `{project}-vpc-{env}` | `chat-template-vpc-dev` |
-| S3 Bucket | `{project}-s3-bucket-{env}` | `chat-template-s3-bucket-dev` |
+| S3 Bucket | `{project}-{env}-s3-{global_suffix}` | `chat-template-dev-s3-542078` |
 | Database | `{project}-chat-db-{env}` | `chat-template-chat-db-dev` |
 | Knowledge Base | `{project}-rag-kb-{env}` | `chat-template-rag-kb-dev` |
 | ECR Repo | `{project}-rag-lambda-{env}` | `chat-template-rag-lambda-dev` |
@@ -87,11 +88,12 @@ When creating new templates:
 Deployment scripts in `scripts/deploy/` should:
 
 1. **Source utilities**: Always source `common.sh`, `config_parser.sh`, and `deploy_summary.sh`
-2. **Read from config**: Get all values from `infra/infra.yaml` - no command-line overrides except `-y` flag
+2. **Read from config**: Get topology from `infra/infra.yaml`, account values from `secrets.accounts_file`, and runtime secrets from each environment's `secrets_file`
 3. **Show deploy summary**: Display a summary box before deployment
 4. **Confirm before deploy**: Prompt for confirmation unless `-y` flag is passed
 5. **Respect enabled flag**: Only deploy resources that have `enabled: true` in infra.yaml
-6. **Use color scheme**:
+6. **Keep orchestrators generic**: `deploy_all.sh` must read resource keys in YAML order and resolve `scripts/deploy/resources/<resource_key>.sh` by convention; resource-specific logic belongs in the handler
+7. **Use color scheme**:
    - `print_info` (white) - General information
    - `print_step` (cyan) - Major deployment steps
    - `print_warning` (yellow) - Warnings
@@ -101,27 +103,28 @@ Deployment scripts in `scripts/deploy/` should:
 ## Resource Ordering
 
 Resources are deployed in the order they are defined in `infra/infra.yaml`:
-- Roles and policies are defined first (before resources)
 - Resources are defined in dependency order
-- Teardown occurs in reverse order
+- Teardown occurs in reverse order via `scripts/deploy/teardown.sh`
+- Imported resources (`ownership: imported`) are skipped during teardown
 - No separate `deployment_order` section is needed
 
 ## Secrets Management
 
-- Store sensitive values in `infra/secrets/{env}_secrets.yaml`
-- Never commit secrets to git (they are gitignored)
-- Use `template.secrets.yaml` as a reference
-- Access secrets via `get_secret_value` function in scripts
+- Store account IDs, account names, AWS profile names, and global suffixes in the configured accounts secrets file
+- Store environment/runtime values in `infra/secrets/<account-set>/<env>.secrets.yaml`
+- Never commit real secrets to git; nested `.secrets.yaml` and `accounts.secrets.yaml` files are gitignored
+- Use `template.accounts.secrets.yaml` and `template.environment.secrets.yaml` as references
+- Access environment secrets via `get_secret_value` and account secrets via config parser account helpers
 
 ## Multi-Account Support
 
 The infrastructure supports multiple deployment architectures:
 
-- **Single account**: All environments in one account
-- **Multi-account**: Separate account per environment (recommended)
-- **Hybrid**: Some environments share accounts (e.g., dev/staging together, prod separate)
+- **Management sandbox**: the `sandbox` environment deploys to the active management account
+- **Multi-account**: `dev`, `staging`, and `prod` deploy to separate member accounts (recommended for production workflow)
+- **Hybrid/ad hoc**: Additional environments can share accounts when explicitly configured
 
-Account configuration is defined in the `environments` section of `infra/infra.yaml`.
+Logical account mapping is defined in `accounts` and `environments` in `infra/infra.yaml`; real account values are read from `secrets.accounts_file`.
 
 ## Cost Optimization
 
