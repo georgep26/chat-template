@@ -8,7 +8,28 @@
 project:
   name: chat-template
   default_region: us-east-1
-  management_account_id: "${MANAGEMENT_ACCOUNT_ID}"
+
+secrets:
+  accounts_file: infra/secrets/adte_sandbox/accounts.secrets.yaml
+
+# Setup profiles are used by setup scripts. The default profile creates the
+# production-style AWS Organizations workflow: dev, staging, and prod in
+# separate member accounts with GitHub CI/CD access.
+setup_profiles:
+  default_standard_accounts:
+    enabled: true
+    type: aws_organizations
+    environments:
+      - dev
+      - staging
+      - prod
+    create_accounts: true
+    configure_github: true
+    configure_oidc: true
+    configure_deployer_roles: true
+    configure_evals_roles: true
+    configure_budgets: true
+
 # For GitHub repository setup
 github:
   github_repo: "${REPO}"
@@ -49,52 +70,66 @@ github:
       required_conversation_resolution: false
       lock_branch: false
       allow_fork_syncing: false
-# Environment configurations (account_id, account_name, email, org_role_name, cli_role_name, cli_profile_name updated by setup_accounts.sh; github_actions_deployer_role_arn by setup_deployer_roles.sh; db_cluster_arn, db_credentials_secret_arn by deploy_chat_template_db.sh; knowledge_base_id is in secrets file config_secrets.KNOWLEDGE_BASE_ID, written by deploy_knowledge_base.sh)
-# Supports: single account, single account with multiple environments,
-# multiple accounts, or hybrid (dev/staging shared, prod separate)
+# Logical accounts. Real account IDs, names, and local AWS profiles live in
+# infra/secrets/accounts.secrets.yaml and are referenced through secret_ref.
+accounts:
+  management:
+    kind: management
+    secret_ref: management
+    allow_workload_deployments: true
+  dev:
+    kind: organizations_member
+    secret_ref: dev
+    created_by_setup_profile: default_standard_accounts
+  staging:
+    kind: organizations_member
+    secret_ref: staging
+    created_by_setup_profile: default_standard_accounts
+  prod:
+    kind: organizations_member
+    secret_ref: prod
+    created_by_setup_profile: default_standard_accounts
+
+# Environment configurations. These define deployable environments, not
+# necessarily GitHub CI/CD environments. Account-specific values remain in
+# uncommitted secret files.
 environments:
   dev:
-    account_id: "${ACCOUNT_ID}"
-    account_name: "chat-template-dev"
+    account: dev
     region: us-east-1
-    deployer_profile: chat-template-dev-deployer
-    secrets_file: secrets/dev_secrets.yaml
-    email: "${EMAIL}"
-    org_role_name: "OrganizationAccountAccessRole"
-    cli_role_name: "chat-template-dev-admin-cli-role"
-    cli_profile_name: "chat-template-dev-cli"
-    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
-    vpc_id: "${VPC_ID}"
-    subnet_ids: "${SUBNET_IDS}"
+    secrets_file: infra/secrets/adte_sandbox/dev.secrets.yaml
+    ci_cd:
+      enabled: true
+      github_environment: dev
+      deployer_role: deployer
+      evals_role: evals
   staging:
-    account_id: "${ACCOUNT_ID}"
-    account_name: "chat-template-staging"
+    account: staging
     region: us-east-1
-    deployer_profile: chat-template-staging-deployer
-    secrets_file: secrets/staging_secrets.yaml
-    email: "${EMAIL}"
-    org_role_name: "OrganizationAccountAccessRole"
-    cli_role_name: "chat-template-staging-admin-cli-role"
-    cli_profile_name: "chat-template-staging-cli"
-    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
-    vpc_id: "${VPC_ID}"
-    subnet_ids: "${SUBNET_IDS}"
+    secrets_file: infra/secrets/adte_sandbox/staging.secrets.yaml
+    ci_cd:
+      enabled: true
+      github_environment: staging
+      deployer_role: deployer
+      evals_role: evals
+      promotion_source: dev
   prod:
-    account_id: "${ACCOUNT_ID}"
-    account_name: "chat-template-prod"
+    account: prod
     region: us-east-1
-    deployer_profile: chat-template-prod-deployer
-    secrets_file: secrets/prod_secrets.yaml
-    email: "${EMAIL}"
-    org_role_name: "OrganizationAccountAccessRole"
-    cli_role_name: "chat-template-prod-admin-cli-role"
-    cli_profile_name: "chat-template-prod-cli"
-    github_actions_deployer_role_arn: "${DEPLOYER_ROLE_ARN}"
-    vpc_id: "${VPC_ID}"
-    subnet_ids: "${SUBNET_IDS}"
-    db_cluster_arn: "${DB_CLUSTER_ARN}"
-    db_credentials_secret_arn: "${DB_CREDENTIALS_SECRET_ARN}"
-    knowledge_base_id: "${KNOWLEDGE_BASE_ID}"
+    secrets_file: infra/secrets/adte_sandbox/prod.secrets.yaml
+    ci_cd:
+      enabled: true
+      github_environment: production
+      deployer_role: deployer
+      evals_role: evals
+      promotion_source: staging
+      promotion_mode: copy_image_digest
+  sandbox:
+    account: management
+    region: us-east-1
+    secrets_file: infra/secrets/adte_sandbox/sandbox.secrets.yaml
+    ci_cd:
+      enabled: false
 # Cost allocation tags for AWS billing
 cost_tags:
   # Tags that will be activated for cost allocation
@@ -115,7 +150,7 @@ budgets:
 # v1 uses scheduled polling (Option 1); v1.2 can add app-metered events (Option 3).
 cost_control:
   enabled: true
-  mode: enforce  # observe | enforce
+  mode: enforce # observe | enforce
   stack_name: "{project}-cost-guard-{env}"
   budget:
     period: monthly
@@ -299,11 +334,14 @@ resources:
   # VPC and networking
   network:
     enabled: true
+    category: infrastructure
+    credential: deploy
+    ownership: imported
     # When true, deploy_network.sh does not create a CloudFormation stack. Instead it:
     #   1. Uses environments.<env>.vpc_id if set
     #   2. Otherwise discovers the default VPC in the account
     #   3. If no default VPC, uses the first available VPC
-    #   4. Writes the discovered vpc_id and subnet_ids back to infra.yaml (environments.<env>)
+    #   4. Writes the discovered vpc_id and subnet_ids to infra/secrets/<env>.secrets.yaml
     use_defaults: true
     # Below are only used when use_defaults is false (custom network stack).
     # template: resources/vpc_template.yaml
@@ -315,15 +353,21 @@ resources:
   # S3 bucket for knowledge base documents
   s3_bucket:
     enabled: true
+    category: infrastructure
+    credential: deploy
+    ownership: owned
     template: resources/s3_bucket_template.yaml
     stack_name: "{project}-s3-{env}"
     config:
-      bucket_name: "{project}-{env}-s3-bucket"
+      bucket_name: "{project}-{env}-s3-{global_suffix}"
       enable_versioning: true
       enable_lifecycle: true
   # Aurora Serverless database
   chat_db:
     enabled: true
+    category: infrastructure
+    credential: deploy
+    ownership: owned
     templates:
       main: resources/light_db_template.yaml
       secret: resources/db_secret_template.yaml
@@ -337,25 +381,34 @@ resources:
   # Bedrock Knowledge Base
   rag_knowledge_base:
     enabled: true
+    category: application
+    credential: deploy
+    ownership: owned
     template: resources/knowledge_base_template.yaml
     stack_name: "{project}-rag-kb-{env}"
     config:
       db_stack_name: "{project}-chat-db-{env}"
       embedding_model_id: "amazon.titan-embed-text-v2:0"
       table_name: "bedrock_integration.bedrock_kb"
-      s3_bucket_name: "{project}-{env}-s3-bucket"
+      s3_bucket_name: "{project}-{env}-s3-{global_suffix}"
       s3_inclusion_prefix: "kb_sources/"
   # ECR repository for RAG Lambda (lifecycle policy keeps only the 5 most recent images)
   rag_lambda_ecr:
     enabled: true
+    category: application
+    credential: deploy
+    ownership: owned
     template: resources/ecr_repo_template.yaml
     stack_name: "{project}-rag-lambda-ecr-{env}"
     config:
       repository_name: "{project}-rag-lambda-{env}"
-      max_image_count: 5  # only this many images retained; older ones expired automatically
+      max_image_count: 5 # only this many images retained; older ones expired automatically
   # Cognito auth for frontend + API JWT validation
   cognito:
     enabled: true
+    category: application
+    credential: deploy
+    ownership: owned
     template: resources/cognito_template.yaml
     stack_name: "{project}-cognito-{env}"
     config:
@@ -368,6 +421,9 @@ resources:
   # Frontend static site (S3 + CloudFront)
   frontend:
     enabled: true
+    category: infrastructure
+    credential: deploy
+    ownership: owned
     template: resources/frontend_static_site_template.yaml
     stack_name: "{project}-frontend-{env}"
     config:
@@ -375,13 +431,16 @@ resources:
   # RAG Lambda function
   rag_lambda:
     enabled: true
+    category: application
+    credential: deploy
+    ownership: owned
     template: resources/lambda_template.yaml
     stack_name: "{project}-rag-lambda-{env}"
     config:
       function_name: "{project}-{env}-rag-chat"
       memory_size: 1024
       timeout: 300
-      s3_app_config_uri: "s3://{project}-{env}-s3-bucket/config/app_config.yaml"
+      s3_app_config_uri: "s3://{project}-{env}-s3-{global_suffix}/config/app_config.yaml"
       auth_required: "true"
       cognito_region: "${COGNITO_REGION}"
       cognito_user_pool_id: "${COGNITO_USER_POOL_ID}"
