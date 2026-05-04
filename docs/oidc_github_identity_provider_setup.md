@@ -1,15 +1,15 @@
 # GitHub OIDC Identity Provider Setup (AWS Console)
 
-This guide is for **manually** creating the GitHub OIDC identity provider in AWS (e.g. when `setup_oidc_provider.sh` is not used or fails). It explains how to create the GitHub Actions OpenID Connect (OIDC) identity provider in AWS IAM via the console.
+This guide is for **manually** creating the GitHub OIDC identity provider in AWS when `scripts/setup/setup_oidc_provider.sh` or `scripts/setup/setup_all.sh` is not used or fails. It explains how to create the GitHub Actions OpenID Connect (OIDC) identity provider in AWS IAM via the console.
 
-**Prerequisite for evals role:** The GitHub OIDC identity provider must be created **before** running [scripts/deploy/deploy_evals_github_action_role.sh](../scripts/deploy/deploy_evals_github_action_role.sh). That script requires the provider ARN via `--oidc-provider-arn`. Create the provider once per AWS account; then deploy the evals role for each environment (dev, staging, prod) using the same provider ARN.
+**Prerequisite for GitHub deploy/evals roles:** The GitHub OIDC identity provider must exist in each CI/CD target AWS account before deploying the GitHub Actions roles. The deployer and evals role scripts discover the provider automatically when it exists; `--oidc-provider-arn` is only needed as an override.
 
 ---
 
 ## Prerequisites
 
 - AWS account with permission to create IAM identity providers (`iam:CreateOpenIDConnectProvider`, `iam:TagOpenIDConnectProvider`).
-- You will need the **provider ARN** after creation; it is required when deploying the evals role via `deploy_evals_github_action_role.sh`.
+- You may need the **provider ARN** after creation if automatic discovery fails or if you want to pass `--oidc-provider-arn` explicitly.
 
 ---
 
@@ -68,14 +68,25 @@ After creation, the provider ARN will look like:
 arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com
 ```
 
-Use this ARN when deploying the evals GitHub Action role with an existing provider:
+You normally do not need to pass this ARN because the role deploy scripts discover it in the target account. If discovery fails, pass it explicitly:
 
 ```bash
+./scripts/deploy/deploy_deployer_github_action_role.sh dev deploy \
+  --oidc-provider-arn arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com
+
 ./scripts/deploy/deploy_evals_github_action_role.sh dev deploy \
   --oidc-provider-arn arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com
 ```
 
 Replace `ACCOUNT_ID` with your AWS account ID.
+
+For the standard setup path, prefer:
+
+```bash
+./scripts/setup/setup_all.sh dev
+./scripts/setup/setup_all.sh staging
+./scripts/setup/setup_all.sh prod
+```
 
 ---
 
