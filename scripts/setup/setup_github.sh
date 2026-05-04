@@ -174,8 +174,8 @@ show_usage() {
     echo "  -y, --yes                 - Non-interactive: skip confirmation prompts"
     echo "  --help, -h                - Show this help message"
     echo ""
-    echo "Environment (positional): dev, staging, prod"
-    echo "  No args: ensure all environments (dev, staging, prod) and deploy secrets for all with secrets files."
+    echo "Environment (positional): any CI/CD-enabled environment in infra/infra.yaml"
+    echo "  No args: ensure all CI/CD-enabled environments and deploy secrets for all with secrets files."
     echo "  With args: only ensure and deploy secrets for the listed environment(s). e.g. $0 dev"
     echo ""
     echo "Config: CLI args > infra/infra.yaml (github.github_repo, github.solo_mode, github.branch_protection.main, github.branch_protection.development)"
@@ -223,20 +223,9 @@ parse_cli_args() {
                 DEPLOY_SECRETS=1
                 shift
                 while [[ $# -gt 0 ]] && [[ "$1" != --* ]]; do
-                    case $1 in
-                        dev|staging|prod)
-                            DEPLOY_SECRETS_ENVS+=("$1")
-                            shift
-                            ;;
-                        *)
-                            break
-                            ;;
-                    esac
+                    DEPLOY_SECRETS_ENVS+=("$1")
+                    shift
                 done
-                ;;
-            dev|staging|prod)
-                SELECTED_ENVS+=("$1")
-                shift
                 ;;
             --skip-secrets)
                 DEPLOY_SECRETS=0
@@ -262,10 +251,14 @@ parse_cli_args() {
                 show_usage
                 exit 0
                 ;;
-            *)
+            --*)
                 print_error "Unknown option: $1"
                 show_usage
                 exit 1
+                ;;
+            *)
+                SELECTED_ENVS+=("$1")
+                shift
                 ;;
         esac
     done
@@ -373,21 +366,25 @@ setup_development_branch_protection() {
 
 # Ensure GitHub environments exist. Creates via API if missing.
 # Usage: ensure_github_environments repo [env1 env2 ...]
-# If no envs given, ensures dev, staging, prod.
+# If no envs given, ensures configured CI/CD environments.
 ensure_github_environments() {
     local repo=$1
     shift
     local envs=("$@")
     if [[ ${#envs[@]} -eq 0 ]]; then
-        envs=(dev staging prod)
+        while IFS= read -r env; do
+            is_environment_ci_cd_enabled "$env" && envs+=("$env")
+        done < <(get_environment_names)
     fi
 
     print_step "Ensuring GitHub environment(s): ${envs[*]}..."
     for env in "${envs[@]}"; do
-        if gh api -X PUT "repos/${repo}/environments/${env}" --silent 2>/dev/null; then
-            print_info "Environment '$env' exists or was created."
+        local github_env
+        github_env=$(get_environment_github_environment "$env" 2>/dev/null || echo "$env")
+        if gh api -X PUT "repos/${repo}/environments/${github_env}" --silent 2>/dev/null; then
+            print_info "Environment '$github_env' exists or was created."
         else
-            print_warning "Could not ensure environment '$env' (may already exist or need repo permissions)."
+            print_warning "Could not ensure environment '$github_env' (may already exist or need repo permissions)."
         fi
     done
     print_info "GitHub environment(s) check complete."
@@ -452,6 +449,8 @@ deploy_env_secrets() {
     local secrets_file="$2"
     local repo="${3:-}"
     local failed=0
+    local github_env
+    github_env=$(get_environment_github_environment "$env" 2>/dev/null || echo "$env")
 
     if [[ ! -f "$secrets_file" ]]; then
         print_error "Secrets file not found: $secrets_file"
@@ -467,7 +466,7 @@ deploy_env_secrets() {
             local value
             value=$(yq -r ".github_environment_secrets[\"$key\"]" "$secrets_file" 2>/dev/null || true)
             [[ "$value" = "null" ]] && value=""
-            if ! set_github_secret "$env" "$key" "$value" "$repo"; then
+            if ! set_github_secret "$github_env" "$key" "$value" "$repo"; then
                 failed=$((failed + 1))
             fi
         done <<< "$keys"
@@ -482,13 +481,33 @@ deploy_env_secrets() {
         esac
         if ! yq -e ".github_environment_secrets.${gh_name}" "$secrets_file" &>/dev/null; then
             value=$(yq_raw "$secrets_file" ".$yaml_path")
-            if [[ -n "$value" ]] && ! set_github_secret "$env" "$gh_name" "$value" "$repo"; then
+            if [[ -n "$value" ]] && ! set_github_secret "$github_env" "$gh_name" "$value" "$repo"; then
                 failed=$((failed + 1))
             fi
         fi
     done
 
-    # 3) Sync config_secrets map (for hydrate_configs.sh)
+    # 3) Sync account/region guardrails used by deploy_all.sh in CI.
+    if [[ -z "$(yq_raw "$secrets_file" ".github_environment_secrets.ACCOUNT_ID")" ]]; then
+        value=$(get_environment_account_id "$env" 2>/dev/null || true)
+        if [[ -n "$value" ]] && ! set_github_secret "$github_env" "ACCOUNT_ID" "$value" "$repo"; then
+            failed=$((failed + 1))
+        fi
+    fi
+    if [[ -z "$(yq_raw "$secrets_file" ".github_environment_secrets.AWS_REGION")" ]]; then
+        value=$(get_environment_region "$env" 2>/dev/null || true)
+        if [[ -n "$value" ]] && ! set_github_secret "$github_env" "AWS_REGION" "$value" "$repo"; then
+            failed=$((failed + 1))
+        fi
+    fi
+    if [[ -z "$(yq_raw "$secrets_file" ".github_environment_secrets.GLOBAL_SUFFIX")" ]]; then
+        value=$(get_environment_global_suffix "$env" 2>/dev/null || true)
+        if [[ -n "$value" ]] && ! set_github_secret "$github_env" "GLOBAL_SUFFIX" "$value" "$repo"; then
+            failed=$((failed + 1))
+        fi
+    fi
+
+    # 4) Sync config_secrets map (for hydrate_configs.sh)
     if yq -e '.config_secrets | keys | length > 0' "$secrets_file" &>/dev/null; then
         local keys
         keys=$(yq -r '.config_secrets | keys[]' "$secrets_file" 2>/dev/null || true)
@@ -497,7 +516,7 @@ deploy_env_secrets() {
             local value
             value=$(yq -r ".config_secrets[\"$key\"]" "$secrets_file" 2>/dev/null || true)
             [[ "$value" = "null" ]] && value=""
-            if ! set_github_secret "$env" "$key" "$value" "$repo"; then
+            if ! set_github_secret "$github_env" "$key" "$value" "$repo"; then
                 failed=$((failed + 1))
             fi
         done <<< "$keys"
@@ -534,8 +553,9 @@ resolve_secrets_environments() {
     fi
     # Default: all envs that exist in config and have a secrets file
     load_infra_config "${project_root}/infra/infra.yaml" || return 1
-    for env in dev staging prod; do
+    while IFS= read -r env; do
         if environment_exists "$env" 2>/dev/null; then
+            is_environment_ci_cd_enabled "$env" || continue
             local secrets_file
             secrets_file=$(get_environment_secrets_file "$env" 2>/dev/null)
             if [[ -f "$secrets_file" ]]; then
@@ -544,9 +564,9 @@ resolve_secrets_environments() {
                 print_warning "Secrets file not found for $env: $secrets_file (skipping)"
             fi
         fi
-    done
+    done < <(get_environment_names)
     if [[ ${#DEPLOY_SECRETS_ENVS_RESOLVED[@]} -eq 0 ]]; then
-        print_error "No environment secrets files found. Create e.g. infra/secrets/dev_secrets.yaml from infra/secrets/template.secrets.yaml"
+        print_error "No environment secrets files found. Create e.g. infra/secrets/dev.secrets.yaml from infra/secrets/template.environment.secrets.yaml"
         return 1
     fi
     return 0
@@ -663,7 +683,7 @@ main() {
         if [[ ${#SELECTED_ENVS[@]} -gt 0 ]]; then
             print_info "  Environment(s) ensured: ${SELECTED_ENVS[*]}"
         else
-            print_info "  Environments dev, staging, prod ensured"
+            print_info "  CI/CD-enabled environments ensured"
         fi
     fi
     [[ "$DEPLOY_SECRETS" -eq 1 ]] && print_info "  Environment secrets deployed from infra/secrets"
