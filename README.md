@@ -154,17 +154,18 @@ chat-template/
 │   └── prod/
 │       └── app_config.yaml
 ├── docs/                # Documentation
-│   ├── ai-instructions.md
 │   ├── aurora_data_api_migration.md
 │   ├── aws_naming_convention.md
 │   ├── code_standards.md
 │   ├── config_structure.md
 │   ├── deployment_process.md
+│   ├── development_plans/   # Dated generated implementation plans
 │   ├── development_process.md
+│   ├── frontend_interface.md
 │   ├── github_environment_secrets.md
 │   ├── lambda_vpc_s3_setup.md
 │   ├── oidc_github_identity_provider_setup.md
-│   └── working_notes.md
+│   └── working_files/       # Gitignored generated reports and working notes
 ├── infra/               # Infrastructure as Code (IaC) definitions
 │   ├── resources/  # AWS CloudFormation templates
 │   │   ├── db_secret_template.yaml
@@ -183,7 +184,7 @@ chat-template/
 │   │   └── README.md
 │   ├── roles/           # IAM role templates
 │   │   ├── evals_github_action_role.yaml
-│   │   ├── lambda_execution_role.yaml
+│   │   ├── rag_lambda_execution_role.yaml
 │   │   └── README.md
 │   └── README.md
 ├── notebooks/           # Jupyter notebooks for exploratory analysis
