@@ -59,16 +59,22 @@ For ad hoc local deployment to an existing account, you can skip the GitHub/OIDC
 
 ### 4.3 Initial deployment
 
-Deploy all enabled resources for an environment:
+Deploy the full deployment set for an environment:
 
 ```bash
 ./scripts/deploy/deploy_all.sh <environment>
 ```
 
+Deploy only the application-layer resources:
+
+```bash
+./scripts/deploy/deploy_all.sh <environment> --set app
+```
+
 Preview the plan:
 
 ```bash
-./scripts/deploy/deploy_all.sh <environment> --dry-run
+./scripts/deploy/deploy_all.sh <environment> --set pr --dry-run
 ```
 
 Deploy one resource directly:
@@ -84,7 +90,7 @@ Tear down an environment:
 ./scripts/deploy/teardown.sh <environment>
 ```
 
-Resource order and enabled/disabled state are defined in `infra/infra.yaml`. Resource handlers are resolved by convention from `scripts/deploy/resources/<resource_key>.sh`, so adding a new resource should not require editing `deploy_all.sh`.
+Resource order, deployment sets, and enabled/disabled state are defined in `infra/infra.yaml`. Resource handlers are resolved by convention from `scripts/deploy/resources/<resource_key>.sh`, so adding a new resource should not require editing `deploy_all.sh`.
 
 See [docs/deployment_process.md](docs/deployment_process.md), [docs/config_structure.md](docs/config_structure.md), and [scripts/deploy/README.md](scripts/deploy/README.md) for details. For frontend build-and-push and CloudFront/Cognito handoff, see [docs/cloudfront_frontend_backend_handoff.md](docs/cloudfront_frontend_backend_handoff.md).
 
