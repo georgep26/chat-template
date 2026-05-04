@@ -130,7 +130,7 @@ Create `data/eval_questions.csv` with columns `question` and `reference_answer` 
 
 - **Public repo strategy** ([.cursor/rules/public_repo_strategy.mdc](.cursor/rules/public_repo_strategy.mdc)): Templated configs with `${PLACEHOLDER}`; sensitive data in `infra/secrets/` and GitHub Environment secrets; [scripts/utils/hydrate_configs.sh](scripts/utils/hydrate_configs.sh) injects values at deploy time. Private forks can set `HYDRATE_CONFIGS=false` and commit real values.
 - **AWS deployment strategy** ([.cursor/rules/aws_strategy.mdc](.cursor/rules/aws_strategy.mdc)): All config from `infra/infra.yaml`; naming, tags, resource order, OIDC for GitHub Actions. See [docs/aws_naming_convention.md](docs/aws_naming_convention.md) for naming rules.
-- **Inexpensive deployment**: [docs/aurora_data_api_migration.md](docs/aurora_data_api_migration.md) describes using the Aurora Data API backend so Lambda can run without VPC (no NAT Gateway). [docs/lambda_vpc_s3_setup.md](docs/lambda_vpc_s3_setup.md) covers Lambda in VPC and S3 config loading (e.g. S3 Gateway VPC Endpoint).
+- **Inexpensive deployment**: The default app config uses Aurora Data API for chat history so Lambda can run without VPC database access. [docs/lambda_vpc_s3_setup.md](docs/lambda_vpc_s3_setup.md) covers Lambda in VPC and S3 config loading; the original Aurora Data API decision notes now live in local working files.
 
 ## Directory structure
 
@@ -154,7 +154,6 @@ chat-template/
 │   └── prod/
 │       └── app_config.yaml
 ├── docs/                # Documentation
-│   ├── aurora_data_api_migration.md
 │   ├── aws_naming_convention.md
 │   ├── code_standards.md
 │   ├── config_structure.md
