@@ -1,1 +1,14 @@
-# Resource Reports\n\nThis directory contains generated reports of deployed AWS resources.\n\nReports are generated using the Cursor command: `/deployed-resources`\n\nFiles:\n- `deployed_resources_dev.md` - Development environment\n- `deployed_resources_staging.md` - Staging environment\n- `deployed_resources_prod.md` - Production environment
+# Resource Reports
+
+This directory is for generated reports that summarize deployed AWS resources.
+
+Use the current deployment report command:
+
+```bash
+./scripts/deploy/report_resources.sh <environment>
+./scripts/deploy/report_resources.sh <environment> --json
+```
+
+The report reads `infra/infra.yaml`, checks declared resource stacks, and flags likely orphan CloudFormation stacks that match the project/environment naming pattern.
+
+Generated report files should generally stay local unless there is a specific reason to commit a point-in-time snapshot. For broader coding-agent reports, use `docs/working_files/`.
