@@ -82,8 +82,7 @@ print_resource_summary() {
     
     local project_name=$(get_project_name)
     local account_id=$(get_environment_account_id "$env")
-    local account_name=$(yq ".environments.${env}.account_name" "$config_path" 2>/dev/null || echo "")
-    [ "$account_name" = "null" ] && account_name=""
+    local account_name=$(get_environment_account_name "$env" 2>/dev/null || echo "")
     local region=$(get_environment_region "$env")
     local profile=$(get_environment_profile "$env")
     
@@ -133,6 +132,7 @@ print_full_deploy_summary() {
     
     local project_name=$(get_project_name)
     local account_id=$(get_environment_account_id "$env")
+    local account_key=$(get_environment_account_key "$env")
     local region=$(get_environment_region "$env")
     local profile=$(get_environment_profile "$env")
     
@@ -143,7 +143,11 @@ print_full_deploy_summary() {
     draw_box_row "Project:      $project_name" $width
     draw_box_row "Environment:  $env" $width
     draw_box_row "Region:       $region" $width
-    draw_box_row "Account:      $account_id" $width
+    if [ -n "$account_id" ]; then
+        draw_box_row "Account:      $account_key ($account_id)" $width
+    else
+        draw_box_row "Account:      $account_key" $width
+    fi
     [ "$profile" != "null" ] && draw_box_row "Profile:      $profile" $width
     draw_box_separator $width
     draw_box_row "Resources to ${action}:" $width
@@ -169,6 +173,7 @@ print_teardown_summary() {
     
     local project_name=$(get_project_name)
     local account_id=$(get_environment_account_id "$env")
+    local account_key=$(get_environment_account_key "$env")
     local region=$(get_environment_region "$env")
     local profile=$(get_environment_profile "$env")
     
@@ -180,7 +185,11 @@ print_teardown_summary() {
     draw_box_row "Project:      $project_name" $width
     draw_box_row "Environment:  $env" $width
     draw_box_row "Region:       $region" $width
-    draw_box_row "Account:      $account_id" $width
+    if [ -n "$account_id" ]; then
+        draw_box_row "Account:      $account_key ($account_id)" $width
+    else
+        draw_box_row "Account:      $account_key" $width
+    fi
     draw_box_separator $width
     draw_box_row "Resources to DELETE (in order):" $width
     
