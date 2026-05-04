@@ -247,6 +247,15 @@ else
     print_info "Skipping config deployment for deployment set: $DEPLOYMENT_SET"
 fi
 
+# Generate the frontend handoff file if all upstream stacks (cognito, frontend,
+# rag_lambda) are present. The script no-ops with a warning when any are missing,
+# so partial deployment sets (e.g. --set pr) won't fail this step.
+handoff_script="$PROJECT_ROOT/scripts/deploy/generate_frontend_handoff.sh"
+if [ -f "$handoff_script" ]; then
+    chmod +x "$handoff_script"
+    "$handoff_script" "$ENVIRONMENT" || print_warning "Frontend handoff generation failed (non-fatal)"
+fi
+
 echo ""
 draw_box_top 76
 draw_box_row_centered "DEPLOYMENT COMPLETE" 76
