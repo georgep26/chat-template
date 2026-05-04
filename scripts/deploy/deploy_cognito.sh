@@ -62,7 +62,7 @@ print_missing_hydrate_warnings() {
     local missing_file=$1
     if [ -s "$missing_file" ]; then
         print_warning "Some config_secrets were missing or empty; placeholders were hydrated with blank values."
-        print_warning "Add them to infra/secrets/${ENVIRONMENT}_secrets.yaml (config_secrets) to fix:"
+        print_warning "Add them to infra/secrets/${ENVIRONMENT}.secrets.yaml (config_secrets) to fix:"
         while IFS= read -r key; do
             [ -n "$key" ] && print_warning "  - $key"
         done < "$missing_file"
