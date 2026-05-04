@@ -418,6 +418,16 @@ resources:
     config:
       repository_name: "{project}-rag-lambda-{env}"
       max_image_count: 5 # only this many images retained; older ones expired automatically
+  # Frontend static site (S3 + CloudFront)
+  # Deployed before cognito so deploy_cognito.sh can read the CloudFront output
+  # and append the deployed origin to CallbackUrls/LogoutUrls automatically.
+  frontend:
+    enabled: true
+    ownership: owned
+    template: resources/frontend_static_site_template.yaml
+    stack_name: "{project}-frontend-{env}"
+    config:
+      price_class: PriceClass_100
   # Cognito auth for frontend + API JWT validation
   cognito:
     enabled: true
@@ -429,16 +439,12 @@ resources:
       app_client_name: "{project}-{env}-spa-client"
       callback_urls: "http://localhost:5173/auth/callback"
       logout_urls: "http://localhost:5173/"
-      domain_prefix: ""
+      # Hosted UI domain prefix. Must be globally unique per region.
+      # {project}-{env} resolves to e.g. "chat-template-sandbox". If you hit a
+      # collision with another AWS account, override per-env or pass
+      # --domain-prefix to the cognito handler.
+      domain_prefix: "{project}-{env}"
       generate_client_secret: false
-  # Frontend static site (S3 + CloudFront)
-  frontend:
-    enabled: true
-    ownership: owned
-    template: resources/frontend_static_site_template.yaml
-    stack_name: "{project}-frontend-{env}"
-    config:
-      price_class: PriceClass_100
   # RAG Lambda function
   rag_lambda:
     enabled: true
