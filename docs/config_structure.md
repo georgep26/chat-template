@@ -30,19 +30,20 @@ During deployment, `scripts/utils/hydrate_configs.sh --run` hydrates placeholder
 - `accounts`: logical account references;
 - `environments`: deployable environments and CI/CD participation;
 - `roles`: IAM role and policy stack definitions;
-- `resources`: deployable resource definitions in deployment order.
+- `resources`: deployable resource definitions in deployment order;
+- `deployment_sets`: named subsets of enabled resources for full, app-layer, or runtime-only deploys.
 
 Do not commit account IDs, account names, real role ARNs, database credentials, or generated resource IDs to `infra.yaml`.
 
 ## Account Secrets
 
-Real account values live in:
+Real account values live in the file configured by `secrets.accounts_file`:
 
 ```text
-infra/secrets/accounts.secrets.yaml
+infra/secrets/<account-set>/accounts.secrets.yaml
 ```
 
-`infra/infra.yaml` can override this with `secrets.accounts_file`. The current active file is:
+The current active file is:
 
 ```text
 infra/secrets/adte_sandbox/accounts.secrets.yaml
@@ -62,15 +63,26 @@ This file stores values such as:
 - organization access role names;
 - stable global suffixes for globally unique resource names.
 
+The full AWS account ID is the default `global_suffix` written by setup scripts. It does not have to be the account ID; it only needs to be stable and unique across accounts/environments that can create globally named resources.
+
 ## Environment Secrets
 
-Per-environment secrets live in:
+Per-environment secrets live in the file configured by `environments.<env>.secrets_file`:
 
 ```text
-infra/secrets/<env>.secrets.yaml
+infra/secrets/<account-set>/<env>.secrets.yaml
 ```
 
-Create one from:
+Current active examples include:
+
+```text
+infra/secrets/adte_sandbox/sandbox.secrets.yaml
+infra/secrets/adte_sandbox/dev.secrets.yaml
+infra/secrets/adte_sandbox/staging.secrets.yaml
+infra/secrets/adte_sandbox/prod.secrets.yaml
+```
+
+Create one from the template:
 
 ```bash
 cp infra/secrets/template.environment.secrets.yaml infra/secrets/adte_sandbox/sandbox.secrets.yaml
