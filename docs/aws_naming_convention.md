@@ -1,128 +1,111 @@
-# AWS Resource Naming Convention
+# AWS Naming Convention
 
-This document defines a consistent, scalable naming convention for AWS resources across all projects and environments. The goal is to ensure names are readable, sortable, automation-friendly, and future-proof.
+This document defines the naming convention for the `chat-template` AWS backend. The committed source of truth is `infra/infra.yaml`; deployment scripts resolve names from that file and from gitignored account/environment secret files.
 
-## Core Naming Pattern
+## Source Of Truth
 
-Components are ordered from least specific to most specific so resources group cleanly in the AWS console, logs, and IAM policies.
+Resource names should be declared in one of these places:
 
-### Naming Components
+- `infra/infra.yaml` for stack names, resource config, deployment order, ownership, and tokenized naming patterns.
+- `infra/resources/*.yaml` for CloudFormation resources created inside a stack.
+- `infra/roles/*.yaml` and `infra/policies/*.yaml` for IAM names.
 
-| Component  | Required | Examples                    | Description                                    |
-| ---------- | -------- | --------------------------- | ---------------------------------------------- |
-| org        | Optional | myorg                   | Company or umbrella organization               |
-| project    | Yes      | pm-ai                       | Product or application name                    |
-| env        | Yes      | dev, qa, prod               | Deployment environment                         |
-| service    | Yes      | api, etl, batch, auth       | Logical workload or domain                      |
-| resource   | Yes      | lambda, table, bucket        | AWS resource type                              |
-| qualifier  | Optional | v1, writer, blue            | Variant, role, or deployment detail             |
+Do not hard-code real account IDs, account names, generated ARNs, generated resource IDs, or passwords in committed files.
 
-## Standard Environment Names
+## Naming Tokens
 
-Use these environment names exactly:
+Deployment scripts substitute these tokens when reading `infra.yaml`:
 
-- **dev**
-- **qa**
-- **prod**
+| Token | Source | Notes |
+| --- | --- | --- |
+| `{project}` | `project.name` | Current value is `chat-template`. |
+| `{env}` | Deployment environment | Current environments are `sandbox`, `dev`, `staging`, and `prod`. |
+| `{account}` | Environment account key | Example: `management`, `dev`, `staging`, `prod`. |
+| `{account_id}` | Account secrets | Real value stays in gitignored account secrets. |
+| `{region}` | Environment region | Use only when a resource truly needs region in the name. |
+| `{global_suffix}` | Account secrets, then `GLOBAL_SUFFIX`, then `ACCOUNT_ID` | Used for globally unique names. |
 
-Avoid `development`, `production`, `stage`, or `sandbox` unless the environment is truly ephemeral. Consistency is more important than descriptiveness.
+Use the full AWS account ID as the default `global_suffix` for real deployments. It does not have to be the account ID; it only needs to be stable and unique across accounts/environments that could create globally named resources such as S3 buckets.
 
-## Resource Naming Examples
+## Environments
 
-### Lambda Functions
+Use these environment names:
 
-- `myorg-pm-ai-prod-api-lambda-getBookings`
-- `myorg-pm-ai-dev-etl-lambda-syncListings`
+- `sandbox`: local or manual deployments into the configured management account.
+- `dev`: development member account.
+- `staging`: staging member account.
+- `prod`: production member account.
 
-### DynamoDB Tables
+Do not introduce aliases such as `qa`, `stage`, `production`, or `development` unless `infra.yaml` is intentionally changed to add a new environment.
 
-- `myorg-pm-ai-prod-bookings-table`
-- `myorg-pm-ai-dev-listingDetails-table`
+## Resource Patterns
 
-### S3 Buckets
+The active stack/resource patterns are declared in `infra.yaml`. Current examples:
 
-S3 buckets must be globally unique and use lowercase letters and hyphens only.
+| Resource | Stack name | Primary AWS name |
+| --- | --- | --- |
+| S3 document bucket | `{project}-s3-{env}` | `{project}-{env}-s3-{global_suffix}` |
+| Chat database | `{project}-chat-db-{env}` | `{project}-light-db-cluster-{env}` |
+| DB secret | `{project}-chat-db-secret-{env}` | `{project}-db-connection-{env}` or stack output value |
+| Bedrock Knowledge Base | `{project}-rag-kb-{env}` | `{project}-kb-{env}` |
+| RAG Lambda ECR | `{project}-rag-lambda-ecr-{env}` | `{project}-rag-lambda-{env}` |
+| Cognito | `{project}-cognito-{env}` | `{project}-{env}-users`, `{project}-{env}-spa-client` |
+| Frontend | `{project}-frontend-{env}` | `{project}-{env}-frontend-{account_id}` |
+| RAG Lambda | `{project}-rag-lambda-{env}` | `{project}-{env}-rag-chat` |
+| Cost guard | `{project}-cost-guard-{env}` | `{project}-{env}-cost-guard-*` |
 
-- `myorg-pm-ai-prod-data-raw`
-- `myorg-pm-ai-prod-data-curated`
-- `myorg-pm-ai-dev-artifacts`
+Prefer stack names in docs and scripts when possible. Generated physical names should be discovered from CloudFormation outputs or AWS APIs unless the name is explicitly declared in `infra.yaml`.
 
-### Step Functions
+## IAM Names
 
-- `myorg-pm-ai-prod-batch-stateMachine`
-- `myorg-pm-ai-dev-scrapeListings-stateMachine`
+IAM names should describe the principal or policy purpose:
 
-### AWS Batch
+| IAM resource | Pattern |
+| --- | --- |
+| Deployer role | `{project}-{env}-deployer-github-actions-role` |
+| Evals role | `{project}-{env}-evals-github-actions-role` |
+| Local admin CLI role | `{project}-{env}-admin-cli-role` |
+| RAG Lambda execution role | `{project}-{env}-lambda-execution-role` |
+| Assume org access policy | `{project}-assume-org-access-role-policy` |
 
-- **Job Definitions:** `myorg-pm-ai-prod-scraper-jobdef`
-- **Job Queues:** `myorg-pm-ai-prod-scraper-queue`
-- **Compute Environments:** `myorg-pm-ai-prod-scraper-compute`
+IAM roles and policies that need account-specific ARNs should receive account IDs at setup/deploy time from secret files or the active AWS identity, not from committed config.
 
-### IAM Roles and Policies
+## Tags
 
-- `myorg-pm-ai-prod-lambda-role`
-- `myorg-pm-ai-dev-batch-role`
-- `myorg-pm-ai-prod-etl-policy`
+Tags are required for lookup, cost allocation, and governance. `infra.yaml` currently defines:
 
-IAM resource names should reflect who uses them, not what permissions they contain.
-
-### CloudWatch Log Groups
-
-- `/aws/lambda/myorg-pm-ai-prod-api-lambda-getBookings`
-
-CloudWatch log groups automatically inherit the Lambda function name.
-
-## Shortened Naming Variant
-
-When org is omitted (optional) or when AWS name length limits are an issue, use the shorter form:
-
-- `pm-ai-prod-api-lambda-getBookings`
-- `pm-ai-dev-etl-table-listings`
-
-## Region Handling
-
-Do not include the AWS region in resource names. Region context should be inferred from ARNs, tags, and deployment configuration.
-
-Exception: region-specific S3 buckets used for replication or compliance:
-
-- `myorg-pm-ai-prod-data-us-east-1`
-
-## Required Resource Tags
-
-Names are for humans. Tags are required for billing, automation, governance, and cost allocation.
-
-The following tags are mandatory for all resources:
-
-| Tag         | Example    |
-| ----------- | ---------- |
-| Project     | pm-ai      |
-| Environment | prod       |
-| Owner       | platform   |
-| CostCenter  | analytics  |
-| ManagedBy   | terraform  |
-
-## Terraform Naming Pattern
-
-Use a centralized naming prefix to prevent drift and simplify refactoring:
-
-```hcl
-locals {
-  name_prefix = "${var.org}-${var.project}-${var.env}"
-}
-
-resource "aws_lambda_function" "api" {
-  function_name = "${local.name_prefix}-api-lambda-getBookings"
-}
+```yaml
+tags:
+  required:
+    - Name
+    - Project
+    - Environment
+  optional:
+    - Owner
+    - CostCenter
+    - ManagedBy
 ```
+
+Cost allocation tags currently include:
+
+```yaml
+cost_tags:
+  allocation_tags:
+    - Project
+    - Environment
+    - Owner
+    - CostCenter
+  defaults:
+    ManagedBy: cloudformation
+```
+
+Use `ManagedBy: cloudformation` for resources created by these templates. Use the `ownership` field in `infra.yaml` to distinguish owned resources from imported resources; do not encode ownership in the name.
 
 ## Golden Rules
 
-1. **Environment is never optional.** Every resource name must include the environment.
-2. **Never casually rename production resources.** Renames can break references and automation.
-3. **Names must be understandable without tribal knowledge.** A new team member should infer purpose from the name.
-4. **If a resource cannot be wildcarded cleanly in IAM, reconsider the name.** IAM policies should be able to scope by prefix or pattern.
-5. **Tags are non-negotiable.** All resources must have the required tags.
-
-## Summary
-
-This naming convention prioritizes consistency, clean automation, predictable IAM patterns, and long-term maintainability. Following it strictly from the beginning prevents costly cleanup and confusion as systems scale.
+1. Keep `infra.yaml` as the naming source of truth.
+2. Include `{env}` in environment-specific resources.
+3. Use `{global_suffix}` only when an AWS name must be globally unique.
+4. Do not rename long-lived production resources casually; CloudFormation replacements can delete or recreate resources.
+5. Use CloudFormation outputs and AWS APIs for generated names instead of copying generated values into committed docs.
+6. Keep secret/account-specific values in `infra/secrets/**`, GitHub environment secrets, or runtime environment variables.
