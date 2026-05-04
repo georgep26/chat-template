@@ -1,112 +1,29 @@
 #!/bin/bash
-
-# Full Application Deployment Script
-# This script orchestrates the deployment of all infrastructure and application components.
-# Resources are deployed in the order defined in infra.yaml. Only enabled resources are deployed.
+# Deploy enabled resources for an environment and deployment set.
 #
-# This script is intended for regular deployments (after initial setup via setup_all.sh).
-# It supports skip flags to selectively deploy subsets of resources, which is especially
-# useful for CI/CD where the deployer role only has permissions for application resources.
-#
-# Role Strategy:
-#   Infrastructure resources (network, S3, database) use the CLI admin role.
-#   Application resources (knowledge base, Cognito, ECR, Lambda) use the deployer role.
-#   In GitHub Actions, the deployer role is assumed via OIDC, so infrastructure
-#   steps should be skipped (use --only-app or --skip-network --skip-s3 --skip-db).
-#
-# Usage Examples:
-#   # Deploy everything to dev (all enabled resources)
-#   ./scripts/deploy/deploy_all.sh dev
-#
-#   # Deploy only application resources (KB, Cognito, ECR, Lambda) - typical CI pattern
-#   ./scripts/deploy/deploy_all.sh dev --only-app -y
-#
-#   # Deploy only infrastructure resources (network, S3, DB)
-#   ./scripts/deploy/deploy_all.sh dev --only-infra -y
-#
-#   # Skip specific steps
-#   ./scripts/deploy/deploy_all.sh dev --skip-network --skip-cost-tags --skip-cost-guard -y
-#
-#   # Pass through overrides for sub-scripts (e.g., DB password for CI)
-#   ./scripts/deploy/deploy_all.sh dev -y --master-password "$DB_PASS"
+# Resource order comes from infra/infra.yaml. Deployment sets can filter the
+# enabled resource list without changing that order. Each resource key maps by
+# convention to scripts/deploy/resources/<resource_key>.sh.
 
 set -e
 
-# Get script directory and source utilities (use DEPLOY_SCRIPT_DIR so sourced utils don't overwrite it)
-DEPLOY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$DEPLOY_SCRIPT_DIR/../utils/common.sh"
-source "$DEPLOY_SCRIPT_DIR/../utils/config_parser.sh"
-source "$DEPLOY_SCRIPT_DIR/../utils/deploy_summary.sh"
-
-# =============================================================================
-# Usage
-# =============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../utils/common.sh"
+source "$SCRIPT_DIR/../utils/config_parser.sh"
+source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 
 show_usage() {
-    echo "Full Application Deployment Script"
-    echo ""
     echo "Usage: $0 <environment> [options]"
     echo ""
-    echo "Environments:"
-    echo "  dev       - Development environment"
-    echo "  staging   - Staging environment"
-    echo "  prod      - Production environment"
-    echo ""
-    echo "Skip Flags (override infra.yaml enabled status):"
-    echo "  --skip-network       Skip network deployment"
-    echo "  --skip-s3            Skip S3 bucket deployment"
-    echo "  --skip-db            Skip database deployment"
-    echo "  --skip-kb            Skip knowledge base deployment"
-    echo "  --skip-cognito       Skip Cognito auth deployment"
-    echo "  --skip-ecr           Skip ECR repo deployment"
-    echo "  --skip-lambda        Skip Lambda deployment"
-    echo "  --skip-cost-tags     Skip cost allocation tags activation"
-    echo "  --skip-cost-guard    Skip cost guard deployment"
-    echo "  --skip-frontend      Skip frontend (CloudFront + S3) deployment"
-    echo ""
-    echo "Convenience Flags:"
-    echo "  --only-infra         Only deploy infrastructure (network, S3, DB)"
-    echo "  --only-app           Only deploy application (KB, Cognito, ECR, Lambda)"
-    echo ""
-    echo "General Options:"
-    echo "  -y, --yes            Skip all confirmation prompts"
-    echo "  --config <path>      Path to infra.yaml (default: infra/infra.yaml)"
-    echo "  -h, --help           Show this help message"
-    echo ""
-    echo "Pass-Through Options (forwarded to sub-scripts, override infra.yaml):"
-    echo "  --region <region>                  AWS region"
-    echo "  --vpc-id <id>                      VPC ID (for DB, Lambda)"
-    echo "  --subnet-ids <id1,id2,...>         Subnet IDs (for DB, Lambda)"
-    echo "  --security-group-ids <id1,...>     Security group IDs (for Lambda)"
-    echo "  --master-username <user>           DB master username"
-    echo "  --master-password <pass>           DB master password"
-    echo "  --public-ip <ip>                   Public IP for DB access"
-    echo "  --s3-app-config-uri <uri>          S3 URI for Lambda app config"
-    echo "  --local-app-config-path <path>     Local app config to upload to S3"
-    echo "  --image-tag <tag>                  Docker image tag for Lambda"
-    echo "  --lambda-image-uri <uri>           Prebuilt Lambda image URI (promotion path)"
-    echo "  --promote-lambda-from-env <env>    Promote image from source env (e.g. staging)"
-    echo "  --promotion-source-role-arn <arn>  Role ARN for source env image reads"
-    echo "  --promotion-source-image-uri <uri> Explicit source image URI for promotion"
-    echo "  --promote-kb-from-env <env>        Promote KB content from source env (e.g. staging)"
-    echo "  --promotion-kb-source-role-arn <arn> Role ARN for source env KB reads"
-    echo "  --promotion-kb-source-bucket <bucket> Explicit source bucket (auto-detected if not provided)"
-    echo "  --promotion-kb-source-prefix <prefix> Source prefix override (default: kb_sources/)"
-    echo "  --local-download [path]              For KB promotion: download to path then upload (default: temp dir)"
-    echo ""
-    echo "Note: Resources are only deployed if enabled in infra.yaml AND not skipped."
-    echo "      Defaults are loaded from infra/infra.yaml."
-    echo ""
-    echo "Examples:"
-    echo "  $0 dev                              # Deploy all enabled resources"
-    echo "  $0 dev -y                           # Deploy all, skip confirmations"
-    echo "  $0 dev --only-app -y                # Deploy only app resources (CI pattern)"
-    echo "  $0 dev --skip-network --skip-db -y  # Skip network and DB"
+    echo "Options:"
+    echo "  -y, --yes                 Skip confirmation prompts"
+    echo "  --profile <aws-profile>   AWS profile to use for this deployment"
+    echo "  --set <deployment-set>    Deployment set from infra.yaml (default: full)"
+    echo "  --deployment-set <name>   Alias for --set"
+    echo "  --config <path>           Path to infra.yaml"
+    echo "  --dry-run                 Show the plan without deploying"
+    echo "  -h, --help                Show this help"
 }
-
-# =============================================================================
-# Argument Parsing
-# =============================================================================
 
 if [ $# -lt 1 ]; then
     print_error "Environment is required"
@@ -117,193 +34,45 @@ fi
 ENVIRONMENT=$1
 shift
 
-# Default values
 AUTO_CONFIRM=false
 CONFIG_PATH=""
+PROFILE_OVERRIDE=""
+DRY_RUN=false
+DEPLOYMENT_SET="full"
 
-# Skip flags
-SKIP_NETWORK=false
-SKIP_S3=false
-SKIP_DB=false
-SKIP_KB=false
-SKIP_COGNITO=false
-SKIP_ECR=false
-SKIP_LAMBDA=false
-SKIP_COST_TAGS=false
-SKIP_COST_GUARD=false
-SKIP_FRONTEND=false
-
-# Pass-through overrides
-REGION_OVERRIDE=""
-VPC_ID_OVERRIDE=""
-SUBNET_IDS_OVERRIDE=""
-SECURITY_GROUP_IDS_OVERRIDE=""
-MASTER_USERNAME_OVERRIDE=""
-MASTER_PASSWORD_OVERRIDE=""
-PUBLIC_IP_OVERRIDE=""
-S3_APP_CONFIG_URI_OVERRIDE=""
-LOCAL_APP_CONFIG_PATH_OVERRIDE=""
-IMAGE_TAG_OVERRIDE=""
-LAMBDA_IMAGE_URI_OVERRIDE=""
-PROMOTE_LAMBDA_FROM_ENV_OVERRIDE=""
-PROMOTION_SOURCE_ROLE_ARN_OVERRIDE=""
-PROMOTION_SOURCE_IMAGE_URI_OVERRIDE=""
-PROMOTE_KB_FROM_ENV_OVERRIDE=""
-PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE=""
-PROMOTION_KB_SOURCE_BUCKET_OVERRIDE=""
-PROMOTION_KB_SOURCE_PREFIX_OVERRIDE=""
-PROMOTION_LOCAL_DOWNLOAD_OVERRIDE=""
-
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
+while [ $# -gt 0 ]; do
+    case "$1" in
         -y|--yes)
             AUTO_CONFIRM=true
+            shift
+            ;;
+        --profile)
+            PROFILE_OVERRIDE="$2"
+            shift 2
+            ;;
+        --profile=*)
+            PROFILE_OVERRIDE="${1#--profile=}"
+            shift
+            ;;
+        --set|--deployment-set)
+            DEPLOYMENT_SET="$2"
+            shift 2
+            ;;
+        --set=*|--deployment-set=*)
+            DEPLOYMENT_SET="${1#*=}"
             shift
             ;;
         --config)
             CONFIG_PATH="$2"
             shift 2
             ;;
-        # Skip flags
-        --skip-network)
-            SKIP_NETWORK=true
+        --config=*)
+            CONFIG_PATH="${1#--config=}"
             shift
             ;;
-        --skip-s3)
-            SKIP_S3=true
+        --dry-run)
+            DRY_RUN=true
             shift
-            ;;
-        --skip-db)
-            SKIP_DB=true
-            shift
-            ;;
-        --skip-kb)
-            SKIP_KB=true
-            shift
-            ;;
-        --skip-cognito)
-            SKIP_COGNITO=true
-            shift
-            ;;
-        --skip-ecr)
-            SKIP_ECR=true
-            shift
-            ;;
-        --skip-lambda)
-            SKIP_LAMBDA=true
-            shift
-            ;;
-        --skip-cost-tags)
-            SKIP_COST_TAGS=true
-            shift
-            ;;
-        --skip-cost-guard)
-            SKIP_COST_GUARD=true
-            shift
-            ;;
-        --skip-frontend)
-            SKIP_FRONTEND=true
-            shift
-            ;;
-        # Convenience flags
-        --only-infra)
-            SKIP_KB=true
-            SKIP_COGNITO=true
-            SKIP_ECR=true
-            SKIP_LAMBDA=true
-            SKIP_COST_TAGS=true
-            SKIP_COST_GUARD=true
-            shift
-            ;;
-        --only-app)
-            SKIP_NETWORK=true
-            SKIP_S3=true
-            SKIP_DB=true
-            SKIP_COST_TAGS=true
-            shift
-            ;;
-        # Pass-through overrides
-        --region)
-            REGION_OVERRIDE="$2"
-            shift 2
-            ;;
-        --vpc-id)
-            VPC_ID_OVERRIDE="$2"
-            shift 2
-            ;;
-        --subnet-ids)
-            SUBNET_IDS_OVERRIDE="$2"
-            shift 2
-            ;;
-        --security-group-ids)
-            SECURITY_GROUP_IDS_OVERRIDE="$2"
-            shift 2
-            ;;
-        --master-username)
-            MASTER_USERNAME_OVERRIDE="$2"
-            shift 2
-            ;;
-        --master-password)
-            MASTER_PASSWORD_OVERRIDE="$2"
-            shift 2
-            ;;
-        --public-ip)
-            PUBLIC_IP_OVERRIDE="$2"
-            shift 2
-            ;;
-        --s3-app-config-uri)
-            S3_APP_CONFIG_URI_OVERRIDE="$2"
-            shift 2
-            ;;
-        --local-app-config-path|--local_app_config_path)
-            LOCAL_APP_CONFIG_PATH_OVERRIDE="$2"
-            shift 2
-            ;;
-        --image-tag)
-            IMAGE_TAG_OVERRIDE="$2"
-            shift 2
-            ;;
-        --lambda-image-uri)
-            LAMBDA_IMAGE_URI_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promote-lambda-from-env)
-            PROMOTE_LAMBDA_FROM_ENV_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promotion-source-role-arn)
-            PROMOTION_SOURCE_ROLE_ARN_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promotion-source-image-uri)
-            PROMOTION_SOURCE_IMAGE_URI_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promote-kb-from-env)
-            PROMOTE_KB_FROM_ENV_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promotion-kb-source-role-arn)
-            PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promotion-kb-source-bucket)
-            PROMOTION_KB_SOURCE_BUCKET_OVERRIDE="$2"
-            shift 2
-            ;;
-        --promotion-kb-source-prefix)
-            PROMOTION_KB_SOURCE_PREFIX_OVERRIDE="$2"
-            shift 2
-            ;;
-        --local-download)
-            if [[ $# -ge 2 && "$2" != -* ]]; then
-                PROMOTION_LOCAL_DOWNLOAD_OVERRIDE="$2"
-                shift 2
-            else
-                PROMOTION_LOCAL_DOWNLOAD_OVERRIDE="<temp>"
-                shift
-            fi
             ;;
         -h|--help)
             show_usage
@@ -317,574 +86,179 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# =============================================================================
-# Configuration Loading
-# =============================================================================
+print_header "Full Environment Deployment"
 
-print_header "Full Application Deployment"
-
-# Validate environment
-validate_environment "$ENVIRONMENT" || exit 1
-
-# Load configuration
-print_step "Loading configuration for $ENVIRONMENT environment"
 if [ -n "$CONFIG_PATH" ]; then
     load_infra_config "$CONFIG_PATH" || exit 1
 else
     load_infra_config || exit 1
 fi
-validate_config "$ENVIRONMENT" || exit 1
 
-# Get values from config
+validate_environment "$ENVIRONMENT" || exit 1
+validate_config "$ENVIRONMENT" || exit 1
+validate_deployment_set "$DEPLOYMENT_SET" || exit 1
+
+PROJECT_ROOT=$(get_project_root)
 PROJECT_NAME=$(get_project_name)
 AWS_REGION=$(get_environment_region "$ENVIRONMENT")
-AWS_PROFILE=$(get_environment_profile "$ENVIRONMENT")
-[ "$AWS_PROFILE" = "null" ] && AWS_PROFILE=""
+ACCOUNT_KEY=$(get_environment_account_key "$ENVIRONMENT")
+ACCOUNT_KIND=$(get_environment_account_kind "$ENVIRONMENT")
+ACCOUNT_ID=$(get_environment_account_id "$ENVIRONMENT")
+GLOBAL_SUFFIX=$(get_environment_global_suffix "$ENVIRONMENT")
 
-# Change to project root
-PROJECT_ROOT=$(get_project_root)
-cd "$PROJECT_ROOT"
-
-# =============================================================================
-# Resource Lookup Functions (bash 3.x compatible -- no associative arrays)
-# =============================================================================
-
-# Deployment order (matches infra.yaml resource order)
-DEPLOY_ORDER="network s3_bucket chat_db rag_knowledge_base rag_lambda_ecr cognito frontend rag_lambda"
-
-get_resource_script() {
-    case "$1" in
-        network)            echo "deploy_network.sh" ;;
-        s3_bucket)          echo "deploy_s3_bucket.sh" ;;
-        chat_db)            echo "deploy_chat_template_db.sh" ;;
-        rag_knowledge_base) echo "deploy_knowledge_base.sh" ;;
-        cognito)            echo "deploy_cognito.sh" ;;
-        frontend)           echo "deploy_frontend.sh" ;;
-        rag_lambda_ecr)     echo "deploy_ecr_repo.sh" ;;
-        rag_lambda)         echo "deploy_rag_lambda.sh" ;;
-    esac
-}
-
-get_resource_display_name() {
-    case "$1" in
-        network)            echo "Network (VPC)" ;;
-        s3_bucket)          echo "S3 Bucket" ;;
-        chat_db)            echo "Database" ;;
-        rag_knowledge_base) echo "Knowledge Base" ;;
-        cognito)            echo "Cognito Auth" ;;
-        frontend)           echo "Frontend (CloudFront + S3)" ;;
-        rag_lambda_ecr)     echo "ECR Repository" ;;
-        rag_lambda)         echo "RAG Lambda" ;;
-    esac
-}
-
-get_resource_category() {
-    case "$1" in
-        network|s3_bucket|chat_db|frontend) echo "infra" ;;
-        rag_knowledge_base|cognito|rag_lambda_ecr|rag_lambda) echo "app" ;;
-    esac
-}
-
-is_resource_skipped() {
-    case "$1" in
-        network)            [ "$SKIP_NETWORK" = true ] ;;
-        s3_bucket)          [ "$SKIP_S3" = true ] ;;
-        chat_db)            [ "$SKIP_DB" = true ] ;;
-        rag_knowledge_base) [ "$SKIP_KB" = true ] ;;
-        cognito)            [ "$SKIP_COGNITO" = true ] ;;
-        frontend)           [ "$SKIP_FRONTEND" = true ] ;;
-        rag_lambda_ecr)     [ "$SKIP_ECR" = true ] ;;
-        rag_lambda)         [ "$SKIP_LAMBDA" = true ] ;;
-        *)                  return 1 ;;
-    esac
-}
-
-# Determine resource status: "deploy", "skip-flag", or "skip-disabled"
-get_resource_status() {
-    local resource=$1
-    if is_resource_skipped "$resource"; then
-        echo "skip-flag"
-    elif ! is_resource_enabled "$resource"; then
-        echo "skip-disabled"
-    else
-        echo "deploy"
+if [ -n "$PROFILE_OVERRIDE" ]; then
+    export AWS_PROFILE="$PROFILE_OVERRIDE"
+else
+    RESOLVED_PROFILE=$(get_environment_profile "$ENVIRONMENT")
+    [ "$RESOLVED_PROFILE" = "null" ] && RESOLVED_PROFILE=""
+    if [ -n "$RESOLVED_PROFILE" ] && [ -z "${AWS_SESSION_TOKEN:-}" ]; then
+        export AWS_PROFILE="$RESOLVED_PROFILE"
     fi
-}
-
-# =============================================================================
-# Deploy Summary
-# =============================================================================
-
-echo ""
-WIDTH=64
-draw_box_top $WIDTH
-draw_box_row_centered "DEPLOYMENT PLAN" $WIDTH
-draw_box_separator $WIDTH
-draw_box_row "Project:      $PROJECT_NAME" $WIDTH
-draw_box_row "Environment:  $ENVIRONMENT" $WIDTH
-draw_box_row "Region:       $AWS_REGION" $WIDTH
-[ -n "$AWS_PROFILE" ] && draw_box_row "Profile:      $AWS_PROFILE" $WIDTH
-draw_box_separator $WIDTH
-draw_box_row "Infrastructure (CLI admin role):" $WIDTH
-for resource in network s3_bucket chat_db frontend; do
-    status=$(get_resource_status "$resource")
-    name=$(get_resource_display_name "$resource")
-    case "$status" in
-        deploy)        draw_box_row "  [DEPLOY]   $name" $WIDTH ;;
-        skip-flag)     draw_box_row "  [SKIP]     $name (skipped by flag)" $WIDTH ;;
-        skip-disabled) draw_box_row "  [DISABLED] $name (disabled in config)" $WIDTH ;;
-    esac
-done
-draw_box_row "" $WIDTH
-draw_box_row "Application (deployer role):" $WIDTH
-for resource in rag_knowledge_base rag_lambda_ecr cognito rag_lambda; do
-    status=$(get_resource_status "$resource")
-    name=$(get_resource_display_name "$resource")
-    case "$status" in
-        deploy)        draw_box_row "  [DEPLOY]   $name" $WIDTH ;;
-        skip-flag)     draw_box_row "  [SKIP]     $name (skipped by flag)" $WIDTH ;;
-        skip-disabled) draw_box_row "  [DISABLED] $name (disabled in config)" $WIDTH ;;
-    esac
-done
-
-COST_GUARD_ENABLED=false
-if is_cost_control_enabled; then
-    COST_GUARD_ENABLED=true
-fi
-if [ "$COST_GUARD_ENABLED" = true ]; then
-    case "$SKIP_COST_GUARD" in
-        false) draw_box_row "  [DEPLOY]   Cost Guard" $WIDTH ;;
-        true)  draw_box_row "  [SKIP]     Cost Guard (skipped by flag)" $WIDTH ;;
-    esac
-fi
-if [ "$SKIP_COST_TAGS" = false ]; then
-    draw_box_row "" $WIDTH
-    draw_box_row "  [DEPLOY]   Cost Allocation Tags" $WIDTH
-fi
-draw_box_bottom $WIDTH
-echo ""
-
-# Show pass-through overrides if any
-HAS_OVERRIDES=false
-[ -n "$REGION_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$VPC_ID_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$SUBNET_IDS_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$SECURITY_GROUP_IDS_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$MASTER_USERNAME_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$MASTER_PASSWORD_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$PUBLIC_IP_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$S3_APP_CONFIG_URI_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$IMAGE_TAG_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ] && HAS_OVERRIDES=true
-[ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ] && HAS_OVERRIDES=true
-
-if [ "$HAS_OVERRIDES" = true ]; then
-    print_info "Override parameters:"
-    [ -n "$REGION_OVERRIDE" ] && print_info "  Region: $REGION_OVERRIDE"
-    [ -n "$VPC_ID_OVERRIDE" ] && print_info "  VPC ID: $VPC_ID_OVERRIDE"
-    [ -n "$SUBNET_IDS_OVERRIDE" ] && print_info "  Subnet IDs: $SUBNET_IDS_OVERRIDE"
-    [ -n "$SECURITY_GROUP_IDS_OVERRIDE" ] && print_info "  Security Group IDs: $SECURITY_GROUP_IDS_OVERRIDE"
-    [ -n "$MASTER_USERNAME_OVERRIDE" ] && print_info "  Master Username: $MASTER_USERNAME_OVERRIDE"
-    [ -n "$MASTER_PASSWORD_OVERRIDE" ] && print_info "  Master Password: ********"
-    [ -n "$PUBLIC_IP_OVERRIDE" ] && print_info "  Public IP: $PUBLIC_IP_OVERRIDE"
-    [ -n "$S3_APP_CONFIG_URI_OVERRIDE" ] && print_info "  S3 App Config URI: $S3_APP_CONFIG_URI_OVERRIDE"
-    [ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ] && print_info "  Local App Config: $LOCAL_APP_CONFIG_PATH_OVERRIDE"
-    [ -n "$IMAGE_TAG_OVERRIDE" ] && print_info "  Image Tag: $IMAGE_TAG_OVERRIDE"
-    [ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ] && print_info "  Lambda Image URI: $LAMBDA_IMAGE_URI_OVERRIDE"
-    [ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ] && print_info "  Promote Lambda From Env: $PROMOTE_LAMBDA_FROM_ENV_OVERRIDE"
-    [ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ] && print_info "  Promotion Source Role ARN: (set)"
-    [ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ] && print_info "  Promotion Source Image URI: $PROMOTION_SOURCE_IMAGE_URI_OVERRIDE"
-    echo ""
 fi
 
-# Confirm deployment
-if [ "$AUTO_CONFIRM" = false ]; then
-    confirm_deployment "Do you want to deploy the above components?" || exit 0
-fi
-
-# =============================================================================
-# Build Sub-Script Arguments
-# =============================================================================
-
-# Build argument arrays for each sub-script type.
-# Each sub-script receives: <environment> deploy -y [overrides...]
-# IMPORTANT: Use if/then/fi (not [ -n ] && ...) to avoid set -e killing the script
-# when the test is false (returns 1) as the last command in the function.
-
-build_common_args() {
-    BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
-    if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
-}
-
-build_network_args() {
-    BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
-    if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
-}
-
-build_db_args() {
-    BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
-    if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
-    if [ -n "$VPC_ID_OVERRIDE" ]; then BUILT_ARGS+=(--vpc-id "$VPC_ID_OVERRIDE"); fi
-    if [ -n "$SUBNET_IDS_OVERRIDE" ]; then BUILT_ARGS+=(--subnet-ids "$SUBNET_IDS_OVERRIDE"); fi
-    if [ -n "$MASTER_USERNAME_OVERRIDE" ]; then BUILT_ARGS+=(--master-username "$MASTER_USERNAME_OVERRIDE"); fi
-    if [ -n "$MASTER_PASSWORD_OVERRIDE" ]; then BUILT_ARGS+=(--master-password "$MASTER_PASSWORD_OVERRIDE"); fi
-    if [ -n "$PUBLIC_IP_OVERRIDE" ]; then BUILT_ARGS+=(--public-ip "$PUBLIC_IP_OVERRIDE"); fi
-}
-
-build_lambda_args() {
-    BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
-    if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
-    if [ -n "$VPC_ID_OVERRIDE" ]; then BUILT_ARGS+=(--vpc-id "$VPC_ID_OVERRIDE"); fi
-    if [ -n "$SUBNET_IDS_OVERRIDE" ]; then BUILT_ARGS+=(--subnet-ids "$SUBNET_IDS_OVERRIDE"); fi
-    if [ -n "$SECURITY_GROUP_IDS_OVERRIDE" ]; then BUILT_ARGS+=(--security-group-ids "$SECURITY_GROUP_IDS_OVERRIDE"); fi
-    if [ -n "$S3_APP_CONFIG_URI_OVERRIDE" ]; then BUILT_ARGS+=(--s3_app_config_uri "$S3_APP_CONFIG_URI_OVERRIDE"); fi
-    if [ -n "$LOCAL_APP_CONFIG_PATH_OVERRIDE" ]; then BUILT_ARGS+=(--local_app_config_path "$LOCAL_APP_CONFIG_PATH_OVERRIDE"); fi
-    if [ -n "$IMAGE_TAG_OVERRIDE" ]; then BUILT_ARGS+=(--image-tag "$IMAGE_TAG_OVERRIDE"); fi
-    if [ -n "$LAMBDA_IMAGE_URI_OVERRIDE" ]; then BUILT_ARGS+=(--lambda-image-uri "$LAMBDA_IMAGE_URI_OVERRIDE"); fi
-    if [ -n "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE" ]; then BUILT_ARGS+=(--promote-lambda-from-env "$PROMOTE_LAMBDA_FROM_ENV_OVERRIDE"); fi
-    if [ -n "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-role-arn "$PROMOTION_SOURCE_ROLE_ARN_OVERRIDE"); fi
-    if [ -n "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-image-uri "$PROMOTION_SOURCE_IMAGE_URI_OVERRIDE"); fi
-}
-
-build_kb_args() {
-    BUILT_ARGS=("$ENVIRONMENT" "deploy" "-y")
-    if [ -n "$REGION_OVERRIDE" ]; then BUILT_ARGS+=(--region "$REGION_OVERRIDE"); fi
-    if [ -n "$PROMOTE_KB_FROM_ENV_OVERRIDE" ]; then BUILT_ARGS+=(--promote-kb-from-env "$PROMOTE_KB_FROM_ENV_OVERRIDE"); fi
-    if [ -n "$PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-role-arn "$PROMOTION_KB_SOURCE_ROLE_ARN_OVERRIDE"); fi
-    if [ -n "$PROMOTION_KB_SOURCE_BUCKET_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-bucket "$PROMOTION_KB_SOURCE_BUCKET_OVERRIDE"); fi
-    if [ -n "$PROMOTION_KB_SOURCE_PREFIX_OVERRIDE" ]; then BUILT_ARGS+=(--promotion-source-prefix "$PROMOTION_KB_SOURCE_PREFIX_OVERRIDE"); fi
-    if [ -n "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE" ]; then
-        if [ "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE" = "<temp>" ]; then
-            BUILT_ARGS+=(--local-download)
-        else
-            BUILT_ARGS+=(--local-download "$PROMOTION_LOCAL_DOWNLOAD_OVERRIDE")
-        fi
-    fi
-}
-
-# Map resource name to the arg builder function
-build_args_for_resource() {
-    local resource=$1
-    case "$resource" in
-        network)            build_network_args ;;
-        s3_bucket)          build_common_args ;;
-        chat_db)            build_db_args ;;
-        rag_knowledge_base) build_kb_args ;;
-        cognito)            build_common_args ;;
-        frontend)           build_common_args ;;
-        rag_lambda_ecr)     build_common_args ;;
-        rag_lambda)         build_lambda_args ;;
-    esac
-}
-
-# =============================================================================
-# Deployment Functions
-# =============================================================================
-
-run_deployment_script() {
-    local script_name=$1
-    local resource_name=$2
-    shift 2
-    local args=("$@")
-    local script_path="$DEPLOY_SCRIPT_DIR/$script_name"
-    local exit_code
-
-    print_step "Deploying: $resource_name"
-
-    if [ ! -f "$script_path" ]; then
-        print_warning "Script not found: $script_path, skipping"
-        return 0
-    fi
-
-    chmod +x "$script_path"
-
-    # Run sub-script (disable set -e so we can capture exit code and print help on failure)
+ACTIVE_ACCOUNT=""
+if command -v aws >/dev/null 2>&1; then
     set +e
-    "$script_path" "${args[@]}"
-    exit_code=$?
+    ACTIVE_ACCOUNT=$(aws ${AWS_PROFILE:+--profile "$AWS_PROFILE"} --region "$AWS_REGION" sts get-caller-identity --query Account --output text 2>/dev/null)
     set -e
-
-    if [ $exit_code -eq 0 ]; then
-        print_complete "$resource_name deployment completed"
-        return 0
-    else
-        print_error "$resource_name deployment failed (exit code $exit_code)"
-        # Build safe args for re-run hint (redact --master-password and value to avoid leaking in logs)
-        local safe_args=()
-        local i=0
-        while [ $i -lt ${#args[@]} ]; do
-            if [ "${args[$i]}" = "--master-password" ]; then
-                safe_args+=(--master-password "****")
-                i=$((i + 2))
-                continue
-            fi
-            safe_args+=("${args[$i]}")
-            i=$((i + 1))
-        done
-        print_info "To see full output, run from project root: $script_path ${safe_args[*]}"
-        return 1
-    fi
-}
-
-# =============================================================================
-# Hydration Backup/Restore
-# =============================================================================
-
-HYDRATE_BACKUP_ACTIVE=false
-HYDRATE_BACKUP_DIR=""
-HYDRATE_BACKUP_ENV=""
-
-create_hydrate_backup() {
-    local project_root=$1
-    local env=$2
-    local infra_file="$project_root/infra/infra.yaml"
-    local app_config_file="$project_root/config/$env/app_config.yaml"
-
-    HYDRATE_BACKUP_DIR=$(mktemp -d) || return 1
-    cp "$infra_file" "$HYDRATE_BACKUP_DIR/infra.yaml" || return 1
-
-    if [ -f "$app_config_file" ]; then
-        cp "$app_config_file" "$HYDRATE_BACKUP_DIR/app_config.yaml" || return 1
-        echo "present" > "$HYDRATE_BACKUP_DIR/app_config.state"
-    else
-        echo "missing" > "$HYDRATE_BACKUP_DIR/app_config.state"
-    fi
-
-    HYDRATE_BACKUP_ENV="$env"
-    HYDRATE_BACKUP_ACTIVE=true
-    return 0
-}
-
-restore_hydrate_backup() {
-    if [ "$HYDRATE_BACKUP_ACTIVE" != true ]; then
-        return 0
-    fi
-
-    local project_root="${PROJECT_ROOT:-$(get_project_root)}"
-    local infra_file="$project_root/infra/infra.yaml"
-    local app_config_file="$project_root/config/$HYDRATE_BACKUP_ENV/app_config.yaml"
-    local app_state=""
-
-    set +e
-    if [ -f "$HYDRATE_BACKUP_DIR/infra.yaml" ]; then
-        cp "$HYDRATE_BACKUP_DIR/infra.yaml" "$infra_file"
-    fi
-
-    if [ -f "$HYDRATE_BACKUP_DIR/app_config.state" ]; then
-        app_state=$(cat "$HYDRATE_BACKUP_DIR/app_config.state" 2>/dev/null)
-    fi
-    if [ "$app_state" = "present" ] && [ -f "$HYDRATE_BACKUP_DIR/app_config.yaml" ]; then
-        cp "$HYDRATE_BACKUP_DIR/app_config.yaml" "$app_config_file"
-    elif [ "$app_state" = "missing" ]; then
-        rm -f "$app_config_file" 2>/dev/null || true
-    fi
-
-    rm -rf "$HYDRATE_BACKUP_DIR" 2>/dev/null || true
-    set -e
-
-    HYDRATE_BACKUP_ACTIVE=false
-    HYDRATE_BACKUP_DIR=""
-    HYDRATE_BACKUP_ENV=""
-    return 0
-}
-
-# =============================================================================
-# Main Deployment
-# =============================================================================
-
-DEPLOYMENT_STEPS=0
-COMPLETED_STEPS=()
-FAILED_STEPS=()
-SKIPPED_STEPS=()
-
-for resource in $DEPLOY_ORDER; do
-    status=$(get_resource_status "$resource")
-    script=$(get_resource_script "$resource")
-    display_name=$(get_resource_display_name "$resource")
-
-    if [ "$status" != "deploy" ]; then
-        SKIPPED_STEPS+=("$display_name")
-        continue
-    fi
-
-    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
-
-    echo ""
-    print_step "Step $DEPLOYMENT_STEPS: Deploying $display_name"
-
-    # Build args for this resource
-    build_args_for_resource "$resource"
-
-    if ! run_deployment_script "$script" "$display_name" "${BUILT_ARGS[@]}"; then
-        FAILED_STEPS+=("$display_name")
-        print_error "Deployment failed at $display_name. Stopping."
-        exit 1
-    fi
-
-    COMPLETED_STEPS+=("$display_name")
-done
-
-# Deploy cost allocation tags
-if [ "$SKIP_COST_TAGS" = false ]; then
-    echo ""
-    DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
-    print_step "Step $DEPLOYMENT_STEPS: Activating Cost Allocation Tags"
-
-    if [ -f "$DEPLOY_SCRIPT_DIR/deploy_cost_analysis_tags.sh" ]; then
-        chmod +x "$DEPLOY_SCRIPT_DIR/deploy_cost_analysis_tags.sh"
-
-        if "$DEPLOY_SCRIPT_DIR/deploy_cost_analysis_tags.sh" activate; then
-            print_complete "Cost allocation tags activation completed"
-            COMPLETED_STEPS+=("Cost Allocation Tags")
-        else
-            print_warning "Cost allocation tags activation failed or tags not found yet"
-        fi
-    else
-        print_warning "Cost tags script not found, skipping activation"
-    fi
-else
-    SKIPPED_STEPS+=("Cost Allocation Tags")
-fi
-
-# Deploy cost guard
-if [ "$COST_GUARD_ENABLED" = true ]; then
-    if [ "$SKIP_COST_GUARD" = false ]; then
-        echo ""
-        DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
-        print_step "Step $DEPLOYMENT_STEPS: Deploying Cost Guard"
-
-        if [ -f "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh" ]; then
-            chmod +x "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh"
-            COST_GUARD_ARGS=("$ENVIRONMENT" "deploy" "-y")
-            if [ -n "$REGION_OVERRIDE" ]; then COST_GUARD_ARGS+=(--region "$REGION_OVERRIDE"); fi
-            if "$DEPLOY_SCRIPT_DIR/deploy_cost_guard.sh" "${COST_GUARD_ARGS[@]}"; then
-                print_complete "Cost guard deployment completed"
-                COMPLETED_STEPS+=("Cost Guard")
-            else
-                print_error "Cost guard deployment failed"
-                FAILED_STEPS+=("Cost Guard")
-                exit 1
-            fi
-        else
-            print_warning "Cost guard script not found, skipping"
-            SKIPPED_STEPS+=("Cost Guard")
-        fi
-    else
-        SKIPPED_STEPS+=("Cost Guard")
-    fi
-fi
-
-# =============================================================================
-# Hydrate Configs (inject secrets into template files)
-# =============================================================================
-
-if [ -f "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" ]; then
-    if [ "${HYDRATE_CONFIGS:-}" != "false" ]; then
-        if ! create_hydrate_backup "$PROJECT_ROOT" "$ENVIRONMENT"; then
-            print_error "Failed to create hydration backup"
-            exit 1
-        fi
-        trap restore_hydrate_backup EXIT
-    fi
-
-    chmod +x "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh"
-    if "$DEPLOY_SCRIPT_DIR/../utils/hydrate_configs.sh" "$ENVIRONMENT"; then
-        : # no-op on success (hydrate runs inline)
-    else
-        print_error "Config hydration failed"
-        exit 1
-    fi
-fi
-
-# =============================================================================
-# Sync App Config and Deploy Configs
-# =============================================================================
-
-echo ""
-DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
-print_step "Step $DEPLOYMENT_STEPS: Syncing App Config"
-
-if [ -f "$DEPLOY_SCRIPT_DIR/sync_app_config.sh" ]; then
-    chmod +x "$DEPLOY_SCRIPT_DIR/sync_app_config.sh"
-    if "$DEPLOY_SCRIPT_DIR/sync_app_config.sh" --env "$ENVIRONMENT"; then
-        print_complete "App config sync completed"
-        COMPLETED_STEPS+=("Sync App Config")
-    else
-        print_error "App config sync failed"
-        FAILED_STEPS+=("Sync App Config")
-        exit 1
-    fi
-else
-    print_warning "sync_app_config.sh not found, skipping"
-    SKIPPED_STEPS+=("Sync App Config")
 fi
 
 echo ""
-DEPLOYMENT_STEPS=$((DEPLOYMENT_STEPS + 1))
-print_step "Step $DEPLOYMENT_STEPS: Deploying Configs to S3"
+draw_box_top 76
+draw_box_row_centered "DEPLOYMENT PLAN" 76
+draw_box_separator 76
+draw_box_row "Project:       $PROJECT_NAME" 76
+draw_box_row "Environment:   $ENVIRONMENT" 76
+draw_box_row "Deploy set:    $DEPLOYMENT_SET" 76
+draw_box_row "Account key:   $ACCOUNT_KEY" 76
+[ -n "$ACCOUNT_ID" ] && draw_box_row "Expected acct: $ACCOUNT_ID" 76
+[ -n "$ACTIVE_ACCOUNT" ] && draw_box_row "Active acct:   $ACTIVE_ACCOUNT" 76
+draw_box_row "Account kind:  $ACCOUNT_KIND" 76
+draw_box_row "Region:        $AWS_REGION" 76
+[ -n "${AWS_PROFILE:-}" ] && draw_box_row "AWS profile:   $AWS_PROFILE" 76
+draw_box_row "Global suffix: $GLOBAL_SUFFIX" 76
+draw_box_separator 76
+draw_box_row "Selected enabled resources in deployment order:" 76
 
-if [ -f "$DEPLOY_SCRIPT_DIR/deploy_configs.sh" ]; then
-    chmod +x "$DEPLOY_SCRIPT_DIR/deploy_configs.sh"
-    if "$DEPLOY_SCRIPT_DIR/deploy_configs.sh" "$ENVIRONMENT"; then
-        print_complete "Configs deployed to S3"
-        COMPLETED_STEPS+=("Deploy Configs")
+ENABLED_RESOURCES=()
+while IFS= read -r resource; do
+    [ -z "$resource" ] && continue
+    ENABLED_RESOURCES+=("$resource")
+    handler="$PROJECT_ROOT/scripts/deploy/resources/${resource}.sh"
+    if [ -f "$handler" ]; then
+        draw_box_row "  [DEPLOY] $resource" 76
     else
-        print_error "Deploy configs failed"
-        FAILED_STEPS+=("Deploy Configs")
-        exit 1
+        draw_box_row "  [MISSING] $resource handler not found" 76
     fi
-else
-    print_warning "deploy_configs.sh not found, skipping"
-    SKIPPED_STEPS+=("Deploy Configs")
+done < <(get_deployment_set_resources "$DEPLOYMENT_SET")
+
+draw_box_bottom 76
+echo ""
+
+if [ "$ACCOUNT_KIND" = "management" ]; then
+    print_warning "This environment targets the management account. AWS recommends keeping application workloads in member or sandbox accounts when possible."
 fi
 
-restore_hydrate_backup
-trap - EXIT
-
-# =============================================================================
-# Summary
-# =============================================================================
-
-echo ""
-echo ""
-draw_box_top 64
-draw_box_row_centered "DEPLOYMENT COMPLETE" 64
-draw_box_separator 64
-draw_box_row "Environment: $ENVIRONMENT" 64
-draw_box_row "Region: $AWS_REGION" 64
-draw_box_row "Steps completed: ${#COMPLETED_STEPS[@]}" 64
-if [ ${#SKIPPED_STEPS[@]} -gt 0 ]; then
-    draw_box_row "Steps skipped: ${#SKIPPED_STEPS[@]}" 64
-fi
-draw_box_bottom 64
-echo ""
-
-if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
-    print_complete "All deployment steps completed successfully!"
-    echo ""
-    if [ ${#COMPLETED_STEPS[@]} -gt 0 ]; then
-        print_info "Deployed:"
-        for step in "${COMPLETED_STEPS[@]}"; do
-            print_info "  - $step"
-        done
-    fi
-    if [ ${#SKIPPED_STEPS[@]} -gt 0 ]; then
-        echo ""
-        print_info "Skipped:"
-        for step in "${SKIPPED_STEPS[@]}"; do
-            print_info "  - $step"
-        done
-    fi
-else
-    print_error "Some deployment steps failed:"
-    for step in "${FAILED_STEPS[@]}"; do
-        print_error "  - $step"
-    done
+if [ -n "$ACCOUNT_ID" ] && [ -n "$ACTIVE_ACCOUNT" ] && [ "$ACCOUNT_ID" != "$ACTIVE_ACCOUNT" ]; then
+    print_error "AWS profile/account mismatch. Expected $ACCOUNT_ID but active credentials resolve to $ACTIVE_ACCOUNT."
     exit 1
 fi
 
+if [ ${#ENABLED_RESOURCES[@]} -eq 0 ]; then
+    print_warning "No enabled resources found for deployment"
+    exit 0
+fi
+
+if [ "$DRY_RUN" = true ]; then
+    print_complete "Dry run complete"
+    exit 0
+fi
+
+if [ -z "$ACCOUNT_ID" ]; then
+    print_error "No expected account_id is configured for '$ENVIRONMENT'."
+    print_error "Create infra/secrets/accounts.secrets.yaml from template.accounts.secrets.yaml before deploying."
+    exit 1
+fi
+
+if [ "$AUTO_CONFIRM" = false ]; then
+    confirm_deployment "Deploy these resources?" || exit 0
+fi
+
+COMPLETED=()
+FAILED=()
+
+for resource in "${ENABLED_RESOURCES[@]}"; do
+    handler="$PROJECT_ROOT/scripts/deploy/resources/${resource}.sh"
+    if [ ! -f "$handler" ]; then
+        print_error "Resource handler not found: $handler"
+        FAILED+=("$resource")
+        break
+    fi
+
+    chmod +x "$handler"
+    print_step "Deploying resource: $resource"
+    set +e
+    "$handler" "$ENVIRONMENT" deploy -y
+    rc=$?
+    set -e
+
+    if [ $rc -ne 0 ]; then
+        print_error "Resource deployment failed: $resource (exit code $rc)"
+        FAILED+=("$resource")
+        break
+    fi
+    COMPLETED+=("$resource")
+done
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+    print_error "Deployment stopped because a resource failed"
+    exit 1
+fi
+
+if is_cost_control_enabled && is_deployment_set_cost_control_enabled "$DEPLOYMENT_SET"; then
+    cost_guard_script="$PROJECT_ROOT/scripts/deploy/deploy_cost_guard.sh"
+    if [ -f "$cost_guard_script" ]; then
+        print_step "Deploying cost guard"
+        "$cost_guard_script" "$ENVIRONMENT" deploy -y
+        COMPLETED+=("cost_guard")
+    fi
+fi
+
+cost_tags_script="$PROJECT_ROOT/scripts/deploy/deploy_cost_analysis_tags.sh"
+if is_deployment_set_cost_control_enabled "$DEPLOYMENT_SET" && [ -f "$cost_tags_script" ]; then
+    print_step "Activating cost allocation tags"
+    "$cost_tags_script" activate || print_warning "Cost allocation tag activation failed or tags are not available yet"
+fi
+
+if is_deployment_set_config_enabled "$DEPLOYMENT_SET"; then
+    print_step "Hydrating and deploying application config"
+    hydrate_script="$PROJECT_ROOT/scripts/utils/hydrate_configs.sh"
+    sync_script="$PROJECT_ROOT/scripts/deploy/sync_app_config.sh"
+    configs_script="$PROJECT_ROOT/scripts/deploy/deploy_configs.sh"
+    hydrated_configs_script="$PROJECT_ROOT/scripts/deploy/deploy_hydrated_configs.sh"
+
+    if [ -f "$hydrate_script" ] && [ -f "$sync_script" ] && [ -f "$configs_script" ] && [ -f "$hydrated_configs_script" ]; then
+        chmod +x "$hydrated_configs_script"
+        "$hydrate_script" --run "$ENVIRONMENT" -- "$hydrated_configs_script" "$ENVIRONMENT"
+    else
+        print_warning "Config hydration/sync/upload scripts are incomplete; skipping config deployment"
+    fi
+else
+    print_info "Skipping config deployment for deployment set: $DEPLOYMENT_SET"
+fi
+
 echo ""
-print_complete "Full application deployment completed successfully"
+draw_box_top 76
+draw_box_row_centered "DEPLOYMENT COMPLETE" 76
+draw_box_separator 76
+draw_box_row "Environment: $ENVIRONMENT" 76
+draw_box_row "Deploy set:  $DEPLOYMENT_SET" 76
+draw_box_row "Completed:   ${#COMPLETED[@]} resource step(s)" 76
+draw_box_bottom 76
+echo ""
+
+for resource in "${COMPLETED[@]}"; do
+    print_info "Deployed: $resource"
+done
+
+print_complete "Full deployment completed"
