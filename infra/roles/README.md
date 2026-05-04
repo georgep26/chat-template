@@ -45,7 +45,7 @@ Attach this role to Lambda functions that need to access Bedrock, Secrets Manage
 
 ### GitHub Actions Deployer Role (`deployer_role.yaml`)
 
-IAM role for GitHub Actions to run the **deploy workflow** ([.github/workflows/deploy.yml](../../.github/workflows/deploy.yml)) via OIDC. This role has permissions to run [scripts/deploy/deploy_all.sh](../../scripts/deploy/deploy_all.sh) (network, S3, DB, knowledge base, Lambda, cost tags).
+IAM role for GitHub Actions to run the **deploy workflow** ([.github/workflows/deploy.yml](../../.github/workflows/deploy.yml)) via OIDC. This role has permissions to run [scripts/deploy/deploy_all.sh](../../scripts/deploy/deploy_all.sh) for the configured deployment sets.
 
 **Prerequisite:** Create the GitHub OIDC identity provider in AWS **before** deploying this role. See [docs/oidc_github_identity_provider_setup.md](../../docs/oidc_github_identity_provider_setup.md).
 
