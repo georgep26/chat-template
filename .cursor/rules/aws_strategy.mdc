@@ -91,8 +91,8 @@ Deployment scripts in `scripts/deploy/` should:
 2. **Read from config**: Get topology from `infra/infra.yaml`, account values from `secrets.accounts_file`, and runtime secrets from each environment's `secrets_file`
 3. **Show deploy summary**: Display a summary box before deployment
 4. **Confirm before deploy**: Prompt for confirmation unless `-y` flag is passed
-5. **Respect enabled flag**: Only deploy resources that have `enabled: true` in infra.yaml
-6. **Keep orchestrators generic**: `deploy_all.sh` must read resource keys in YAML order and resolve `scripts/deploy/resources/<resource_key>.sh` by convention; resource-specific logic belongs in the handler
+5. **Respect enabled flag and deployment set**: Only deploy resources that have `enabled: true` and are included in the selected `deployment_sets.<name>.resources`
+6. **Keep orchestrators generic**: `deploy_all.sh` must read resource keys in YAML order, filter them by deployment set, and resolve `scripts/deploy/resources/<resource_key>.sh` by convention; resource-specific logic belongs in the handler
 7. **Use color scheme**:
    - `print_info` (white) - General information
    - `print_step` (cyan) - Major deployment steps
@@ -104,6 +104,7 @@ Deployment scripts in `scripts/deploy/` should:
 
 Resources are deployed in the order they are defined in `infra/infra.yaml`:
 - Resources are defined in dependency order
+- Deployment sets filter the enabled resource list without changing that order
 - Teardown occurs in reverse order via `scripts/deploy/teardown.sh`
 - Imported resources (`ownership: imported`) are skipped during teardown
 - No separate `deployment_order` section is needed
