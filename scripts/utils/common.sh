@@ -58,16 +58,30 @@ print_header() {
 # Validate environment name
 validate_environment() {
     local env=$1
-    case $env in
-        dev|staging|prod)
+    if [ -z "$env" ]; then
+        print_error "Environment is required"
+        return 1
+    fi
+
+    # When config_parser.sh is sourced, validate against infra.yaml so any
+    # configured environment name is accepted.
+    if declare -F environment_exists >/dev/null 2>&1; then
+        ensure_config_loaded >/dev/null 2>&1 || true
+        if environment_exists "$env" >/dev/null 2>&1; then
             return 0
-            ;;
-        *)
-            print_error "Invalid environment: $env"
-            print_error "Valid environments are: dev, staging, prod"
-            return 1
-            ;;
-    esac
+        fi
+
+        print_error "Invalid environment: $env"
+        if declare -F get_environment_names >/dev/null 2>&1; then
+            local valid_envs
+            valid_envs=$(get_environment_names 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            [ -n "$valid_envs" ] && print_error "Valid environments are: $valid_envs"
+        fi
+        return 1
+    fi
+
+    # Fallback for scripts that have not sourced config_parser.sh yet.
+    return 0
 }
 
 # Validate action
