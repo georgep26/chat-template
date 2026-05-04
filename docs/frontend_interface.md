@@ -11,7 +11,7 @@ Related references:
 
 ```text
 User Browser (Nuxt 4 SPA / SSG)
-  -> Cognito Hosted UI / OAuth (Authorization Code + PKCE)
+  -> Signs in with email/password via Cognito SRP (in-app login form)
   -> Receives JWTs (ID/Access token)
   -> Posts to Nitro server route /api/chat (SSR mode)
      OR calls Lambda Function URL directly (static generation mode)
@@ -52,40 +52,52 @@ Environment variables use Nuxt's `runtimeConfig` convention (`NUXT_` prefix for 
 | `NUXT_PUBLIC_COGNITO_REGION` | Required | Required | Required | Usually `us-east-1` |
 | `NUXT_PUBLIC_COGNITO_USER_POOL_ID` | Required | Required | Required | User pool for this environment |
 | `NUXT_PUBLIC_COGNITO_APP_CLIENT_ID` | Required | Required | Required | App client used by SPA |
-| `NUXT_PUBLIC_COGNITO_DOMAIN` | Required | Required | Required | Cognito hosted UI domain |
-| `NUXT_PUBLIC_COGNITO_REDIRECT_URI` | `http://localhost:4101/auth/callback` | CloudFront URL + `/auth/callback` | CloudFront URL + `/auth/callback` | OAuth redirect target |
-| `NUXT_PUBLIC_COGNITO_LOGOUT_REDIRECT_URI` | `http://localhost:4101/` | CloudFront URL | CloudFront URL | Post-logout redirect |
 
 Configuration files:
-- `.env.local` — local development
-- `.env.staging` — staging deployment
-- `.env.prod` — production deployment
+- `.env` — local development (Nuxt loads this by default)
+- `.env.sandbox` — sandbox CloudFront deployment
+- `.env.staging` — staging CloudFront deployment
+- `.env.prod` — production CloudFront deployment
 - `.env.example` — template with placeholder values
 
-## 3. Authentication Flow (Authorization Code + PKCE)
+### Backend-generated handoff file
+
+Backend deployment (`scripts/deploy/deploy_all.sh <env>`) writes a `.env`-style handoff file containing all `NUXT_PUBLIC_*` values for the deployed environment to:
+
+```text
+infra/state/<env>.frontend.handoff.env
+```
+
+That path is gitignored (only `.gitignore` is tracked under `infra/state/`). The frontend repo can copy it directly:
+
+```bash
+cp /path/to/chat-template/infra/state/staging.frontend.handoff.env .env.staging
+```
+
+The file is regenerated atomically on every successful `deploy_all.sh` run, and can also be regenerated standalone via `./scripts/deploy/generate_frontend_handoff.sh <env>`.
+
+## 3. Authentication Flow (Cognito SRP — direct email/password)
 
 1. User visits a protected route.
 2. Nuxt route middleware (`middleware/auth.ts`) checks `useAuth()` composable state.
 3. If not authenticated, middleware redirects to `/login`.
-4. User clicks Sign In → `useAuth().login()` redirects to Cognito Hosted UI with PKCE challenge.
-5. Cognito redirects back to `/auth/callback` with auth code.
-6. Callback page calls `useAuth().handleCallback()` → exchanges code + PKCE verifier for tokens.
-7. Tokens stored in `sessionStorage` via `oidc-client-ts` `WebStorageStateStore`.
-8. `useAuth().getAccessToken()` returns the current token, refreshing if within 60s of expiry.
-9. Chat composable includes `Authorization: Bearer <JWT>` on API calls.
-10. On 401 response, composable retries once after `useAuth().refreshIfNeeded(true)`.
-11. On logout, `useAuth().logout()` calls Cognito logout endpoint and clears local state.
+4. User enters email and password on the login page.
+5. `useAuth().login(email, password)` authenticates via Cognito SRP (Secure Remote Password).
+6. On success, tokens are stored in `localStorage` by `amazon-cognito-identity-js`.
+7. `useAuth().getAccessToken()` returns the current token, refreshing if within 60s of expiry.
+8. Chat composable includes `Authorization: Bearer <JWT>` on API calls.
+9. On 401 response, composable retries once after `useAuth().refreshIfNeeded(true)`.
+10. On logout, `useAuth().logout()` signs out of Cognito and clears local state.
 
 Key files:
-- `composables/useAuth.ts` — auth state management and UserManager wrapper
+- `composables/useAuth.ts` — auth state management wrapping `amazon-cognito-identity-js`
 - `plugins/auth.client.ts` — bootstraps auth on app initialization (client-only)
 - `middleware/auth.ts` — route protection (redirects unauthenticated users to `/login`)
-- `pages/login.vue` — sign-in page
-- `pages/auth/callback.vue` — OAuth callback handler
+- `pages/login.vue` — sign-in page with email/password form
 
 Token handling notes:
-- Tokens are stored in `sessionStorage` via `oidc-client-ts`.
-- `automaticSilentRenew` is enabled for background token refresh.
+- Tokens are stored in `localStorage` by `amazon-cognito-identity-js` (its default store).
+- The SDK handles automatic token refresh via the refresh token.
 - Do not log raw tokens.
 
 ## 4. API Contract
@@ -205,111 +217,81 @@ Frontend requirements:
 
 CORS is not needed between browser and Lambda. The browser posts to `/api/chat` on the same origin, and the Nitro server route proxies to Lambda server-side.
 
-## 7. Manual CloudFront Frontend Setup
+## 7. CloudFront Frontend Setup
 
-This runbook keeps the deployed frontend and backend aligned when the frontend is hosted as static assets in S3 + CloudFront and the backend is exposed through a Lambda Function URL with Cognito auth. It applies to any environment defined in `infra/infra.yaml`; test changes in a non-prod environment first.
+The backend repo's `scripts/deploy/deploy_all.sh <env>` provisions everything the frontend needs and writes the resulting values to a handoff file. Most of the previous manual runbook is now automated — what remains is consuming the handoff file from the frontend repo and shipping the static assets.
 
-### 7.1 Required values
+### 7.1 What `deploy_all.sh` does for the frontend
 
-From the backend deployment:
-- Lambda Function URL: used by `NUXT_PUBLIC_CHAT_API_BASE_URL` in static generation mode.
-- Cognito region, user pool ID, app client ID, and hosted UI domain.
+In addition to the backend resources, a successful run produces:
 
-From the frontend infrastructure deployment:
-- CloudFront domain, for example `d123abc.cloudfront.net`.
+1. **CloudFront distribution** (`frontend` stack) — S3 bucket + CloudFront for the Nuxt static output.
+2. **Cognito user pool** with SRP auth enabled (`ALLOW_USER_SRP_AUTH`). The frontend uses direct email/password login — no hosted UI redirects.
+3. **Bootstrap Cognito users.** Two demo users (`admin@example.com`, `user@example.com` by default) are created with auto-generated 32-char passwords. Keys, usernames, and passwords live under `cognito_users:` in `infra/secrets/<account-set>/<env>.secrets.yaml` (gitignored). Re-runs preserve passwords; on stack delete, only passwords are cleared.
+4. **Lambda Function URL with auth and CORS.** The Lambda enforces Cognito JWT validation; the Function URL itself has `AuthType: NONE` so the SPA can call it directly with a `Bearer` token.
+5. **Frontend handoff file.** `infra/state/<env>.frontend.handoff.env` is regenerated atomically with `NUXT_PUBLIC_*` values populated from CloudFormation outputs.
 
-### 7.2 Manual deployment checklist
+### 7.2 What you still do by hand
 
-1. Deploy frontend infrastructure from the backend repo:
-
-   ```bash
-   ./scripts/deploy/deploy_frontend.sh <env> deploy -y
-   ```
-
-   This creates or updates the S3 bucket and CloudFront distribution. It does not build or upload the Nuxt app. You can also run `./scripts/deploy/deploy_all.sh <env> --set app -y` if the `frontend` resource is included in the selected deployment set.
-
-2. Capture the CloudFront URL from script output, or query the stack:
+1. **Pick up the handoff file:**
 
    ```bash
-   aws cloudformation describe-stacks \
-     --stack-name chat-template-frontend-<env> \
-     --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDomainName`].OutputValue' \
-     --output text
+   cp /path/to/chat-template/infra/state/<env>.frontend.handoff.env <frontend-repo>/.env.<env>
    ```
 
-   Full URL format:
-
-   ```text
-   https://<CloudFrontDomainName>
-   ```
-
-3. Update backend environment secrets in `chat-template`:
-
-   ```yaml
-   config_secrets:
-     COGNITO_CALLBACK_URLS: "https://<cloudfront-domain>/auth/callback"
-     COGNITO_LOGOUT_URLS: "https://<cloudfront-domain>/"
-     FUNCTION_URL_CORS_ALLOW_ORIGINS: "https://<cloudfront-domain>"
-   ```
-
-   Keep the Cognito runtime values present as needed:
-
-   ```yaml
-   config_secrets:
-     COGNITO_REGION: "us-east-1"
-     COGNITO_USER_POOL_ID: "us-east-1_xxxxx"
-     COGNITO_APP_CLIENT_ID: "xxxxxxxx"
-   ```
-
-   For CI/CD-enabled environments, sync updated secrets to GitHub:
+   The file looks like:
 
    ```bash
-   ./scripts/setup/setup_github.sh --deploy-secrets <env>
+   # Generated by scripts/deploy/generate_frontend_handoff.sh — do not edit by hand
+   # Generated: 2026-05-04T20:29:52Z
+   # Environment: sandbox
+   NUXT_PUBLIC_CHAT_API_BASE_URL=https://<lambda-id>.lambda-url.us-east-1.on.aws
+   NUXT_PUBLIC_COGNITO_REGION=us-east-1
+   NUXT_PUBLIC_COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx
+   NUXT_PUBLIC_COGNITO_APP_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
 
-4. Redeploy Cognito if callback/logout URLs changed:
+2. **Build and push frontend assets from the frontend repo.** The frontend deploy script should build the static Nuxt output, sync `.output/public/` to the frontend S3 bucket, and invalidate the CloudFront distribution.
 
-   ```bash
-   ./scripts/deploy/deploy_cognito.sh <env> deploy -y
-   ```
+3. **Verify the deployed site:**
+   - `https://<cf-domain>` loads the SPA and shows the login form.
+   - Sign in with a Cognito user (email/password).
+   - Chat request returns HTTP `200` with no CORS errors in DevTools.
+   - Sign out clears session and returns to the login form.
 
-5. Redeploy Lambda so Function URL CORS allows the CloudFront origin:
+### 7.3 When to regenerate the handoff file
 
-   ```bash
-   ./scripts/deploy/deploy_rag_lambda.sh <env> deploy -y --skip-build
-   ```
+The handoff file is regenerated automatically by every full `deploy_all.sh <env>` run. You can also regenerate it standalone after partial deploys:
 
-   Or use the app deployment set when you want Cognito, frontend infrastructure, and Lambda refreshed together:
+```bash
+./scripts/deploy/generate_frontend_handoff.sh <env>
+```
 
-   ```bash
-   ./scripts/deploy/deploy_all.sh <env> --set app -y
-   ```
+The script no-ops with a warning if any of the required upstream stacks (`frontend`, `cognito`, `rag_lambda`) are missing — useful when running `--set pr` or `--set app` deployment sets that don't touch every stack.
 
-6. Build and push frontend assets from the frontend repo:
+### 7.4 Bootstrap user credentials
 
-   ```bash
-   export AWS_REGION=us-east-1
-   export NUXT_PUBLIC_CHAT_API_BASE_URL=https://<lambda-id>.lambda-url.us-east-1.on.aws
-   export NUXT_PUBLIC_COGNITO_REGION=us-east-1
-   export NUXT_PUBLIC_COGNITO_USER_POOL_ID=us-east-1_xxxxx
-   export NUXT_PUBLIC_COGNITO_APP_CLIENT_ID=xxxxxxxx
-   export NUXT_PUBLIC_COGNITO_DOMAIN=<your-domain>.auth.us-east-1.amazoncognito.com
-   export NUXT_PUBLIC_COGNITO_REDIRECT_URI=https://<cloudfront-domain>/auth/callback
-   export NUXT_PUBLIC_COGNITO_LOGOUT_REDIRECT_URI=https://<cloudfront-domain>/
+The two demo users are created with `email_verified=true` and a permanent password. They sign in via the frontend's email/password form (Cognito SRP auth). Credentials are persisted under `cognito_users:` in the env secrets file:
 
-   ./infrastructure/scripts/deploy.sh <env>
-   ```
+```yaml
+cognito_users:
+  admin:
+    username: admin@example.com
+    password: <auto-generated>
+  example:
+    username: user@example.com
+    password: <auto-generated>
+```
 
-   The frontend deploy script should build the static Nuxt output, sync `.output/public/` to the frontend S3 bucket, and invalidate CloudFront. The frontend stack must already exist, and AWS credentials must target the same environment account.
+To customise: edit `cognito_users.<key>.username` (and optionally pre-fill `password`) before deploy. To rotate a password, clear it back to `""` and re-run `deploy_cognito.sh` — the handler regenerates it. App client `ExplicitAuthFlows` is `ALLOW_USER_SRP_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH` only, so non-browser CLI logins must use `admin-initiate-auth` with `ADMIN_USER_PASSWORD_AUTH` (which is currently disabled — enable in `infra/resources/cognito_template.yaml` for non-prod testing if needed).
 
-7. Verify the deployed site:
-   - Open `https://<cloudfront-domain>`.
-   - Login redirects to Cognito and returns to `/auth/callback` on the CloudFront domain.
-   - Chat returns HTTP `200`.
-   - Browser devtools show no CORS errors for chat requests.
-   - Logout returns to the CloudFront root URL.
+> **Sandbox-only credentials.** These are demo accounts. Rotate via the Cognito console for any non-sandbox use, and treat the env secrets file as sensitive (it's gitignored under `infra/secrets/**/*.secrets.yaml`).
 
-Re-run this setup whenever the CloudFront stack is recreated, the frontend domain changes, Cognito callback/logout URLs change, or the backend Function URL CORS allowlist needs to include a new origin.
+### 7.5 Re-run triggers
+
+Re-run `deploy_cognito.sh <env> deploy -y` (or `deploy_all.sh <env>`) when:
+- `cognito_users.*.username` is changed in the secrets file (new identities are created on next run; old ones are not removed).
+- A user is deleted from the pool by hand and you want it recreated.
 
 ## 8. Frontend Security Requirements
 
@@ -332,7 +314,7 @@ chat-template-frontend/
 ├── pages/
 │   ├── index.vue            # Chat thread (protected)
 │   ├── login.vue            # Sign-in page (public, no layout)
-│   ├── auth/callback.vue    # OAuth callback (public, no layout)
+│   ├── auth/callback.vue    # Legacy route (redirects to /)
 │   ├── settings.vue         # Model/tool preferences (protected)
 │   └── library.vue          # Saved chats grid (protected)
 ├── components/
@@ -342,7 +324,7 @@ chat-template-frontend/
 │       ├── Message.vue      # Message card: markdown, sources, reactions
 │       └── Composer.vue     # Input textarea + send/stop
 ├── composables/
-│   ├── useAuth.ts           # Cognito OIDC via oidc-client-ts
+│   ├── useAuth.ts           # Cognito SRP auth via amazon-cognito-identity-js
 │   ├── useChat.ts           # Chat state, API calls, source mapping
 │   ├── useConversations.ts  # Conversation list (localStorage-synced)
 │   └── useChatSettings.ts   # Model/tool selection (localStorage-synced)
@@ -383,21 +365,20 @@ Source mapping (Lambda → UI):
 
 ### 9.3 `useAuth()` composable
 
-Replaces the previous Pinia auth store. Uses `useState` for SSR-safe state and wraps `oidc-client-ts` UserManager (client-only).
+Wraps `amazon-cognito-identity-js` CognitoUserPool in Nuxt-friendly patterns. Uses `useState` for SSR-safe state (client-only initialization).
 
 Exposed:
 - `user`, `isAuthenticated`, `accessToken` — reactive state
-- `bootstrap()` — restore session from storage
-- `login(redirectPath?)` — redirect to Cognito
-- `handleCallback()` — exchange auth code for tokens
-- `logout()` — Cognito logout + clear local state
+- `bootstrap()` — restore session from storage (checks for existing Cognito session)
+- `login(email, password)` — authenticate via Cognito SRP
+- `logout()` — sign out of Cognito and clear local state
 - `getAccessToken()` — returns token, refreshing if near expiry
-- `refreshIfNeeded(force?)` — explicit refresh
+- `refreshIfNeeded(force?)` — explicit refresh via Cognito SDK
 
 ### 9.4 Route middleware
 
 `middleware/auth.ts` runs before each navigation (client-only):
-- Skips public routes: `/login`, `/auth/callback`
+- Skips public routes: `/login`
 - Bootstraps auth if not yet bootstrapped
 - Refreshes token if authenticated
 - Redirects to `/login` if not authenticated
@@ -415,7 +396,7 @@ In static generation mode, this route is not available at runtime. The `useChat`
 
 ## 10. QA Checklist for Frontend Team
 
-1. Auth success path: login → Cognito redirect → callback → token → chat page loads.
+1. Auth success path: enter email/password → sign in → token → chat page loads.
 2. Auth failure path: expired token → 401 → auto-refresh → retry; if refresh fails → redirect to login.
 3. Conversation continuity: same `conversation_id` preserves thread context across messages.
 4. User isolation: different users with same `conversation_id` do not leak context.
