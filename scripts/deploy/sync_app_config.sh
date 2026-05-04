@@ -36,7 +36,7 @@ show_usage() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --env <env>     Sync only this environment (dev, staging, prod)"
+    echo "  --env <env>     Sync only this environment"
     echo "  --config <path> Path to infra.yaml (default: infra/infra.yaml)"
     echo "  --dry-run       Print what would be updated without writing files"
     echo "  -h, --help      Show this help"
@@ -81,11 +81,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -n "$ENV_FILTER" ] && [[ ! "$ENV_FILTER" =~ ^(dev|staging|prod)$ ]]; then
-    print_error "Invalid --env: $ENV_FILTER (must be dev, staging, or prod)"
-    exit 1
-fi
-
 # =============================================================================
 # Load Config
 # =============================================================================
@@ -104,6 +99,10 @@ fi
 
 load_infra_config "$CONFIG_PATH" || exit 1
 check_yq_installed || exit 1
+
+if [ -n "$ENV_FILTER" ]; then
+    validate_environment "$ENV_FILTER" || exit 1
+fi
 
 # =============================================================================
 # Sync One Environment
@@ -127,6 +126,19 @@ sync_env() {
     [ "$kb_id" = "null" ] && kb_id=""
     [ "$db_arn" = "null" ] && db_arn=""
     [ "$secret_arn" = "null" ] && secret_arn=""
+
+    if [ -z "$kb_id" ]; then
+        kb_id=$(get_secret_value "$env" "config_secrets.KNOWLEDGE_BASE_ID" 2>/dev/null || true)
+        [ "$kb_id" = "null" ] && kb_id=""
+    fi
+    if [ -z "$db_arn" ]; then
+        db_arn=$(get_secret_value "$env" "config_secrets.DB_CLUSTER_ARN" 2>/dev/null || true)
+        [ "$db_arn" = "null" ] && db_arn=""
+    fi
+    if [ -z "$secret_arn" ]; then
+        secret_arn=$(get_secret_value "$env" "config_secrets.DB_CREDENTIALS_SECRET_ARN" 2>/dev/null || true)
+        [ "$secret_arn" = "null" ] && secret_arn=""
+    fi
 
     local updated=0
 
@@ -196,9 +208,9 @@ print_header "Syncing app config from infra.yaml"
 if [ -n "$ENV_FILTER" ]; then
     sync_env "$ENV_FILTER"
 else
-    for env in dev staging prod; do
+    while IFS= read -r env; do
         sync_env "$env"
-    done
+    done < <(get_environment_names)
 fi
 
 if [ "$DRY_RUN" = true ]; then
