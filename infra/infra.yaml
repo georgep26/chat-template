@@ -130,6 +130,31 @@ environments:
     secrets_file: infra/secrets/adte_sandbox/sandbox.secrets.yaml
     ci_cd:
       enabled: false
+
+# Deployment sets define which enabled resources a deployment run should touch.
+# Resource order still comes from the resources section below.
+deployment_sets:
+  full:
+    description: "Deploy all enabled resources for full environment setup or rebuilds."
+    resources: all
+    deploy_cost_control: true
+    deploy_config: true
+  app:
+    description: "Deploy application-layer resources without touching network, database, or knowledge base infrastructure."
+    resources:
+      - rag_lambda_ecr
+      - cognito
+      - frontend
+      - rag_lambda
+    deploy_cost_control: true
+    deploy_config: true
+  pr:
+    description: "Deploy the minimum runtime changes needed before PR evaluations."
+    resources:
+      - rag_lambda_ecr
+      - rag_lambda
+    deploy_cost_control: false
+    deploy_config: true
 # Cost allocation tags for AWS billing
 cost_tags:
   # Tags that will be activated for cost allocation
