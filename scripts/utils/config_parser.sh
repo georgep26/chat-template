@@ -95,18 +95,202 @@ get_github_repo() {
 # Environment Configuration
 # =============================================================================
 
+normalize_yaml_scalar() {
+    local value=$1
+    if [ "$value" = "null" ]; then
+        echo ""
+    else
+        echo "$value"
+    fi
+}
+
+is_unresolved_placeholder_value() {
+    local value=$1
+    [[ "$value" == *'${'* ]]
+}
+
+resolve_project_path() {
+    local path=$1
+    local project_root
+    project_root=$(get_project_root)
+
+    path=$(normalize_yaml_scalar "$path")
+    if [ -z "$path" ]; then
+        return 0
+    fi
+
+    case "$path" in
+        /*)
+            echo "$path"
+            ;;
+        infra/*|config/*|scripts/*|docs/*)
+            echo "$project_root/$path"
+            ;;
+        *)
+            echo "$project_root/infra/$path"
+            ;;
+    esac
+}
+
+get_accounts_secrets_file() {
+    ensure_config_loaded || return 1
+    local project_root
+    project_root=$(get_project_root)
+    if [ -n "${CHAT_TEMPLATE_ACCOUNTS_SECRETS_FILE:-}" ]; then
+        echo "$CHAT_TEMPLATE_ACCOUNTS_SECRETS_FILE"
+        return 0
+    fi
+
+    local configured_path
+    configured_path=$(yq '.secrets.accounts_file // ""' "$INFRA_CONFIG_PATH" 2>/dev/null)
+    configured_path=$(normalize_yaml_scalar "$configured_path")
+    if [ -n "$configured_path" ]; then
+        resolve_project_path "$configured_path"
+    else
+        echo "$project_root/infra/secrets/accounts.secrets.yaml"
+    fi
+}
+
+get_environment_names() {
+    ensure_config_loaded || return 1
+    yq '.environments | to_entries | .[] | .key' "$INFRA_CONFIG_PATH"
+}
+
+get_account_names() {
+    ensure_config_loaded || return 1
+    yq '.accounts // {} | to_entries | .[] | .key' "$INFRA_CONFIG_PATH"
+}
+
+get_environment_account_key() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local account
+    account=$(yq ".environments.${env}.account // \"\"" "$INFRA_CONFIG_PATH")
+    account=$(normalize_yaml_scalar "$account")
+    if [ -n "$account" ]; then
+        echo "$account"
+        return 0
+    fi
+
+    # Legacy configs may not have a separate accounts block.
+    echo "$env"
+}
+
+get_account_secret_ref() {
+    local account=$1
+    ensure_config_loaded || return 1
+    local secret_ref
+    secret_ref=$(yq ".accounts.${account}.secret_ref // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    secret_ref=$(normalize_yaml_scalar "$secret_ref")
+    if [ -n "$secret_ref" ]; then
+        echo "$secret_ref"
+    else
+        echo "$account"
+    fi
+}
+
+get_environment_account_secret_ref() {
+    local env=$1
+    local account
+    account=$(get_environment_account_key "$env")
+    get_account_secret_ref "$account"
+}
+
+get_account_secret_value() {
+    local account_or_ref=$1
+    local key_path=$2
+    local secrets_file
+    secrets_file=$(get_accounts_secrets_file)
+
+    if [ ! -f "$secrets_file" ]; then
+        return 1
+    fi
+
+    local value
+    value=$(yq ".accounts.${account_or_ref}.${key_path} // \"\"" "$secrets_file" 2>/dev/null)
+    value=$(normalize_yaml_scalar "$value")
+    [ -n "$value" ] && echo "$value"
+}
+
+get_environment_account_secret_value() {
+    local env=$1
+    local key_path=$2
+    local secret_ref
+    secret_ref=$(get_environment_account_secret_ref "$env")
+    get_account_secret_value "$secret_ref" "$key_path"
+}
+
+get_environment_account_kind() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local account
+    account=$(get_environment_account_key "$env")
+    local kind
+    kind=$(yq ".accounts.${account}.kind // \"existing\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    normalize_yaml_scalar "$kind"
+}
+
+is_environment_ci_cd_enabled() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local enabled
+    enabled=$(yq ".environments.${env}.ci_cd.enabled // false" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    [ "$enabled" = "true" ]
+}
+
+get_environment_github_environment() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local github_env
+    github_env=$(yq ".environments.${env}.ci_cd.github_environment // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    github_env=$(normalize_yaml_scalar "$github_env")
+    if [ -n "$github_env" ]; then
+        echo "$github_env"
+    else
+        echo "$env"
+    fi
+}
+
 # Get environment account ID
 get_environment_account_id() {
     local env=$1
     ensure_config_loaded || return 1
-    yq ".environments.${env}.account_id" "$INFRA_CONFIG_PATH"
+    local value
+    value=$(yq ".environments.${env}.account_id // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    value=$(normalize_yaml_scalar "$value")
+    if [ -n "$value" ] && ! is_unresolved_placeholder_value "$value"; then
+        echo "$value"
+        return 0
+    fi
+
+    value=$(get_environment_account_secret_value "$env" "account_id" 2>/dev/null || true)
+    if [ -z "$value" ] && [ -n "${ACCOUNT_ID:-}" ]; then
+        value="$ACCOUNT_ID"
+    fi
+    echo "$value"
+}
+
+get_environment_account_name() {
+    local env=$1
+    ensure_config_loaded || return 1
+    local value
+    value=$(yq ".environments.${env}.account_name // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    value=$(normalize_yaml_scalar "$value")
+    if [ -n "$value" ] && ! is_unresolved_placeholder_value "$value"; then
+        echo "$value"
+        return 0
+    fi
+
+    value=$(get_environment_account_secret_value "$env" "account_name" 2>/dev/null || true)
+    echo "$value"
 }
 
 # Get environment region
 get_environment_region() {
     local env=$1
     ensure_config_loaded || return 1
-    local region=$(yq ".environments.${env}.region" "$INFRA_CONFIG_PATH")
+    local region=$(yq ".environments.${env}.region // \"\"" "$INFRA_CONFIG_PATH")
+    region=$(normalize_yaml_scalar "$region")
     if [ "$region" = "null" ] || [ -z "$region" ]; then
         get_default_region
     else
@@ -118,14 +302,30 @@ get_environment_region() {
 get_environment_profile() {
     local env=$1
     ensure_config_loaded || return 1
-    yq ".environments.${env}.deployer_profile" "$INFRA_CONFIG_PATH"
+    local value
+    value=$(yq ".environments.${env}.deployer_profile // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    value=$(normalize_yaml_scalar "$value")
+    if [ -n "$value" ] && ! is_unresolved_placeholder_value "$value"; then
+        echo "$value"
+        return 0
+    fi
+
+    value=$(get_environment_account_secret_value "$env" "deployer_profile" 2>/dev/null || true)
+    [ -z "$value" ] && value=$(get_environment_account_secret_value "$env" "deploy_profile" 2>/dev/null || true)
+    [ -z "$value" ] && value=$(get_environment_account_secret_value "$env" "cli_profile" 2>/dev/null || true)
+    [ -z "$value" ] && value=$(get_environment_account_secret_value "$env" "bootstrap_profile" 2>/dev/null || true)
+    echo "$value"
 }
 
 # Get environment CLI role name (IAM role in the account)
 get_environment_cli_role_name() {
     local env=$1
     ensure_config_loaded || return 1
-    local name=$(yq ".environments.${env}.cli_role_name" "$INFRA_CONFIG_PATH")
+    local name=$(yq ".environments.${env}.cli_role_name // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    name=$(normalize_yaml_scalar "$name")
+    if [ -z "$name" ]; then
+        name=$(get_environment_account_secret_value "$env" "cli_role_name" 2>/dev/null || true)
+    fi
     if [ "$name" = "null" ] || [ -z "$name" ]; then
         local project_name=$(get_project_name)
         echo "${project_name}-${env}-admin-cli-role"
@@ -138,7 +338,14 @@ get_environment_cli_role_name() {
 get_environment_cli_profile_name() {
     local env=$1
     ensure_config_loaded || return 1
-    local name=$(yq ".environments.${env}.cli_profile_name" "$INFRA_CONFIG_PATH")
+    local name=$(yq ".environments.${env}.cli_profile_name // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    name=$(normalize_yaml_scalar "$name")
+    if [ -z "$name" ]; then
+        name=$(get_environment_account_secret_value "$env" "cli_profile_name" 2>/dev/null || true)
+    fi
+    [ -z "$name" ] && name=$(get_environment_account_secret_value "$env" "cli_profile" 2>/dev/null || true)
+    [ -z "$name" ] && name=$(get_environment_account_secret_value "$env" "deploy_profile" 2>/dev/null || true)
+    [ -z "$name" ] && name=$(get_environment_account_secret_value "$env" "bootstrap_profile" 2>/dev/null || true)
     if [ "$name" = "null" ] || [ -z "$name" ]; then
         local project_name=$(get_project_name)
         echo "${project_name}-${env}-cli"
@@ -151,17 +358,28 @@ get_environment_cli_profile_name() {
 get_environment_secrets_file() {
     local env=$1
     ensure_config_loaded || return 1
-    local project_root=$(get_project_root)
-    local secrets_path=$(yq ".environments.${env}.secrets_file" "$INFRA_CONFIG_PATH")
-    echo "$project_root/infra/$secrets_path"
+    local secrets_path
+    secrets_path=$(yq ".environments.${env}.secrets_file // \"\"" "$INFRA_CONFIG_PATH")
+    secrets_path=$(normalize_yaml_scalar "$secrets_path")
+    if [ -z "$secrets_path" ]; then
+        local project_root
+        project_root=$(get_project_root)
+        echo "$project_root/infra/secrets/${env}.secrets.yaml"
+        return 0
+    fi
+    resolve_project_path "$secrets_path"
 }
 
 # Get environment VPC ID
 get_environment_vpc_id() {
     local env=$1
     ensure_config_loaded || return 1
-    local vpc_id=$(yq ".environments.${env}.vpc_id" "$INFRA_CONFIG_PATH")
-    [ "$vpc_id" = "null" ] && vpc_id=""
+    local vpc_id=$(yq ".environments.${env}.vpc_id // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    vpc_id=$(normalize_yaml_scalar "$vpc_id")
+    if [ -z "$vpc_id" ] || is_unresolved_placeholder_value "$vpc_id"; then
+        vpc_id=$(get_secret_value "$env" "config_secrets.VPC_ID" 2>/dev/null || true)
+        vpc_id=$(normalize_yaml_scalar "$vpc_id")
+    fi
     echo "$vpc_id"
 }
 
@@ -169,8 +387,12 @@ get_environment_vpc_id() {
 get_environment_subnet_ids() {
     local env=$1
     ensure_config_loaded || return 1
-    local subnet_ids=$(yq ".environments.${env}.subnet_ids" "$INFRA_CONFIG_PATH")
-    [ "$subnet_ids" = "null" ] && subnet_ids=""
+    local subnet_ids=$(yq ".environments.${env}.subnet_ids // \"\"" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    subnet_ids=$(normalize_yaml_scalar "$subnet_ids")
+    if [ -z "$subnet_ids" ] || is_unresolved_placeholder_value "$subnet_ids"; then
+        subnet_ids=$(get_secret_value "$env" "config_secrets.SUBNET_IDS" 2>/dev/null || true)
+        subnet_ids=$(normalize_yaml_scalar "$subnet_ids")
+    fi
     echo "$subnet_ids"
 }
 
@@ -178,8 +400,7 @@ get_environment_subnet_ids() {
 environment_exists() {
     local env=$1
     ensure_config_loaded || return 1
-    local account_id=$(yq ".environments.${env}.account_id" "$INFRA_CONFIG_PATH")
-    [ "$account_id" != "null" ] && [ -n "$account_id" ]
+    yq -e ".environments | has(\"${env}\")" "$INFRA_CONFIG_PATH" >/dev/null 2>&1
 }
 
 # =============================================================================
@@ -197,7 +418,7 @@ is_resource_enabled() {
 # Get list of all resources (in order defined in yaml)
 get_resource_list() {
     ensure_config_loaded || return 1
-    yq '.resources | keys | .[]' "$INFRA_CONFIG_PATH"
+    yq '.resources | to_entries | .[] | .key' "$INFRA_CONFIG_PATH"
 }
 
 # Get list of enabled resources (in order defined in yaml)
@@ -206,12 +427,130 @@ get_enabled_resources() {
     yq '.resources | to_entries | .[] | select(.value.enabled == true) | .key' "$INFRA_CONFIG_PATH"
 }
 
+deployment_set_exists() {
+    local deployment_set=$1
+    ensure_config_loaded || return 1
+
+    if ! yq -e '.deployment_sets // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        [ "$deployment_set" = "full" ]
+        return $?
+    fi
+
+    DEPLOYMENT_SET="$deployment_set" yq -e '.deployment_sets | has(strenv(DEPLOYMENT_SET))' "$INFRA_CONFIG_PATH" >/dev/null 2>&1
+}
+
+validate_deployment_set() {
+    local deployment_set=${1:-full}
+    ensure_config_loaded || return 1
+
+    if ! deployment_set_exists "$deployment_set"; then
+        print_error "Unknown deployment set: $deployment_set"
+        return 1
+    fi
+
+    if ! yq -e '.deployment_sets // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local resource_tag
+    resource_tag=$(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].resources | tag' "$INFRA_CONFIG_PATH" 2>/dev/null)
+
+    case "$resource_tag" in
+        "!!str")
+            local resource_value
+            resource_value=$(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].resources' "$INFRA_CONFIG_PATH")
+            if [ "$resource_value" != "all" ]; then
+                print_error "deployment_sets.${deployment_set}.resources must be 'all' or a list of resource keys"
+                return 1
+            fi
+            ;;
+        "!!seq")
+            local resource
+            while IFS= read -r resource; do
+                [ -z "$resource" ] && continue
+                if ! RESOURCE_KEY="$resource" yq -e '.resources | has(strenv(RESOURCE_KEY))' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+                    print_error "deployment_sets.${deployment_set}.resources references unknown resource: $resource"
+                    return 1
+                fi
+            done < <(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].resources[]' "$INFRA_CONFIG_PATH")
+            ;;
+        *)
+            print_error "deployment_sets.${deployment_set}.resources must be 'all' or a list of resource keys"
+            return 1
+            ;;
+    esac
+}
+
+get_deployment_set_resources() {
+    local deployment_set=${1:-full}
+    ensure_config_loaded || return 1
+
+    if ! yq -e '.deployment_sets // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        get_enabled_resources
+        return 0
+    fi
+
+    validate_deployment_set "$deployment_set" >/dev/null || return 1
+
+    local resource_tag
+    resource_tag=$(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].resources | tag' "$INFRA_CONFIG_PATH" 2>/dev/null)
+    if [ "$resource_tag" = "!!str" ]; then
+        get_enabled_resources
+        return 0
+    fi
+
+    local selected_resources="|"
+    local resource
+    while IFS= read -r resource; do
+        [ -z "$resource" ] && continue
+        selected_resources="${selected_resources}${resource}|"
+    done < <(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].resources[]' "$INFRA_CONFIG_PATH")
+
+    while IFS= read -r resource; do
+        [ -z "$resource" ] && continue
+        if [[ "$selected_resources" == *"|${resource}|"* ]]; then
+            echo "$resource"
+        fi
+    done < <(get_enabled_resources)
+}
+
+is_deployment_set_cost_control_enabled() {
+    local deployment_set=${1:-full}
+    ensure_config_loaded || return 1
+
+    if ! yq -e '.deployment_sets // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local enabled
+    enabled=$(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].deploy_cost_control' "$INFRA_CONFIG_PATH")
+    if [ "$enabled" = "null" ] || [ -z "$enabled" ]; then
+        enabled=true
+    fi
+    [ "$enabled" = "true" ]
+}
+
+is_deployment_set_config_enabled() {
+    local deployment_set=${1:-full}
+    ensure_config_loaded || return 1
+
+    if ! yq -e '.deployment_sets // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local enabled
+    enabled=$(DEPLOYMENT_SET="$deployment_set" yq -r '.deployment_sets[strenv(DEPLOYMENT_SET)].deploy_config' "$INFRA_CONFIG_PATH")
+    if [ "$enabled" = "null" ] || [ -z "$enabled" ]; then
+        enabled=true
+    fi
+    [ "$enabled" = "true" ]
+}
+
 # Get resource template path
 get_resource_template() {
     local resource=$1
     local template_key=${2:-template}  # Default to 'template', can be 'main', 'secret', etc.
     ensure_config_loaded || return 1
-    local project_root=$(get_project_root)
     
     # Check if it's a single template or multiple templates
     local template_path=$(yq ".resources.${resource}.template" "$INFRA_CONFIG_PATH")
@@ -221,8 +560,58 @@ get_resource_template() {
     fi
     
     if [ "$template_path" != "null" ] && [ -n "$template_path" ]; then
-        echo "$project_root/infra/$template_path"
+        resolve_project_path "$template_path"
     fi
+}
+
+get_environment_global_suffix() {
+    local env=$1
+    local value
+    value=$(get_environment_account_secret_value "$env" "global_suffix" 2>/dev/null || true)
+    if [ -n "$value" ]; then
+        echo "$value"
+        return 0
+    fi
+
+    if [ -n "${GLOBAL_SUFFIX:-}" ]; then
+        echo "$GLOBAL_SUFFIX"
+        return 0
+    fi
+
+    if [ -n "${ACCOUNT_ID:-}" ]; then
+        echo "$ACCOUNT_ID"
+        return 0
+    fi
+
+    # Fallback for local summaries before accounts.secrets.yaml exists. This is not
+    # globally unique; real deployments should set a stable global_suffix in account
+    # secrets. The full AWS account ID is convenient, but any account-unique value is valid.
+    echo "local"
+}
+
+substitute_config_tokens() {
+    local value=$1
+    local env=${2:-}
+    ensure_config_loaded || return 1
+
+    local project_name
+    project_name=$(get_project_name)
+    value="${value//\{project\}/$project_name}"
+
+    if [ -n "$env" ]; then
+        local account account_id region global_suffix
+        account=$(get_environment_account_key "$env" 2>/dev/null || true)
+        account_id=$(get_environment_account_id "$env" 2>/dev/null || true)
+        region=$(get_environment_region "$env" 2>/dev/null || true)
+        global_suffix=$(get_environment_global_suffix "$env" 2>/dev/null || true)
+        value="${value//\{env\}/$env}"
+        value="${value//\{account\}/$account}"
+        value="${value//\{account_id\}/$account_id}"
+        value="${value//\{region\}/$region}"
+        value="${value//\{global_suffix\}/$global_suffix}"
+    fi
+
+    echo "$value"
 }
 
 # Get resource stack name (with variable substitution)
@@ -232,18 +621,18 @@ get_resource_stack_name() {
     local stack_key=${3:-stack_name}  # Can be 'stack_name', 'secret_stack_name', etc.
     ensure_config_loaded || return 1
     
-    local project_name=$(get_project_name)
-    local stack_pattern=$(yq ".resources.${resource}.${stack_key}" "$INFRA_CONFIG_PATH")
+    local stack_pattern
+    if [ "$stack_key" = "stack_name" ]; then
+        stack_pattern=$(yq ".resources.${resource}.stack_name" "$INFRA_CONFIG_PATH")
+    else
+        stack_pattern=$(yq ".resources.${resource}.${stack_key} // .resources.${resource}.secondary_stacks.${stack_key}.stack_name" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    fi
     
     if [ "$stack_pattern" = "null" ] || [ -z "$stack_pattern" ]; then
         return 1
     fi
     
-    # Substitute variables
-    stack_pattern="${stack_pattern//\{project\}/$project_name}"
-    stack_pattern="${stack_pattern//\{env\}/$env}"
-    
-    echo "$stack_pattern"
+    substitute_config_tokens "$stack_pattern" "$env"
 }
 
 # Get resource config value (with variable substitution)
@@ -257,9 +646,7 @@ get_resource_config() {
     
     # Substitute variables if env is provided
     if [ -n "$env" ] && [ "$value" != "null" ]; then
-        local project_name=$(get_project_name)
-        value="${value//\{project\}/$project_name}"
-        value="${value//\{env\}/$env}"
+        value=$(substitute_config_tokens "$value" "$env")
     fi
     
     echo "$value"
@@ -280,7 +667,7 @@ is_role_enabled() {
 # Get list of all roles (in order defined in yaml)
 get_role_list() {
     ensure_config_loaded || return 1
-    yq '.roles | keys | .[]' "$INFRA_CONFIG_PATH"
+    yq '.roles | to_entries | .[] | .key' "$INFRA_CONFIG_PATH"
 }
 
 # Get list of enabled roles (in order defined in yaml)
@@ -297,7 +684,7 @@ get_role_template() {
     local template_path=$(yq ".roles.${role}.template" "$INFRA_CONFIG_PATH")
     
     if [ "$template_path" != "null" ] && [ -n "$template_path" ]; then
-        echo "$project_root/infra/$template_path"
+        resolve_project_path "$template_path"
     fi
 }
 
@@ -307,18 +694,13 @@ get_role_stack_name() {
     local env=$2
     ensure_config_loaded || return 1
     
-    local project_name=$(get_project_name)
     local stack_pattern=$(yq ".roles.${role}.stack_name" "$INFRA_CONFIG_PATH")
     
     if [ "$stack_pattern" = "null" ] || [ -z "$stack_pattern" ]; then
         return 1
     fi
     
-    # Substitute variables
-    stack_pattern="${stack_pattern//\{project\}/$project_name}"
-    stack_pattern="${stack_pattern//\{env\}/$env}"
-    
-    echo "$stack_pattern"
+    substitute_config_tokens "$stack_pattern" "$env"
 }
 
 # Get role policies (for roles with multiple policies)
@@ -330,7 +712,7 @@ get_role_policies() {
     local policies=$(yq ".roles.${role}.policies[]" "$INFRA_CONFIG_PATH" 2>/dev/null)
     if [ -n "$policies" ]; then
         while IFS= read -r policy; do
-            echo "$project_root/infra/$policy"
+            resolve_project_path "$policy"
         done <<< "$policies"
     fi
 }
@@ -455,7 +837,16 @@ get_deployment_order() {
 
 # Get teardown order for resources (reverse of deployment)
 get_teardown_order() {
-    get_enabled_resources | tac
+    local resources=()
+    local resource
+    while IFS= read -r resource; do
+        [ -n "$resource" ] && resources+=("$resource")
+    done < <(get_resource_list)
+
+    local i
+    for (( i=${#resources[@]}-1; i>=0; i-- )); do
+        echo "${resources[$i]}"
+    done
 }
 
 # Get all resources (enabled or not) for teardown check
@@ -471,13 +862,19 @@ get_all_resources() {
 print_environments() {
     ensure_config_loaded || return 1
     print_info "Available environments:"
-    for env in dev staging prod; do
+    local env
+    while IFS= read -r env; do
         if environment_exists "$env"; then
             local account_id=$(get_environment_account_id "$env")
+            local account_key=$(get_environment_account_key "$env")
             local region=$(get_environment_region "$env")
-            print_info "  $env: account=$account_id, region=$region"
+            if [ -n "$account_id" ]; then
+                print_info "  $env: account=$account_key ($account_id), region=$region"
+            else
+                print_info "  $env: account=$account_key, region=$region"
+            fi
         fi
-    done
+    done < <(get_environment_names)
 }
 
 # Validate configuration for an environment
@@ -493,10 +890,15 @@ validate_config() {
         return 1
     fi
     
-    # Check required fields
-    local account_id=$(get_environment_account_id "$env")
-    if [ "$account_id" = "null" ] || [ -z "$account_id" ]; then
-        print_error "Missing account_id for environment: $env"
+    local account_key
+    account_key=$(get_environment_account_key "$env")
+    if [ -z "$account_key" ]; then
+        print_error "Missing account reference for environment: $env"
+        return 1
+    fi
+
+    if yq -e '.accounts // false' "$INFRA_CONFIG_PATH" >/dev/null 2>&1 && ! yq -e ".accounts | has(\"${account_key}\")" "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        print_error "Environment '$env' references unknown account '$account_key'"
         return 1
     fi
     
@@ -547,6 +949,12 @@ validate_config() {
         fi
     fi
     
+    local account_id
+    account_id=$(get_environment_account_id "$env")
+    if [ -z "$account_id" ]; then
+        print_warning "No account_id found for '$env'. Add it to $(get_accounts_secrets_file) before deploying."
+    fi
+
     print_complete "Configuration validation successful"
     return 0
 }
