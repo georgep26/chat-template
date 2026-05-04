@@ -278,6 +278,188 @@ clear_cognito_outputs_from_secrets() {
     yq -i '.config_secrets.COGNITO_APP_CLIENT_ID = ""' "$secrets_file"
     yq -i '.config_secrets.COGNITO_ISSUER_URL = ""' "$secrets_file"
     yq -i '.config_secrets.COGNITO_HOSTED_UI_DOMAIN = ""' "$secrets_file"
+
+    # Reset bootstrap-user passwords; usernames stay so the same identities are
+    # recreated on next deploy. Avoids stale-password reuse after pool recreation.
+    local user_keys
+    user_keys=$(yq -r '.cognito_users // {} | keys | .[]' "$secrets_file" 2>/dev/null || true)
+    if [ -n "$user_keys" ]; then
+        while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            yq -i ".cognito_users.${key}.password = \"\"" "$secrets_file"
+        done <<< "$user_keys"
+    fi
+}
+
+# Resolve CloudFront origin from the frontend stack output. Returns empty if
+# the frontend stack does not exist yet (e.g., very first deploy of an env).
+get_cloudfront_origin() {
+    local fe_stack
+    fe_stack=$(get_resource_stack_name "frontend" "$ENVIRONMENT" 2>/dev/null || true)
+    [ -z "$fe_stack" ] && return 0
+
+    if ! aws_cmd cloudformation describe-stacks --stack-name "$fe_stack" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local cf_domain
+    cf_domain=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$fe_stack" \
+        --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue | [0]" \
+        --output text 2>/dev/null)
+
+    if [ -n "$cf_domain" ] && [ "$cf_domain" != "None" ] && [ "$cf_domain" != "null" ]; then
+        echo "https://${cf_domain}"
+    fi
+}
+
+# Append a value to a comma-delimited list if not already present.
+append_csv_unique() {
+    local existing="$1"
+    local value="$2"
+    [ -z "$value" ] && { echo "$existing"; return 0; }
+
+    local IFS=','
+    for item in $existing; do
+        item="${item## }"
+        item="${item%% }"
+        if [ "$item" = "$value" ]; then
+            echo "$existing"
+            return 0
+        fi
+    done
+    if [ -z "$existing" ]; then
+        echo "$value"
+    else
+        echo "${existing},${value}"
+    fi
+}
+
+# Generate a Cognito-policy-compliant password (lower + upper + digit, no symbols
+# required by template). Uses /dev/urandom; loops until all character classes
+# are present. No fixed prefix — avoids fingerprinting.
+generate_cognito_password() {
+    local pw=""
+    local attempts=0
+    while [ $attempts -lt 10 ]; do
+        pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+        if echo "$pw" | LC_ALL=C grep -q '[a-z]' \
+           && echo "$pw" | LC_ALL=C grep -q '[A-Z]' \
+           && echo "$pw" | LC_ALL=C grep -q '[0-9]'; then
+            echo "$pw"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+    done
+    print_error "Failed to generate a compliant password after 10 attempts"
+    return 1
+}
+
+# Bootstrap Cognito users from the env secrets file.
+# Idempotent: existing users are left as-is; passwords are persisted to the
+# secrets file BEFORE any AWS call so a partial-failure re-run reuses the same
+# password rather than orphaning a previously-set one.
+ensure_cognito_users() {
+    local user_pool_id="$1"
+    [ -z "$user_pool_id" ] && return 0
+
+    if ! command -v yq >/dev/null 2>&1; then
+        print_warning "yq not found; skipping Cognito user bootstrap"
+        return 0
+    fi
+
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null || true)
+    if [ -z "$secrets_file" ] || [ ! -f "$secrets_file" ]; then
+        print_warning "Secrets file not found for $ENVIRONMENT; skipping Cognito user bootstrap"
+        return 0
+    fi
+
+    local user_keys
+    user_keys=$(yq -r '.cognito_users // {} | keys | .[]' "$secrets_file" 2>/dev/null || true)
+    if [ -z "$user_keys" ]; then
+        print_info "No cognito_users block in secrets file; skipping user bootstrap"
+        return 0
+    fi
+
+    print_step "Bootstrapping Cognito users for pool $user_pool_id"
+
+    while IFS= read -r key; do
+        [ -z "$key" ] && continue
+
+        local username password
+        username=$(yq -r ".cognito_users.${key}.username // \"\"" "$secrets_file" 2>/dev/null)
+        if [ -z "$username" ] || [ "$username" = "null" ]; then
+            print_warning "  cognito_users.${key}.username is empty; skipping"
+            continue
+        fi
+
+        password=$(yq -r ".cognito_users.${key}.password // \"\"" "$secrets_file" 2>/dev/null)
+        [ "$password" = "null" ] && password=""
+
+        if [ -z "$password" ]; then
+            password=$(generate_cognito_password) || return 1
+            # Persist BEFORE any AWS call so a retry reuses this password.
+            yq -i ".cognito_users.${key}.password = \"${password}\"" "$secrets_file"
+        fi
+
+        # Probe for existing user. admin-get-user returns non-zero on UserNotFoundException.
+        if aws_cmd cognito-idp admin-get-user \
+            --user-pool-id "$user_pool_id" \
+            --username "$username" >/dev/null 2>&1; then
+            print_info "  ${key}: user '${username}' already exists; leaving as-is"
+            continue
+        fi
+
+        # Create user via temp file to avoid leaking password in process listing.
+        local create_payload set_pw_payload
+        create_payload=$(mktemp)
+        set_pw_payload=$(mktemp)
+        chmod 600 "$create_payload" "$set_pw_payload"
+        # shellcheck disable=SC2064
+        trap "rm -f '$create_payload' '$set_pw_payload'" RETURN
+
+        cat > "$create_payload" <<EOF
+{
+  "UserPoolId": "${user_pool_id}",
+  "Username": "${username}",
+  "MessageAction": "SUPPRESS",
+  "UserAttributes": [
+    {"Name": "email", "Value": "${username}"},
+    {"Name": "email_verified", "Value": "true"}
+  ]
+}
+EOF
+        if ! aws_cmd cognito-idp admin-create-user \
+            --cli-input-json "file://${create_payload}" >/dev/null 2>&1; then
+            print_error "  ${key}: failed to create user '${username}'"
+            rm -f "$create_payload" "$set_pw_payload"
+            trap - RETURN
+            return 1
+        fi
+
+        cat > "$set_pw_payload" <<EOF
+{
+  "UserPoolId": "${user_pool_id}",
+  "Username": "${username}",
+  "Password": "${password}",
+  "Permanent": true
+}
+EOF
+        if ! aws_cmd cognito-idp admin-set-user-password \
+            --cli-input-json "file://${set_pw_payload}" >/dev/null 2>&1; then
+            print_error "  ${key}: failed to set permanent password for '${username}'"
+            rm -f "$create_payload" "$set_pw_payload"
+            trap - RETURN
+            return 1
+        fi
+
+        rm -f "$create_payload" "$set_pw_payload"
+        trap - RETURN
+        print_info "  ${key}: created '${username}' and set permanent password"
+    done <<< "$user_keys"
+
+    print_complete "Cognito user bootstrap complete"
 }
 
 do_validate_template() {
@@ -312,6 +494,19 @@ show_status() {
 }
 
 deploy_stack() {
+    # Append CloudFront origin from the deployed frontend stack to the
+    # callback/logout URL lists so the deployed SPA can complete OAuth
+    # round-trips. Only applied when no explicit override was passed.
+    if [ -z "$CALLBACK_URLS_OVERRIDE" ] && [ -z "$LOGOUT_URLS_OVERRIDE" ]; then
+        local cf_origin
+        cf_origin=$(get_cloudfront_origin)
+        if [ -n "$cf_origin" ]; then
+            CALLBACK_URLS=$(append_csv_unique "$CALLBACK_URLS" "${cf_origin}/auth/callback")
+            LOGOUT_URLS=$(append_csv_unique "$LOGOUT_URLS" "${cf_origin}/")
+            print_info "Discovered CloudFront origin: $cf_origin"
+        fi
+    fi
+
     print_resource_summary "$RESOURCE_NAME" "$ENVIRONMENT" "$ACTION"
     print_info "User Pool Name: $USER_POOL_NAME"
     print_info "App Client Name: $APP_CLIENT_NAME"
@@ -414,6 +609,8 @@ EOF
     [ -n "$hosted_ui_domain" ] && [ "$hosted_ui_domain" != "None" ] && print_info "Hosted UI Domain: $hosted_ui_domain"
 
     write_cognito_outputs_to_secrets "$user_pool_id" "$app_client_id" "$issuer_url" "$hosted_ui_domain" || true
+
+    ensure_cognito_users "$user_pool_id" || print_warning "Cognito user bootstrap failed (non-fatal)"
 }
 
 delete_stack() {
