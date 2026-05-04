@@ -98,7 +98,7 @@ This directory is gitignored. It is local convenience state and should be recons
 
 ## Deployment Scripts
 
-`deploy_all.sh` reads enabled resources from `infra.yaml` and calls handlers by convention:
+`deploy_all.sh` reads enabled resources from `infra.yaml`, filters them by the selected deployment set, and calls handlers by convention:
 
 ```text
 resources.<resource_key> -> scripts/deploy/resources/<resource_key>.sh
