@@ -2,7 +2,7 @@
 
 # VPC Network Deployment Script
 # This script deploys the VPC, subnets, security groups, and VPC endpoints
-# All configuration is read from infra.yaml
+# All configuration is read from infra.yaml and uncommitted environment secrets.
 #
 # Usage Examples:
 #   # Deploy to development environment
@@ -137,7 +137,7 @@ ENABLE_NAT_GATEWAY=$(get_resource_config "$RESOURCE_NAME" "enable_nat_gateway" "
 [ "$VPC_CIDR" = "null" ] || [ -z "$VPC_CIDR" ] && VPC_CIDR="10.0.0.0/16"
 [ "$ENABLE_NAT_GATEWAY" = "null" ] || [ -z "$ENABLE_NAT_GATEWAY" ] && ENABLE_NAT_GATEWAY=false
 
-# When use_defaults is true: read VPC ID from environments.<env>.vpc_id (the canonical location).
+# When use_defaults is true: read VPC ID from environment config/secrets.
 EXISTING_VPC_ID=$(get_environment_vpc_id "$ENVIRONMENT")
 
 
@@ -281,24 +281,32 @@ discover_vpc() {
     return 1
 }
 
-# Write the discovered/verified VPC ID and subnet IDs back to infra.yaml under environments.<env>.
-write_vpc_to_infra_yaml() {
+# Write the discovered/verified VPC ID and subnet IDs to environment secrets.
+write_vpc_to_environment_secrets() {
     local vpc_id=$1
     local subnet_csv=$2   # comma-separated subnet IDs
 
-    print_step "Recording VPC info in infra.yaml for $ENVIRONMENT environment"
+    print_step "Recording VPC info in environment secrets for $ENVIRONMENT"
 
-    yq -i ".environments.${ENVIRONMENT}.vpc_id = \"${vpc_id}\"" "$INFRA_CONFIG_PATH"
-    yq -i ".environments.${ENVIRONMENT}.subnet_ids = \"${subnet_csv}\"" "$INFRA_CONFIG_PATH"
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT")
+    if [ ! -f "$secrets_file" ]; then
+        cp "$(get_project_root)/infra/secrets/template.environment.secrets.yaml" "$secrets_file"
+    fi
 
-    print_complete "Wrote vpc_id=$vpc_id and subnet_ids to infra.yaml (environments.$ENVIRONMENT)"
+    yq -i ".config_secrets.VPC_ID = \"${vpc_id}\"" "$secrets_file"
+    yq -i ".config_secrets.SUBNET_IDS = \"${subnet_csv}\"" "$secrets_file"
+    yq -i ".github_environment_secrets.VPC_ID = \"${vpc_id}\"" "$secrets_file"
+    yq -i ".github_environment_secrets.SUBNET_IDS = \"${subnet_csv}\"" "$secrets_file"
+
+    print_complete "Wrote VPC_ID and SUBNET_IDS to $secrets_file"
 }
 
 # Run the full use_defaults VPC flow:
 #   1. If environments.<env>.vpc_id is set, verify it exists
 #   2. If not set, discover (default VPC -> first VPC)
 #   3. Verify subnets and security group
-#   4. Write vpc_id and subnet_ids back to infra.yaml
+#   4. Write vpc_id and subnet_ids to the environment secrets file
 run_use_defaults_vpc_check() {
     local vpc_id="$EXISTING_VPC_ID"
 
@@ -313,15 +321,15 @@ run_use_defaults_vpc_check() {
     # Step 3: Verify the VPC and get subnets
     check_existing_vpc_resources "$vpc_id" || return 1
 
-    # Collect subnet IDs as comma-separated for writing to infra.yaml
+    # Collect subnet IDs as comma-separated for writing to the environment secrets file.
     local subnet_ids_csv
     subnet_ids_csv=$(aws_cmd ec2 describe-subnets \
         --filters "Name=vpc-id,Values=$vpc_id" \
         --query 'Subnets[*].SubnetId' \
         --output text 2>/dev/null | tr '\t' ',')
 
-    # Step 4: Write back to infra.yaml
-    write_vpc_to_infra_yaml "$vpc_id" "$subnet_ids_csv"
+    # Step 4: Write to environment secrets
+    write_vpc_to_environment_secrets "$vpc_id" "$subnet_ids_csv"
 
     return 0
 }
