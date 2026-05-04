@@ -35,12 +35,12 @@ Accepted as-is unless the user asks otherwise:
 
 ## Report Location
 
-Write generated security reports to `docs/working_files/security_reports/` unless the user explicitly asks for a committed report elsewhere.
+Write generated security reports to `docs/security_reports/` unless the user explicitly asks for a different location.
 
 Use a dated filename:
 
 ```text
-docs/working_files/security_reports/security_report_YYYY_M_D.md
+docs/security_reports/security_report_YYYY_M_D.md
 ```
 
 Create the folder if needed.
