@@ -6,7 +6,7 @@
 #
 # Configuration:
 #   Default settings are loaded from infra/infra.yaml and environment-specific secrets
-#   files (e.g., infra/secrets/dev_secrets.yaml). All command-line flags are optional
+#   files (e.g., infra/secrets/dev.secrets.yaml). All command-line flags are optional
 #   and will override the corresponding settings from the configuration files.
 #
 # Usage Examples:
@@ -53,10 +53,8 @@ show_usage() {
     echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
-    echo "Environments:"
-    echo "  dev       - Development environment"
-    echo "  staging   - Staging environment"
-    echo "  prod      - Production environment"
+    echo "Environment:"
+    echo "  Any environment defined in infra/infra.yaml"
     echo ""
     echo "Actions:"
     echo "  deploy    - Deploy the stack (default)"
@@ -67,7 +65,7 @@ show_usage() {
     echo ""
     echo "Configuration:"
     echo "  Default settings are loaded from infra/infra.yaml and environment-specific secrets"
-    echo "  files (e.g., infra/secrets/dev_secrets.yaml). All command-line flags are optional"
+    echo "  files (e.g., infra/secrets/dev.secrets.yaml). All command-line flags are optional"
     echo "  and will override the corresponding settings from the configuration files."
     echo ""
     echo "Options (all optional - override infra/infra.yaml settings):"
@@ -271,37 +269,63 @@ aws_cmd() {
     fi
 }
 
-# Write db_cluster_arn and db_credentials_secret_arn to infra.yaml under environments.<env>
-write_db_outputs_to_infra_yaml() {
+# Write db_cluster_arn and db_credentials_secret_arn to environment secrets/state.
+write_db_outputs() {
     ensure_config_loaded || return 1
     local account_id
-    account_id=$(yq -r ".environments.${ENVIRONMENT}.account_id" "$INFRA_CONFIG_PATH" 2>/dev/null)
+    account_id=$(get_environment_account_id "$ENVIRONMENT" 2>/dev/null || true)
     if [ -z "$account_id" ] || [ "$account_id" = "null" ]; then
-        print_warning "Could not read account_id for $ENVIRONMENT; skipping infra.yaml write"
-        return 1
+        account_id=$(aws_cmd sts get-caller-identity --query Account --output text 2>/dev/null || true)
     fi
+
+    local secrets_file
+    secrets_file=$(get_environment_secrets_file "$ENVIRONMENT")
+    if [ ! -f "$secrets_file" ]; then
+        cp "$(get_project_root)/infra/secrets/template.environment.secrets.yaml" "$secrets_file"
+    fi
+
+    local state_dir state_file
+    state_dir="$(get_project_root)/infra/state"
+    state_file="$state_dir/${ENVIRONMENT}.outputs.json"
+    mkdir -p "$state_dir"
+
     # DB cluster ARN from main stack
     local cluster_id
     cluster_id=$(aws_cmd cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --query 'Stacks[0].Outputs[?OutputKey==`DBClusterIdentifier`].OutputValue' \
         --output text 2>/dev/null)
+    local db_cluster_arn=""
     if [ -n "$cluster_id" ] && [ "$cluster_id" != "None" ]; then
-        local db_cluster_arn="arn:aws:rds:${AWS_REGION}:${account_id}:cluster:${cluster_id}"
-        yq -i ".environments.${ENVIRONMENT}.db_cluster_arn = \"${db_cluster_arn}\"" "$INFRA_CONFIG_PATH"
-        print_complete "Wrote db_cluster_arn to infra.yaml (environments.$ENVIRONMENT)"
+        db_cluster_arn="arn:aws:rds:${AWS_REGION}:${account_id}:cluster:${cluster_id}"
+        yq -i ".config_secrets.DB_CLUSTER_ARN = \"${db_cluster_arn}\"" "$secrets_file"
+        print_complete "Wrote DB_CLUSTER_ARN to $secrets_file"
     fi
+
     # Secret ARN from secret stack (if it exists)
+    local secret_arn=""
     if aws_cmd cloudformation describe-stacks --stack-name "$SECRET_STACK_NAME" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
-        local secret_arn
         secret_arn=$(aws_cmd cloudformation describe-stacks \
             --stack-name "$SECRET_STACK_NAME" \
             --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
             --output text 2>/dev/null)
         if [ -n "$secret_arn" ] && [ "$secret_arn" != "None" ]; then
-            yq -i ".environments.${ENVIRONMENT}.db_credentials_secret_arn = \"${secret_arn}\"" "$INFRA_CONFIG_PATH"
-            print_complete "Wrote db_credentials_secret_arn to infra.yaml (environments.$ENVIRONMENT)"
+            yq -i ".config_secrets.DB_CREDENTIALS_SECRET_ARN = \"${secret_arn}\"" "$secrets_file"
+            print_complete "Wrote DB_CREDENTIALS_SECRET_ARN to $secrets_file"
         fi
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        if [ ! -f "$state_file" ]; then
+            echo '{}' > "$state_file"
+        fi
+        jq \
+            --arg stack "$STACK_NAME" \
+            --arg secret_stack "$SECRET_STACK_NAME" \
+            --arg cluster_arn "$db_cluster_arn" \
+            --arg secret_arn "$secret_arn" \
+            '.chat_db = {stack_name: $stack, secret_stack_name: $secret_stack, db_cluster_arn: $cluster_arn, db_credentials_secret_arn: $secret_arn}' \
+            "$state_file" > "${state_file}.tmp" && mv "${state_file}.tmp" "$state_file"
     fi
     return 0
 }
@@ -356,16 +380,11 @@ if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
 fi
 
 # Validate environment
-case $ENVIRONMENT in
-    dev|staging|prod)
-        print_info "Using environment: $ENVIRONMENT"
-        ;;
-    *)
-        print_error "Invalid environment: $ENVIRONMENT"
-        show_usage
-        exit 1
-        ;;
-esac
+validate_environment "$ENVIRONMENT" || {
+    show_usage
+    exit 1
+}
+print_info "Using environment: $ENVIRONMENT"
 
 # Check if template file exists
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -1028,8 +1047,8 @@ deploy_stack() {
             deploy_secret
         fi
         
-        # Write db_cluster_arn and db_credentials_secret_arn to infra.yaml
-        write_db_outputs_to_infra_yaml || true
+        # Write generated outputs to environment secrets/state, not committed infra.yaml.
+        write_db_outputs || true
         
         print_info "You can monitor the progress in the AWS Console or with:"
         if [ -n "$AWS_CLI_PROFILE" ]; then
@@ -1104,4 +1123,3 @@ case $ACTION in
 esac
 
 print_complete "Aurora DB operation completed successfully"
-
