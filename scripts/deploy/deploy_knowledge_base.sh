@@ -60,7 +60,7 @@ show_usage() {
     echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
-    echo "Environments: dev, staging, prod"
+    echo "Environment: any environment defined in infra/infra.yaml"
     echo "Actions: deploy (default), update, delete, validate, status"
     echo ""
     echo "Options (override infra.yaml when provided):"
@@ -1175,4 +1175,3 @@ case $ACTION in
 esac
 
 print_info "Knowledge Base operation completed successfully"
-
