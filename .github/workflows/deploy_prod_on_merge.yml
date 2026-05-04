@@ -1,12 +1,10 @@
-# On merge to main (push to main): run tests, promote validated staging artifacts,
-# deploy to prod, then run evals in prod. After this workflow completes (including
+# On merge to main (push to main): run tests, deploy prod from infra.yaml, then
+# run evals in prod. After this workflow completes (including
 # run-evaluations), Create Release on Merge to Main runs and creates the GitHub release.
 # Pushes that only add eval results (evals/eval_outputs/**) do not trigger this workflow.
 # Release eval results are written to evals/eval_outputs/published/<run_name>; local runs use evals/eval_outputs/local/ (gitignored).
 #
-# Standard process in this repo is full build/deploy per environment. This workflow
-# enables an optional promotion path for prod-on-main so prod reuses staging-validated
-# artifacts instead of rebuilding them.
+# Standard process in this repo is config-driven deployment sets per environment.
 name: Deploy to Prod on Merge to Main
 
 on:
@@ -33,21 +31,14 @@ jobs:
       contents: read
       pull-requests: write
 
-  # Deploy prod using staging-validated artifacts only (no rebuild).
-  # KB: deploy_all.sh runs deploy_knowledge_base.sh with --promote-kb-from-env staging (bucket-to-bucket transfer, then ingestion).
-  # RAG Lambda: deploy_rag_lambda.sh pulls image from staging ECR, pushes to prod ECR as :latest, then deploys.
+  # Deploy prod using the PR/runtime deployment set declared in infra.yaml.
   deploy-prod:
     name: Deploy to Prod
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: prod
-      skip_kb: false
-      skip_ecr: true
-      skip_lambda: false
-      promote_kb_from_env: staging
-      promote_lambda_from_env: staging
-      # Role ARNs are read from prod env secret STAGING_DEPLOYER_ROLE_ARN in deploy.yml when inputs are empty
+      deployment_set: pr
     secrets: inherit
 
   # Run evals after deploy so they run within the newly deployed prod environment.
