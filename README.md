@@ -1,6 +1,6 @@
 # RAG Chat Application
 
-A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities. The quickest way to get started is to use the /intro command with an AI agent like Cursor, GitHub Copilot, or Claude Code. Alternatively, you can follow the setup instructions below.
+A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AWS Bedrock, and Postgres. This application provides an agentic RAG pipeline with conversation memory, query enhancement, and evaluation capabilities. The quickest way to get started is to use the shared intro workflow (`/intro` in Cursor or Claude Code, the `intro` repo skill in Codex). Alternatively, you can follow the setup instructions below.
 
 ## Features
 
@@ -14,7 +14,7 @@ A RAG (Retrieval-Augmented Generation) chat application built with LangGraph, AW
 
 ## Development process
 
-Development uses a branch model: **main** (stable/production), **development** (integration), and feature or hotfix branches. Work flows via feature branch → PR to **development** → QA → PR to **main**; hotfixes go from a hotfix branch directly to **main**, then **main** is merged back to **development**. See [docs/development_process.md](docs/development_process.md) for the full workflow, GitHub Project pairing, PR review expectations, and hotfix process. Optional code quality hooks are in `.pre-commit-config.yaml` (disabled by default).
+Development uses a branch model: **main** (stable/production), **development** (integration), and feature or hotfix branches. Work flows via feature branch → PR to **development** → QA → PR to **main**; hotfixes go from a hotfix branch directly to **main**, then **main** is merged back to **development**. See [docs/development_process.md](docs/development_process.md) for the full workflow and [docs/github_standards.md](docs/github_standards.md) for Git, commit-message, PR, changelog, and GitHub Project standards. Optional code quality hooks are in `.pre-commit-config.yaml` (disabled by default).
 
 ## Setup
 
@@ -130,13 +130,19 @@ Create `data/eval_questions.csv` with columns `question` and `reference_answer` 
 
 - **Public repo strategy** ([.cursor/rules/public_repo_strategy.mdc](.cursor/rules/public_repo_strategy.mdc)): Templated configs with `${PLACEHOLDER}`; sensitive data in `infra/secrets/` and GitHub Environment secrets; [scripts/utils/hydrate_configs.sh](scripts/utils/hydrate_configs.sh) injects values at deploy time. Private forks can set `HYDRATE_CONFIGS=false` and commit real values.
 - **AWS deployment strategy** ([.cursor/rules/aws_strategy.mdc](.cursor/rules/aws_strategy.mdc)): All config from `infra/infra.yaml`; naming, tags, resource order, OIDC for GitHub Actions. See [docs/aws_naming_convention.md](docs/aws_naming_convention.md) for naming rules.
+- **GitHub standards** ([docs/github_standards.md](docs/github_standards.md)): Shared Git practice, commit-message, PR, changelog, and GitHub Project guidance for humans and coding agents.
+- **AI agent strategy** ([AGENTS.md](AGENTS.md), [ai_agents/README.md](ai_agents/README.md)): Shared instructions and prompts for Codex, Claude Code, and Cursor.
 - **Inexpensive deployment**: The default app config uses Aurora Data API for chat history so Lambda can run without VPC database access. [docs/lambda_vpc_s3_setup.md](docs/lambda_vpc_s3_setup.md) covers Lambda in VPC and S3 config loading; the original Aurora Data API decision notes now live in local working files.
 
 ## Directory structure
 
 ```
 chat-template/
-├── AGENT.md             # Agent configuration and instructions
+├── .agents/             # Codex repo skills
+├── .claude/             # Claude Code project skills
+├── .cursor/             # Cursor rules and slash command adapters
+├── AGENTS.md            # Canonical coding-agent instructions
+├── CLAUDE.md            # Claude Code shim that imports AGENTS.md
 ├── CHANGELOG.md         # Project changelog for version tracking
 ├── CONTRIBUTING.md      # Contribution guidelines
 ├── LICENSE              # Project license
@@ -145,6 +151,9 @@ chat-template/
 ├── environment.yml      # Conda environment definition
 ├── pyproject.toml       # Python project configuration and dependencies
 ├── requirements.txt     # Python dependencies
+├── ai_agents/           # Shared agent context indexes and workflow prompts
+│   ├── context/
+│   └── prompts/
 ├── config/              # Application configuration per environment
 │   ├── app_config.template.yaml  # Reference template
 │   ├── dev/
@@ -162,6 +171,7 @@ chat-template/
 │   ├── development_process.md
 │   ├── frontend_interface.md
 │   ├── github_environment_secrets.md
+│   ├── github_standards.md
 │   ├── lambda_vpc_s3_setup.md
 │   ├── oidc_github_identity_provider_setup.md
 │   └── working_files/       # Gitignored generated reports and working notes
@@ -242,7 +252,7 @@ chat-template/
 
 - **config/**: Per-environment application config (`config/<env>/app_config.yaml`). Contains RAG/Bedrock, memory backend, API, and logging settings. See [docs/config_structure.md](docs/config_structure.md) and [config/app_config.template.yaml](config/app_config.template.yaml).
 
-- **docs/**: Project documentation: deployment and development process, config structure, GitHub secrets, OIDC setup, AWS naming, Aurora Data API, Lambda/VPC/S3, code standards.
+- **docs/**: Project documentation: deployment and development process, config structure, GitHub standards, GitHub secrets, OIDC setup, AWS naming, Lambda/VPC/S3, and code standards.
 
 - **infra/**: Infrastructure as Code (IaC) definitions for deploying the application.
   - `resources/`: AWS CloudFormation templates for deploying infrastructure components (VPC, Lambda, database, knowledge base, etc.)
