@@ -43,7 +43,7 @@ Issue creation is the **create** action. Invoke github-pm and describe what you 
 
 - “Add support for multiple AWS regions in the deployment script”
 - “The deploy script fails when VPC ID is not set”
-- “Update the deploy_network.sh script to write VPC ID and subnet IDs to infra.yaml”
+- “Update the deploy_network.sh script to write VPC ID and subnet IDs to environment secrets”
 
 The agent will:
 
