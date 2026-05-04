@@ -39,4 +39,4 @@ New developers can use the "intro" slash command for onboarding.
 
 ## AI Agents
 
-AI agents should refer to `AGENT.md` for specific instructions.
+AI agents should refer to `AGENTS.md` for specific instructions.
