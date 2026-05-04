@@ -23,9 +23,9 @@ The agent reads and updates `docs/github-pm-notes.md` each run: it uses cached p
 | weekly-report | `weekly-report` | Generate report to `docs/github_project_reports/YYYY-MM-DD_weekly_report.md`. |
 | discussions | `discussions-to-issues` | List discussions, propose as issues; create only after user confirmation. |
 
-## Usage from Cursor
+## Usage from AI Agents
 
-Invoke the slash command (e.g. type `github-pm` or “project manager”) and describe what you want, for example:
+Invoke the `github-pm` workflow through Cursor, Claude Code, or Codex and describe what you want, for example:
 
 - “Check that gh is set up”
 - “Add an issue: Add dark mode”
@@ -35,7 +35,7 @@ Invoke the slash command (e.g. type `github-pm` or “project manager”) and de
 - “Generate the weekly report”
 - “Turn discussions into issues”
 
-The agent will run the appropriate `gh-pm` subcommand (with `required_permissions: ["all"]` for GitHub API access) and follow the confirmation gates described in [.cursor/commands/github-pm.md](../.cursor/commands/github-pm.md).
+The shared workflow contract is [ai_agents/prompts/github_pm.md](../ai_agents/prompts/github_pm.md). Tool-specific adapters in `.claude/skills` and `.agents/skills` should point to that shared prompt.
 
 ## Creating issues
 
@@ -62,5 +62,7 @@ For Epics or Initiatives, say so explicitly (e.g. “create an Epic for …”) 
 
 ## Script reference
 
-- Command contract: [.cursor/commands/github-pm.md](../.cursor/commands/github-pm.md)
-- Script and subcommands: [scripts/github-projects/README.md](../scripts/github-projects/README.md)
+- Command contract: [ai_agents/prompts/github_pm.md](../ai_agents/prompts/github_pm.md)
+- Shared/Codex/Cursor adapter: [.agents/skills/github-pm/SKILL.md](../.agents/skills/github-pm/SKILL.md)
+- Claude adapter: [.claude/skills/github-pm/SKILL.md](../.claude/skills/github-pm/SKILL.md)
+- Script and subcommands: [scripts/github-projects/gh-pm](../scripts/github-projects/gh-pm)

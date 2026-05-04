@@ -1,0 +1,10 @@
+---
+description: Shared GitHub, Git, PR, changelog, and commit-message standards
+alwaysApply: true
+---
+
+# GitHub Standards
+
+Follow @docs/github_standards.md for all Git, commit-message, pull request, changelog, and GitHub Project work.
+
+This rule replaces the old Cursor-only commit-message guidance in `.cursor/.cursorrules`. Do not define separate Cursor-only commit or PR standards.
