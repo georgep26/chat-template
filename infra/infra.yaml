@@ -149,7 +149,7 @@ budgets:
 # Hybrid cost control: AWS-native billing + near-realtime usage guardrails.
 # v1 uses scheduled polling (Option 1); v1.2 can add app-metered events (Option 3).
 cost_control:
-  enabled: true
+  enabled: false
   mode: enforce # observe | enforce
   stack_name: "{project}-cost-guard-{env}"
   budget:
@@ -334,8 +334,6 @@ resources:
   # VPC and networking
   network:
     enabled: true
-    category: infrastructure
-    credential: deploy
     ownership: imported
     # When true, deploy_network.sh does not create a CloudFormation stack. Instead it:
     #   1. Uses environments.<env>.vpc_id if set
@@ -353,8 +351,6 @@ resources:
   # S3 bucket for knowledge base documents
   s3_bucket:
     enabled: true
-    category: infrastructure
-    credential: deploy
     ownership: owned
     template: resources/s3_bucket_template.yaml
     stack_name: "{project}-s3-{env}"
@@ -365,8 +361,6 @@ resources:
   # Aurora Serverless database
   chat_db:
     enabled: true
-    category: infrastructure
-    credential: deploy
     ownership: owned
     templates:
       main: resources/light_db_template.yaml
@@ -381,8 +375,6 @@ resources:
   # Bedrock Knowledge Base
   rag_knowledge_base:
     enabled: true
-    category: application
-    credential: deploy
     ownership: owned
     template: resources/knowledge_base_template.yaml
     stack_name: "{project}-rag-kb-{env}"
@@ -395,8 +387,6 @@ resources:
   # ECR repository for RAG Lambda (lifecycle policy keeps only the 5 most recent images)
   rag_lambda_ecr:
     enabled: true
-    category: application
-    credential: deploy
     ownership: owned
     template: resources/ecr_repo_template.yaml
     stack_name: "{project}-rag-lambda-ecr-{env}"
@@ -406,8 +396,6 @@ resources:
   # Cognito auth for frontend + API JWT validation
   cognito:
     enabled: true
-    category: application
-    credential: deploy
     ownership: owned
     template: resources/cognito_template.yaml
     stack_name: "{project}-cognito-{env}"
@@ -421,8 +409,6 @@ resources:
   # Frontend static site (S3 + CloudFront)
   frontend:
     enabled: true
-    category: infrastructure
-    credential: deploy
     ownership: owned
     template: resources/frontend_static_site_template.yaml
     stack_name: "{project}-frontend-{env}"
@@ -431,8 +417,6 @@ resources:
   # RAG Lambda function
   rag_lambda:
     enabled: true
-    category: application
-    credential: deploy
     ownership: owned
     template: resources/lambda_template.yaml
     stack_name: "{project}-rag-lambda-{env}"
