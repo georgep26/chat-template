@@ -1,229 +1,103 @@
-# Infrastructure as Code
+# Infrastructure Configuration
 
-This directory contains Infrastructure as Code (IaC) templates and configurations for deploying the Python template project.
+`infra/` contains the deployment manifest, CloudFormation templates, IAM roles, IAM policies, and uncommitted secret/state files used by the deployment scripts.
 
-⚠️ **Important**: These are example templates that should be customized and overwritten for new projects.
+## Important Files
 
-## Structure
-
-```
+```text
 infra/
-├── terraform/           # Terraform configurations
-│   ├── main.tf         # Main Terraform configuration
-│   ├── variables.tf    # Variable definitions
-│   └── outputs.tf      # Output definitions
-├── resources/     # CloudFormation templates
-│   ├── db_secret_template.yaml
-│   ├── knowledge_base_template.yaml
-│   ├── lambda_template.yaml
-│   ├── light_db_template.yaml
-│   ├── s3_bucket_template.yaml
-│   └── README.md       # CloudFormation documentation
-├── policies/           # IAM managed policies
-│   ├── evals_secrets_manager_policy.yaml
-│   ├── evals_s3_policy.yaml
-│   ├── evals_lambda_policy.yaml
-│   ├── evals_bedrock_policy.yaml
-│   └── README.md
-├── roles/              # IAM roles
-│   ├── lambda_execution_role.yaml
-│   ├── evals_github_action_role.yaml
-│   └── README.md
-└── README.md           # This file
+  infra.yaml                         # committed logical deployment manifest
+  secrets/
+    template.accounts.secrets.yaml   # committed template for account values
+    template.environment.secrets.yaml # committed template for env values
+    <account-set>/accounts.secrets.yaml # uncommitted real account values
+    <account-set>/<env>.secrets.yaml    # uncommitted real environment values
+  state/
+    <env>.outputs.json               # generated deployment outputs, gitignored
+  resources/                         # CloudFormation resource templates
+  roles/                             # IAM role templates
+  policies/                          # IAM policy templates
 ```
 
-## Available IaC Options
+## `infra.yaml`
 
-### 1. Terraform
+`infra.yaml` is the committed source of truth for:
 
-The Terraform configuration creates the following AWS resources:
+- project name and default region;
+- setup profiles;
+- logical accounts;
+- deployable environments;
+- GitHub CI/CD participation;
+- roles and policies;
+- resources, stack names, templates, config, ownership, and deploy order.
 
-- **S3 Bucket**: For storing application data
-- **DynamoDB Table**: For application data storage
+It must not contain real account IDs, account names, role ARNs, generated resource IDs, or passwords.
 
-#### Prerequisites
+## Accounts and Environments
 
-- [Terraform](https://www.terraform.io/downloads.html) installed
-- AWS CLI configured with appropriate credentials
-- AWS account with necessary permissions
+Logical accounts are defined under `accounts`. Real values are stored in the file configured by `secrets.accounts_file` and referenced with `secret_ref`. The active account set currently points to `infra/secrets/adte_sandbox/accounts.secrets.yaml`.
 
-#### Usage
+Environments are defined under `environments`. An environment points to one logical account and may opt into GitHub CI/CD:
 
-Deploy using the centralized deployment script:
+```yaml
+environments:
+  sandbox:
+    account: management
+    region: us-east-1
+    secrets_file: infra/secrets/adte_sandbox/sandbox.secrets.yaml
+    ci_cd:
+      enabled: false
+```
 
-1. Deploy to development environment:
-   ```bash
-   ./scripts/deploy/terraform.sh dev
-   ```
+Only environments with `ci_cd.enabled: true` are configured by GitHub setup scripts.
 
-2. Deploy to other environments:
-   ```bash
-   ./scripts/deploy/terraform.sh staging
-   ./scripts/deploy/terraform.sh prod
-   ```
+## Resources
 
-#### Available Actions
+Resources are deployed in the order they appear in `infra.yaml`. Teardown happens in reverse order.
 
-- `deploy` (default): Deploy the infrastructure
-- `plan`: Show deployment plan
-- `destroy`: Destroy the infrastructure
-- `init`: Initialize Terraform
-- `validate`: Validate Terraform configuration
-- `output`: Show Terraform outputs
+Common fields:
 
-#### Variables
+- `enabled`: deploy when true; skip deploy when false.
+- `ownership`: `owned` resources are deleted by teardown; `imported` resources are used but skipped during teardown.
+- `template`: CloudFormation template path.
+- `stack_name`: stack name pattern.
+- `config`: resource-specific settings.
 
-You can customize the deployment by setting variables:
+Resource handlers are resolved by convention:
+
+```text
+resources.<resource_key> -> scripts/deploy/resources/<resource_key>.sh
+```
+
+Adding a resource should not require editing `deploy_all.sh`.
+
+## Deployment Sets
+
+Deployment sets let CI and local commands deploy a subset of enabled resources without changing resource `enabled` flags:
+
+```yaml
+deployment_sets:
+  full:
+    resources: all
+  pr:
+    resources:
+      - rag_lambda_ecr
+      - rag_lambda
+```
+
+`deploy_all.sh` preserves the order from `resources` and filters to the selected set:
 
 ```bash
-terraform apply -var="environment=prod" -var="aws_region=us-west-2"
+./scripts/deploy/deploy_all.sh staging --set pr
 ```
 
-Available variables:
-- `aws_region`: AWS region (default: us-east-1)
-- `project_name`: Project name (default: python-template)
-- `environment`: Environment name (default: dev)
+## Secret Templates
 
-### 2. CloudFormation
+Create real local secret files from templates:
 
-The CloudFormation template creates the following AWS resources:
+```bash
+cp infra/secrets/template.accounts.secrets.yaml infra/secrets/adte_sandbox/accounts.secrets.yaml
+cp infra/secrets/template.environment.secrets.yaml infra/secrets/adte_sandbox/sandbox.secrets.yaml
+```
 
-- **S3 Bucket**: For storing application data with encryption and versioning
-- **DynamoDB Table**: For application data storage with point-in-time recovery
-- **IAM Role**: For application execution with appropriate permissions
-- **CloudWatch Log Group**: For application logging
-
-#### Prerequisites
-
-- [AWS CLI](https://aws.amazon.com/cli/) installed and configured
-- AWS account with necessary permissions
-- Appropriate IAM permissions for CloudFormation operations
-
-#### Usage
-
-Deploy using the individual deployment scripts for each component:
-
-1. **Database**:
-   ```bash
-   ./scripts/deploy/deploy_chat_template_db.sh dev deploy --master-password <password>
-   ```
-
-2. **S3 Bucket**:
-   ```bash
-   ./scripts/deploy/deploy_s3_bucket.sh dev deploy
-   ```
-
-3. **Knowledge Base**:
-   ```bash
-   ./scripts/deploy/deploy_knowledge_base.sh dev deploy --s3-bucket <bucket-name>
-   ```
-
-4. **Lambda Function**:
-   ```bash
-   ./scripts/deploy/deploy_rag_lambda.sh dev deploy
-   ```
-
-#### Available Actions
-
-Each deployment script supports:
-- `deploy` (default): Deploy or update the stack
-- `update`: Update an existing stack
-- `delete`: Delete the stack
-- `validate`: Validate the template
-- `status`: Show stack status and outputs
-
-## Choosing Between Terraform and CloudFormation
-
-### Use Terraform when:
-- You need multi-cloud support
-- You prefer declarative configuration with state management
-- You want advanced features like modules and workspaces
-- You need complex dependency management
-
-### Use CloudFormation when:
-- You're working exclusively with AWS
-- You want native AWS integration
-- You prefer YAML/JSON configuration
-- You need tight integration with AWS services
-
-## Customization for New Projects
-
-Before using these templates for a new project:
-
-1. **Review and modify** resource configurations based on your requirements
-2. **Update naming conventions** to match your organization's standards
-3. **Adjust IAM permissions** according to your security policies
-4. **Add or remove resources** as needed for your specific use case
-5. **Update parameters and variables** to match your project needs
-
-## Getting Started
-
-1. Choose your preferred IaC tool (Terraform or CloudFormation)
-2. Use the centralized deployment scripts in `scripts/deploy/`
-3. Follow the usage instructions in the respective README files
-4. Customize the templates for your project requirements
-5. Deploy to your AWS environment
-
-## Deployment Scripts
-
-All deployment scripts are centralized in the `scripts/deploy/` directory:
-
-- `deploy_chat_template_db.sh` - Database deployment
-- `deploy_s3_bucket.sh` - S3 bucket deployment
-- `deploy_knowledge_base.sh` - Knowledge base deployment
-- `deploy_rag_lambda.sh` - Lambda function deployment
-- `deploy_evals_github_action_role.sh` - GitHub Actions IAM role deployment for evaluations
-- `README.md` - Detailed usage instructions
-
-Each script provides a consistent interface for deploying specific infrastructure components.
-
-## IAM Roles and Policies
-
-### Policies (`policies/`)
-
-Reusable IAM managed policies for common AWS service access patterns:
-- **Secrets Manager Policy**: Access to database credentials
-- **S3 Policy**: Upload evaluation results to S3
-- **Lambda Policy**: Invoke Lambda functions
-- **Bedrock Policy**: Invoke Bedrock models for evaluation
-
-See `policies/README.md` for detailed documentation.
-
-### Roles (`roles/`)
-
-IAM roles for specific use cases:
-- **Lambda Execution Role**: For RAG Lambda functions
-- **GitHub Actions Role**: For CI/CD pipelines using OIDC authentication
-
-See `roles/README.md` for detailed documentation.
-
-### GitHub Actions OIDC Setup
-
-To use OIDC authentication with GitHub Actions:
-
-**Prerequisite:** Create the GitHub OIDC identity provider in your AWS account **before** deploying the evals role. See [docs/oidc_github_identity_provider_setup.md](../docs/oidc_github_identity_provider_setup.md) for setup steps. The deploy script ([scripts/deploy/deploy_evals_github_action_role.sh](../scripts/deploy/deploy_evals_github_action_role.sh)) requires the provider ARN via `--oidc-provider-arn`.
-
-1. **Deploy the policies** (in order):
-   ```bash
-   # Deploy each policy stack
-   aws cloudformation create-stack --stack-name chat-template-dev-evals-secrets-manager-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-evals-s3-evaluation-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-evals-bedrock-evaluation-policy ...
-   aws cloudformation create-stack --stack-name chat-template-dev-evals-lambda-invoke-policy ...  # Optional
-   ```
-
-2. **Deploy the GitHub Actions role**:
-   ```bash
-   aws cloudformation create-stack --stack-name chat-template-dev-evals-github-actions-role \
-     --template-body file://infra/roles/evals_github_action_role.yaml \
-     --parameters ... \
-     --capabilities CAPABILITY_NAMED_IAM
-   ```
-
-3. **Add the role ARN to GitHub secrets**:
-   - Go to repository Settings → Secrets and variables → Actions (or Environment secrets for the env used by run-evals)
-   - Add secret: `AWS_EVALS_ROLE_ARN` with the role ARN from the stack output
-
-4. **Update the workflow** (already done in `.github/workflows/run-evals.yml`):
-   - Uses `role-to-assume` instead of access keys
-   - Requires `permissions: id-token: write`
+These files are gitignored.
