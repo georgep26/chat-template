@@ -296,7 +296,9 @@ Resources:
                   - lambda:UntagResource
                   - lambda:ListTags
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*'
-              # Cognito: user pool + app client + optional hosted UI domain lifecycle
+              # Cognito: user pool + app client + optional hosted UI domain lifecycle,
+              # plus admin user-management actions used by deploy_cognito.sh to
+              # bootstrap demo admin/example users defined in env secrets file.
               - Sid: CognitoDeployment
                 Effect: Allow
                 Action:
@@ -315,6 +317,10 @@ Resources:
                   - cognito-idp:ListUserPoolClients
                   - cognito-idp:TagResource
                   - cognito-idp:UntagResource
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminDeleteUser
                 Resource: '*'
               # DynamoDB: cost guard state table scoped to project and environment
               - Sid: DynamoDBDeployment
