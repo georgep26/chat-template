@@ -1,6 +1,8 @@
-# Lambda in VPC: S3 Access (Config Loading)
+# Lambda VPC And S3 Config Loading
 
-When the RAG Lambda is deployed **inside a VPC** (using `VPC_ID` and `SUBNET_IDS`), it loads `app_config.yaml` from S3 at runtime. Lambda functions in a VPC do not have internet access by default, so **the VPC must provide a path to S3** or the Lambda will hang when calling `s3.get_object()` and eventually time out.
+The RAG Lambda loads `app_config.yaml` from S3 at runtime. When the Lambda is deployed outside a VPC, S3 access works through the Lambda service networking. When the Lambda is deployed inside a VPC, the VPC must provide a path to S3 or config loading can time out.
+
+The current default chat history backend is Aurora Data API, so the Lambda does not need VPC networking for database access. Only attach the Lambda to a VPC when another runtime dependency requires it, or when using the direct `postgres` backend.
 
 ## Symptom
 
@@ -14,13 +16,15 @@ This happens because the Lambda is attached to a VPC whose subnets have **no rou
 
 Ensure the VPC used by the Lambda has an **S3 Gateway VPC Endpoint** and that the **route tables** for the subnets where the Lambda runs include a route for S3 (via that endpoint).
 
-### Option A: Use this repo’s network stack
+### Option A: Use this repo's network stack
 
-If you deploy the network with `deploy_network.sh`, the VPC template (`infra/resources/vpc_template.yaml`) already creates an S3 Gateway endpoint and associates it with the private route table. In that case, use the **private subnet IDs** from the stack outputs for the Lambda.
+If `resources.network.use_defaults` is set to `false` and you deploy the custom network stack, the VPC template (`infra/resources/vpc_template.yaml`) creates an S3 Gateway endpoint and associates it with the private route table. In that case, use the private subnet IDs from the stack outputs for the Lambda.
 
-### Option B: Existing VPC (e.g. when using `--skip-network`)
+Current `infra.yaml` sets `resources.network.use_defaults: true`. In that mode, `deploy_network.sh` does not create a CloudFormation stack. It discovers or verifies an existing VPC and writes `VPC_ID` and `SUBNET_IDS` to the configured environment secrets file. You still need to confirm that the selected subnets have a route to S3 if the Lambda is attached to that VPC.
 
-If you use an existing VPC (e.g. from GitHub secrets with `--skip-network`):
+### Option B: Existing VPC
+
+If you use an existing/imported VPC:
 
 1. In the **AWS Console**: **VPC → Endpoints → Create endpoint**.
 2. **Service category**: AWS services.
@@ -28,7 +32,7 @@ If you use an existing VPC (e.g. from GitHub secrets with `--skip-network`):
 4. **Type**: Gateway.
 5. **VPC**: Your Lambda VPC.
 6. **Route tables**: Select the route tables for **every subnet** where the Lambda runs (so traffic to S3 goes through the gateway endpoint).
-7. **Policy**: Full access or restrict to the config bucket; e.g. restrict to `arn:aws:s3:::chat-template-<env>-s3-bucket` and `arn:aws:s3:::chat-template-<env>-s3-bucket/*`.
+7. **Policy**: Full access or restrict to the config bucket; for the current naming convention, restrict to `arn:aws:s3:::chat-template-<env>-s3-<global_suffix>` and `arn:aws:s3:::chat-template-<env>-s3-<global_suffix>/*`.
 
 After the endpoint is created and the route tables are associated, Lambda in that VPC can reach S3 and config loading will succeed.
 
@@ -39,3 +43,19 @@ Alternatively, put the Lambda in subnets that use a **NAT Gateway** for outbound
 ## Timeouts in code
 
 The config loader (`src/utils/config.py`) uses a **connect timeout** (15s) and **read timeout** (30s) for S3. If the VPC has no path to S3, you will see a timeout or connection error in the logs instead of the Lambda running for the full 5 minutes. Fix the VPC routing (S3 endpoint or NAT) as above.
+
+## Deployment Notes
+
+VPC values are resolved from the configured environment secrets file:
+
+```text
+infra/secrets/<account-set>/<env>.secrets.yaml
+```
+
+For the active account set, that is typically:
+
+```text
+infra/secrets/adte_sandbox/<env>.secrets.yaml
+```
+
+Deploying the `pr` deployment set only touches the ECR repo and Lambda. It will not recreate networking, so any VPC/S3 endpoint fixes must be made before running the PR/runtime deployment set.
