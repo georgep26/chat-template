@@ -1,6 +1,6 @@
 name: Pull Request Workflow
 
-# PRs from development → main: run tests, deploy to staging, then run evals in staging.
+# PRs from development → main: run tests, deploy the staging PR deployment set, then run evals in staging.
 # PRs to development: run tests, then path-filtered evals only (no staging deploy).
 # Eval-results-only PRs (bot/evals-results → main) do not trigger this workflow.
 on:
@@ -103,16 +103,13 @@ jobs:
       pull-requests: write
       statuses: write
 
-  # Deploy to staging only for PRs from development → main, after tests pass.
+  # Deploy the PR deployment set to staging only for PRs from development → main, after tests pass.
   deploy-staging-lambda:
-    name: Deploy Lambda to Staging
+    name: Deploy Staging
     if: github.base_ref == 'main' && github.head_ref == 'development'
     needs: [run-tests]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: staging
-      skip_kb: true
-      skip_ecr: true
-      skip_lambda: false
+      deployment_set: pr
     secrets: inherit
-
