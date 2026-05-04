@@ -1,12 +1,12 @@
-# Sensitive values are read from environment secrets (per-environment: dev/staging/prod).
+# Sensitive values are read from GitHub environment secrets for environments
+# with ci_cd.enabled: true in infra/infra.yaml.
 # Set these in GitHub: Settings → Environments → <env> → Environment secrets.
-# See docs/github_environment_secrets.md for secret names (S3_APP_CONFIG_URI, MASTER_DB_PASSWORD, etc.).
+# See docs/github_environment_secrets.md for secret names.
 #
 # Role Strategy:
-#   The deployer role (assumed via OIDC) has permissions for application resources only:
-#   knowledge base, Cognito, ECR, and Lambda. Infrastructure resources (network, S3, DB) require
-#   the CLI admin role and should be skipped in CI (they default to skipped).
-#   To deploy infrastructure via CI, override the skip flags and use an admin role.
+#   deploy_all.sh reads infra/infra.yaml and deploys the selected deployment set
+#   in YAML resource order. To change the CI/CD deployment surface, adjust
+#   deployment_sets in infra.yaml instead of passing per-resource skip flags.
 name: Deploy Application
 
 on:
@@ -15,144 +15,21 @@ on:
       environment:
         description: 'Environment to deploy to'
         required: true
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
-      # Infrastructure resources (default: skip - deployer role cannot deploy these)
-      skip_network:
-        description: 'Skip network deployment (requires admin role)'
-        required: false
-        default: true
-        type: boolean
-      skip_s3:
-        description: 'Skip S3 bucket deployment (requires admin role)'
-        required: false
-        default: true
-        type: boolean
-      skip_db:
-        description: 'Skip database deployment (requires admin role)'
-        required: false
-        default: true
-        type: boolean
-      # Application resources (default: deploy - deployer role handles these)
-      skip_kb:
-        description: 'Skip knowledge base deployment'
-        required: false
-        default: false
-        type: boolean
-      skip_cognito:
-        description: 'Skip Cognito deployment'
-        required: false
-        default: false
-        type: boolean
-      skip_ecr:
-        description: 'Skip ECR repo deployment'
-        required: false
-        default: false
-        type: boolean
-      skip_lambda:
-        description: 'Skip Lambda deployment'
-        required: false
-        default: false
-        type: boolean
-      lambda_image_uri:
-        description: 'Optional prebuilt Lambda image URI (skip Lambda rebuild path)'
-        required: false
-        default: ''
         type: string
-      promote_lambda_from_env:
-        description: 'Optional source environment to promote Lambda image from (e.g. staging)'
+      deployment_set:
+        description: 'Deployment set from infra.yaml'
         required: false
-        default: ''
         type: string
-      promotion_source_role_arn:
-        description: 'Optional role ARN used to read source env image during promotion'
-        required: false
-        default: ''
-        type: string
-      promotion_source_image_uri:
-        description: 'Optional explicit source image URI for promotion'
-        required: false
-        default: ''
-        type: string
-      promote_kb_from_env:
-        description: 'Optional source environment to promote KB content from (e.g. staging)'
-        required: false
-        default: ''
-        type: string
-      promotion_kb_source_role_arn:
-        description: 'Optional role ARN for reading source env KB during promotion'
-        required: false
-        default: ''
-        type: string
-      skip_cost_tags:
-        description: 'Skip cost allocation tags activation'
-        required: false
-        default: true
-        type: boolean
+        default: full
   workflow_call:
     inputs:
       environment:
         required: true
         type: string
-      skip_network:
+      deployment_set:
         required: false
-        default: true
-        type: boolean
-      skip_s3:
-        required: false
-        default: true
-        type: boolean
-      skip_db:
-        required: false
-        default: true
-        type: boolean
-      skip_kb:
-        required: false
-        default: false
-        type: boolean
-      skip_cognito:
-        required: false
-        default: false
-        type: boolean
-      skip_ecr:
-        required: false
-        default: false
-        type: boolean
-      skip_lambda:
-        required: false
-        default: false
-        type: boolean
-      lambda_image_uri:
-        required: false
-        default: ''
         type: string
-      promote_lambda_from_env:
-        required: false
-        default: ''
-        type: string
-      promotion_source_role_arn:
-        required: false
-        default: ''
-        type: string
-      promotion_source_image_uri:
-        required: false
-        default: ''
-        type: string
-      promote_kb_from_env:
-        required: false
-        default: ''
-        type: string
-      promotion_kb_source_role_arn:
-        required: false
-        default: ''
-        type: string
-      skip_cost_tags:
-        required: false
-        default: true
-        type: boolean
+        default: full
 
 permissions:
   id-token: write
@@ -188,11 +65,8 @@ jobs:
       - name: Hydrate configs
         if: vars.HYDRATE_CONFIGS != 'false'
         env:
-          MANAGEMENT_ACCOUNT_ID: ${{ secrets.MANAGEMENT_ACCOUNT_ID }}
           BUDGET_EMAIL: ${{ secrets.BUDGET_EMAIL }}
           REPO: ${{ secrets.REPO }}
-          ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
-          EMAIL: ${{ secrets.EMAIL }}
           DEPLOYER_ROLE_ARN: ${{ secrets.DEPLOYER_ROLE_ARN }}
           VPC_ID: ${{ secrets.VPC_ID }}
           SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
@@ -210,59 +84,13 @@ jobs:
         run: |
           ./scripts/utils/hydrate_configs.sh ${{ inputs.environment }}
 
-      - name: Build deployment command
-        id: build-cmd
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-          # Secrets from GitHub environment
-          S3_APP_CONFIG_URI: ${{ secrets.S3_APP_CONFIG_URI }}
-          LOCAL_APP_CONFIG_PATH: ${{ secrets.LOCAL_APP_CONFIG_PATH }}
-          MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
-          MASTER_DB_USERNAME: ${{ secrets.MASTER_DB_USERNAME }}
-          LAMBDA_IMAGE_URI: ${{ inputs.lambda_image_uri }}
-          PROMOTE_LAMBDA_FROM_ENV: ${{ inputs.promote_lambda_from_env }}
-          PROMOTION_SOURCE_ROLE_ARN: ${{ inputs.promotion_source_role_arn || secrets.STAGING_DEPLOYER_ROLE_ARN || '' }}
-          PROMOTION_SOURCE_IMAGE_URI: ${{ inputs.promotion_source_image_uri }}
-          PROMOTE_KB_FROM_ENV: ${{ inputs.promote_kb_from_env }}
-          PROMOTION_KB_SOURCE_ROLE_ARN: ${{ inputs.promotion_kb_source_role_arn || secrets.STAGING_DEPLOYER_ROLE_ARN || '' }}
-        run: |
-          # Base command: deploy with auto-confirm
-          CMD="./scripts/deploy/deploy_all.sh ${ENVIRONMENT} -y"
-          
-          # Skip flags
-          if [ "${{ inputs.skip_network }}" == "true" ]; then CMD="$CMD --skip-network"; fi
-          if [ "${{ inputs.skip_s3 }}" == "true" ]; then CMD="$CMD --skip-s3"; fi
-          if [ "${{ inputs.skip_db }}" == "true" ]; then CMD="$CMD --skip-db"; fi
-          if [ "${{ inputs.skip_kb }}" == "true" ]; then CMD="$CMD --skip-kb"; fi
-          if [ "${{ inputs.skip_cognito }}" == "true" ]; then CMD="$CMD --skip-cognito"; fi
-          if [ "${{ inputs.skip_ecr }}" == "true" ]; then CMD="$CMD --skip-ecr"; fi
-          if [ "${{ inputs.skip_lambda }}" == "true" ]; then CMD="$CMD --skip-lambda"; fi
-          if [ "${{ inputs.skip_cost_tags }}" == "true" ]; then CMD="$CMD --skip-cost-tags"; fi
-          
-          # Pass-through overrides from GitHub secrets (only if set).
-          # VPC/subnet/security-group are not passed here so Lambda deploys without VPC.
-          # DB and network still get VPC from hydrated infra (Hydrate configs step writes secrets.VPC_ID/SUBNET_IDS into environments.<env> in infra.yaml).
-          if [ -n "$S3_APP_CONFIG_URI" ]; then CMD="$CMD --s3-app-config-uri $S3_APP_CONFIG_URI"; fi
-          if [ -n "$LOCAL_APP_CONFIG_PATH" ]; then CMD="$CMD --local-app-config-path $LOCAL_APP_CONFIG_PATH"; fi
-          if [ -n "$MASTER_DB_USERNAME" ]; then CMD="$CMD --master-username $MASTER_DB_USERNAME"; fi
-          if [ -n "$MASTER_DB_PASSWORD" ]; then CMD="$CMD --master-password $MASTER_DB_PASSWORD"; fi
-          # Promotion path (e.g. prod-on-main): pull image from source env ECR, push to target ECR, deploy Lambda (no rebuild).
-          if [ -n "$LAMBDA_IMAGE_URI" ]; then CMD="$CMD --lambda-image-uri $LAMBDA_IMAGE_URI"; fi
-          if [ -n "$PROMOTE_LAMBDA_FROM_ENV" ]; then CMD="$CMD --promote-lambda-from-env $PROMOTE_LAMBDA_FROM_ENV"; fi
-          if [ -n "$PROMOTION_SOURCE_ROLE_ARN" ]; then CMD="$CMD --promotion-source-role-arn $PROMOTION_SOURCE_ROLE_ARN"; fi
-          if [ -n "$PROMOTION_SOURCE_IMAGE_URI" ]; then CMD="$CMD --promotion-source-image-uri $PROMOTION_SOURCE_IMAGE_URI"; fi
-          if [ -n "$PROMOTE_KB_FROM_ENV" ]; then CMD="$CMD --promote-kb-from-env $PROMOTE_KB_FROM_ENV"; fi
-          if [ -n "$PROMOTION_KB_SOURCE_ROLE_ARN" ]; then CMD="$CMD --promotion-kb-source-role-arn $PROMOTION_KB_SOURCE_ROLE_ARN"; fi
-          
-          echo "command<<EOF" >> $GITHUB_OUTPUT
-          echo "$CMD" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Run deployment
         id: deploy
-        run: ${{ steps.build-cmd.outputs.command }}
+        run: ./scripts/deploy/deploy_all.sh ${{ inputs.environment }} --set ${{ inputs.deployment_set }} -y
         env:
           AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+          GLOBAL_SUFFIX: ${{ secrets.GLOBAL_SUFFIX }}
 
       - name: Deployment summary
         if: always()
