@@ -1,6 +1,6 @@
-# AWS Organizations & Sub-Accounts – Consolidated Learnings
+# AWS Organizations And Sub-Accounts
 
-This page consolidates the key concepts and practical takeaways about **AWS Organizations**, **sub-accounts**, **billing**, and **Free Tier behavior**.
+This page consolidates the key concepts and practical takeaways about AWS Organizations, sub-accounts, billing, and Free Tier behavior for the `chat-template` deployment model.
 
 ---
 
@@ -26,11 +26,21 @@ Each AWS **account** is a hard isolation boundary for IAM, resources, limits, an
 - Owns the organization
 - Pays the AWS bill for **all** member accounts
 - Controls organization-wide settings and policies
+- Can host the local `sandbox` environment in this repo when `allow_workload_deployments: true`
 
 ### Member (Sub) Accounts
 - Independent environments for workloads
 - Own IAM users, roles, and resources
 - **Do not** pay AWS directly when part of an organization
+
+Current `chat-template` target structure:
+
+| Logical account | Purpose |
+| --- | --- |
+| `management` | AWS Organizations management account; also hosts `sandbox` for local/manual deployments. |
+| `dev` | Development workload account. |
+| `staging` | Staging workload account and PR evaluation target. |
+| `prod` | Production workload account. |
 
 ### Organizational Units (OUs)
 - Logical groupings of accounts (e.g., `dev`, `prod`, `security`)
@@ -49,8 +59,9 @@ Each AWS **account** is a hard isolation boundary for IAM, resources, limits, an
 ---
 
 ### 3.2 Environment Separation
-- Common pattern: one account per environment (`dev`, `qa`, `prod`)
-- Eliminates risk of accidentally impacting production
+- Current pattern: one workload account per long-lived environment (`dev`, `staging`, `prod`)
+- Local/manual `sandbox` can deploy into the management account, but production-style workloads should live in member accounts
+- Account boundaries reduce the risk of accidentally impacting production
 
 ---
 
@@ -183,11 +194,13 @@ Multiple sub-accounts generally **increase** total Free Tier capacity rather tha
 
 ## 8. Recommended Best Practices
 
-- Use one account per environment or major workload
+- Use one account per long-lived environment or major workload
 - Apply SCPs early (especially in production)
 - Set per-account AWS Budgets with low-dollar alerts
 - Centralize logs and security tooling in dedicated accounts
 - Treat accounts as long-lived boundaries, not temporary constructs
+- Keep account IDs, local AWS profile names, and global suffixes in `infra/secrets/<account-set>/accounts.secrets.yaml`
+- Keep deployable environment mappings in committed `infra/infra.yaml`
 
 ---
 
