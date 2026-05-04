@@ -288,6 +288,8 @@ evals/eval_outputs/local/
 # Working notes
 docs/working_notes.md
 docs/working_notes.rtf
+docs/working_files/*
+!docs/working_files/README.md
 
 # Local configuration (templated env configs are tracked; hydrate_configs.sh injects secrets at runtime)
 !config/*/app_config.yaml
@@ -309,3 +311,7 @@ docs/github-pm-notes.md
 
 # Cost reports
 docs/cost_reports/*
+
+# Resource reports
+docs/resource_reports/*
+!docs/resource_reports/README.md
