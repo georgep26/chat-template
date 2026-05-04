@@ -5,7 +5,7 @@
 # AWS Organizations. Optionally creates per-account budgets with email alerts.
 # Creates an IAM user in the management account that can assume OrganizationAccountAccessRole
 # in each member account (policy and user defined in infra/policies/ and infra/roles/).
-# Reads defaults from infra/infra.yaml; CLI arguments override. Writes account info to infra/infra.yaml.
+# Reads defaults from infra/infra.yaml; CLI arguments override. Writes account info to the configured secrets.accounts_file.
 # Must be run from the management account with Organizations permissions.
 #
 # Bootstrap credentials:
@@ -61,8 +61,8 @@ show_usage() {
     echo "AWS Organizations Account Setup Script"
     echo ""
     echo "Creates three member accounts (dev, staging, prod) under the management account."
-    echo "Reads defaults from infra/infra.yaml (project, environments.*.email, budgets, org role)."
-    echo "CLI options override infra.yaml. Writes account IDs and names to infra/infra.yaml."
+    echo "Reads defaults from infra/infra.yaml (project, budgets, org role)."
+    echo "CLI options override infra.yaml. Writes account IDs and names to the configured secrets.accounts_file."
     echo ""
     echo "Usage: $0 [options]"
     echo ""
@@ -792,27 +792,54 @@ DEV_ACCOUNT_ID="$(resolve_account_id "${DEV_REQ_OR_ID}")"
 STAGING_ACCOUNT_ID="$(resolve_account_id "${STAGING_REQ_OR_ID}")"
 PROD_ACCOUNT_ID="$(resolve_account_id "${PROD_REQ_OR_ID}")"
 
-# Update infra/infra.yaml with account info (project.management_account_id, environments.*)
-print_step "Writing account information to infra/infra.yaml..."
-yq -i ".project.management_account_id = \"${MANAGEMENT_ACCOUNT_ID}\"" "$INFRA_YAML"
-yq -i ".environments.dev.account_id = \"${DEV_ACCOUNT_ID}\"" "$INFRA_YAML"
-yq -i ".environments.dev.account_name = \"${DEV_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.dev.email = \"${DEV_EMAIL}\"" "$INFRA_YAML"
-yq -i ".environments.dev.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.dev.cli_role_name = \"${PROJECT_NAME}-dev-admin-cli-role\"" "$INFRA_YAML"
-yq -i ".environments.dev.cli_profile_name = \"${PROJECT_NAME}-dev-cli\"" "$INFRA_YAML"
-yq -i ".environments.staging.account_id = \"${STAGING_ACCOUNT_ID}\"" "$INFRA_YAML"
-yq -i ".environments.staging.account_name = \"${STAGING_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.staging.email = \"${STAGING_EMAIL}\"" "$INFRA_YAML"
-yq -i ".environments.staging.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.staging.cli_role_name = \"${PROJECT_NAME}-staging-admin-cli-role\"" "$INFRA_YAML"
-yq -i ".environments.staging.cli_profile_name = \"${PROJECT_NAME}-staging-cli\"" "$INFRA_YAML"
-yq -i ".environments.prod.account_id = \"${PROD_ACCOUNT_ID}\"" "$INFRA_YAML"
-yq -i ".environments.prod.account_name = \"${PROD_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.prod.email = \"${PROD_EMAIL}\"" "$INFRA_YAML"
-yq -i ".environments.prod.org_role_name = \"${ORG_ACCESS_ROLE_NAME}\"" "$INFRA_YAML"
-yq -i ".environments.prod.cli_role_name = \"${PROJECT_NAME}-prod-admin-cli-role\"" "$INFRA_YAML"
-yq -i ".environments.prod.cli_profile_name = \"${PROJECT_NAME}-prod-cli\"" "$INFRA_YAML"
+# Write account-specific values to uncommitted account secrets. infra.yaml keeps
+# only logical account/environment references.
+PROJECT_ROOT="$(get_project_root)"
+load_infra_config "${PROJECT_ROOT}/infra/infra.yaml" >/dev/null 2>&1 || true
+ACCOUNTS_SECRETS_FILE="$(get_accounts_secrets_file)"
+print_step "Writing account information to ${ACCOUNTS_SECRETS_FILE}..."
+mkdir -p "$(dirname "$ACCOUNTS_SECRETS_FILE")"
+if [[ ! -f "$ACCOUNTS_SECRETS_FILE" ]]; then
+    cp "${PROJECT_ROOT}/infra/secrets/template.accounts.secrets.yaml" "$ACCOUNTS_SECRETS_FILE"
+fi
+
+yq -i '.accounts = {}' "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.account_id = \"${MANAGEMENT_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.account_name = \"management\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.bootstrap_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.deploy_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.cli_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.management.global_suffix = \"${MANAGEMENT_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+
+yq -i ".accounts.dev.account_id = \"${DEV_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.account_name = \"${DEV_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.email = \"${DEV_EMAIL}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.organization_access_role = \"${ORG_ACCESS_ROLE_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.bootstrap_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.deploy_profile = \"${PROJECT_NAME}-dev-deployer\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.cli_profile = \"${PROJECT_NAME}-dev-cli\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.cli_role_name = \"${PROJECT_NAME}-dev-admin-cli-role\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.dev.global_suffix = \"${DEV_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+
+yq -i ".accounts.staging.account_id = \"${STAGING_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.account_name = \"${STAGING_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.email = \"${STAGING_EMAIL}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.organization_access_role = \"${ORG_ACCESS_ROLE_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.bootstrap_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.deploy_profile = \"${PROJECT_NAME}-staging-deployer\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.cli_profile = \"${PROJECT_NAME}-staging-cli\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.cli_role_name = \"${PROJECT_NAME}-staging-admin-cli-role\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.staging.global_suffix = \"${STAGING_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+
+yq -i ".accounts.prod.account_id = \"${PROD_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.account_name = \"${PROD_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.email = \"${PROD_EMAIL}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.organization_access_role = \"${ORG_ACCESS_ROLE_NAME}\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.bootstrap_profile = \"${PROJECT_NAME}-management-admin\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.deploy_profile = \"${PROJECT_NAME}-prod-deployer\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.cli_profile = \"${PROJECT_NAME}-prod-cli\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.cli_role_name = \"${PROJECT_NAME}-prod-admin-cli-role\"" "$ACCOUNTS_SECRETS_FILE"
+yq -i ".accounts.prod.global_suffix = \"${PROD_ACCOUNT_ID}\"" "$ACCOUNTS_SECRETS_FILE"
 
 # Optional: also write JSON if requested
 if [[ -n "${OUT_JSON}" ]]; then
