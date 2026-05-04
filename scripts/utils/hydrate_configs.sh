@@ -10,7 +10,7 @@
 #
 # Modes:
 #   CI (GITHUB_ACTIONS=true): reads secrets from environment variables
-#   Local: reads from infra/secrets/<env>_secrets.yaml config_secrets section
+#   Local: reads from infra/secrets/<env>.secrets.yaml config_secrets section
 #
 # No-op when:
 #   - HYDRATE_CONFIGS=false (explicit disable for private forks)
@@ -22,6 +22,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/config_parser.sh"
 
 # -----------------------------------------------------------------------------
 # Usage
@@ -36,7 +37,7 @@ show_usage() {
     echo "  $0 --all"
     echo "  $0 --restore"
     echo ""
-    echo "  <environment>        dev | staging | prod  (hydrate for this env)"
+    echo "  <environment>        Any environment defined in infra/infra.yaml"
     echo "  missing_secrets_file optional path; keys hydrated with blank are written here (one per line)"
     echo "  --run                Hydrate, execute command, then restore original files"
     echo "  --all                (local only) Hydrate all environments from secrets files"
@@ -53,7 +54,7 @@ do_restore() {
     local project_root
     project_root=$(get_project_root)
     print_step "Restoring templated config files..."
-    (cd "$project_root" && git checkout -- infra/infra.yaml config/dev/app_config.yaml config/staging/app_config.yaml config/prod/app_config.yaml 2>/dev/null) || true
+    (cd "$project_root" && git checkout -- infra/infra.yaml config/*/app_config.yaml 2>/dev/null) || true
     print_complete "Restored template versions"
     return 0
 }
@@ -130,13 +131,9 @@ hydrate_infra() {
 
     check_yq_installed || return 1
 
-    # Project-level (set once); hydrate with blank if missing and record for warning
-    if [[ -n "${MANAGEMENT_ACCOUNT_ID:-}" ]]; then
-        yq -i ".project.management_account_id = strenv(MANAGEMENT_ACCOUNT_ID)" "$infra_file"
-    else
-        yq -i '.project.management_account_id = ""' "$infra_file"
-        record_missing "MANAGEMENT_ACCOUNT_ID" "$missing_out"
-    fi
+    # Project-level values that are intentionally allowed in committed config
+    # as placeholders. Account-specific values are resolved from uncommitted
+    # accounts/environment secrets and should not be written into infra.yaml.
     if [[ -n "${REPO:-}" ]]; then
         yq -i ".github.github_repo = strenv(REPO)" "$infra_file"
     else
@@ -154,55 +151,9 @@ hydrate_infra() {
         record_missing "BUDGET_EMAIL" "$missing_out"
     fi
 
-    # Current environment only
-    if [[ -n "${ACCOUNT_ID:-}" ]]; then
-        yq -i ".environments.${env}.account_id = strenv(ACCOUNT_ID)" "$infra_file"
-    else
-        yq -i ".environments.${env}.account_id = \"\"" "$infra_file"
-        record_missing "ACCOUNT_ID" "$missing_out"
-    fi
-    if [[ -n "${EMAIL:-}" ]]; then
-        yq -i ".environments.${env}.email = strenv(EMAIL)" "$infra_file"
-    else
-        yq -i ".environments.${env}.email = \"\"" "$infra_file"
-        record_missing "EMAIL" "$missing_out"
-    fi
-    if [[ -n "${DEPLOYER_ROLE_ARN:-}" ]]; then
-        yq -i ".environments.${env}.github_actions_deployer_role_arn = strenv(DEPLOYER_ROLE_ARN)" "$infra_file"
-    else
-        yq -i ".environments.${env}.github_actions_deployer_role_arn = \"\"" "$infra_file"
-        record_missing "DEPLOYER_ROLE_ARN" "$missing_out"
-    fi
-    if [[ -n "${VPC_ID:-}" ]]; then
-        yq -i ".environments.${env}.vpc_id = strenv(VPC_ID)" "$infra_file"
-    else
-        yq -i ".environments.${env}.vpc_id = \"\"" "$infra_file"
-        record_missing "VPC_ID" "$missing_out"
-    fi
-    if [[ -n "${SUBNET_IDS:-}" ]]; then
-        yq -i ".environments.${env}.subnet_ids = strenv(SUBNET_IDS)" "$infra_file"
-    else
-        yq -i ".environments.${env}.subnet_ids = \"\"" "$infra_file"
-        record_missing "SUBNET_IDS" "$missing_out"
-    fi
-    if [[ -n "${DB_CLUSTER_ARN:-}" ]]; then
-        yq -i ".environments.${env}.db_cluster_arn = strenv(DB_CLUSTER_ARN)" "$infra_file"
-    else
-        yq -i ".environments.${env}.db_cluster_arn = \"\"" "$infra_file"
-        record_missing "DB_CLUSTER_ARN" "$missing_out"
-    fi
-    if [[ -n "${DB_CREDENTIALS_SECRET_ARN:-}" ]]; then
-        yq -i ".environments.${env}.db_credentials_secret_arn = strenv(DB_CREDENTIALS_SECRET_ARN)" "$infra_file"
-    else
-        yq -i ".environments.${env}.db_credentials_secret_arn = \"\"" "$infra_file"
-        record_missing "DB_CREDENTIALS_SECRET_ARN" "$missing_out"
-    fi
-    if [[ -n "${KNOWLEDGE_BASE_ID:-}" ]]; then
-        yq -i ".environments.${env}.knowledge_base_id = strenv(KNOWLEDGE_BASE_ID)" "$infra_file"
-    else
-        yq -i ".environments.${env}.knowledge_base_id = \"\"" "$infra_file"
-        record_missing "KNOWLEDGE_BASE_ID" "$missing_out"
-    fi
+    # Resource placeholders still need runtime hydration because the current
+    # resource handlers read them from infra.yaml. This is runtime-only when
+    # called through --run.
     if [[ -n "${COGNITO_REGION:-}" ]]; then
         yq -i '.resources.rag_lambda.config.cognito_region = strenv(COGNITO_REGION)' "$infra_file"
     else
@@ -329,7 +280,9 @@ run_hydrate() {
     local app_config_file="$project_root/config/$env/app_config.yaml"
 
     if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
-        local secrets_file="$project_root/infra/secrets/${env}_secrets.yaml"
+        load_infra_config >/dev/null 2>&1 || true
+        local secrets_file
+        secrets_file=$(get_environment_secrets_file "$env")
         load_config_secrets_from_file "$secrets_file" || return 1
     fi
 
@@ -474,12 +427,13 @@ main() {
                 print_error "--all is not supported in CI (deploy one environment per run)"
                 exit 1
             fi
-            for env in dev staging prod; do
-                if [[ -f "$(get_project_root)/infra/secrets/${env}_secrets.yaml" ]]; then
+            load_infra_config >/dev/null 2>&1 || true
+            while IFS= read -r env; do
+                if [[ -f "$(get_environment_secrets_file "$env")" ]]; then
                     print_step "Hydrating for $env..."
                     run_hydrate "$env" || exit 1
                 fi
-            done
+            done < <(get_environment_names)
             print_complete "Hydrated all environments"
             exit 0
             ;;
@@ -520,16 +474,11 @@ main() {
                 exit $?
             fi
             ;;
-        dev|staging|prod)
+        *)
             validate_environment "$1" || exit 1
             run_hydrate "$1" "${2:-}" || exit 1
             print_complete "Hydration complete for $1"
             exit 0
-            ;;
-        *)
-            print_error "Invalid argument: $1"
-            show_usage
-            exit 1
             ;;
     esac
 }
