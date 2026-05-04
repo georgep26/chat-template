@@ -47,7 +47,7 @@ show_usage() {
     echo ""
     echo "Usage: $0 <environment> [action] [options]"
     echo ""
-    echo "Environments: dev, staging, prod"
+    echo "Environment: any environment defined in infra/infra.yaml"
     echo "Actions: deploy (default), update, delete, validate, status"
     echo ""
     echo "Options (override infra when provided):"
@@ -700,4 +700,3 @@ case $ACTION in
         exit 1
         ;;
 esac
-
