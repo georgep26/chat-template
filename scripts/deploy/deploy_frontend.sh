@@ -34,7 +34,7 @@ show_usage() {
     echo "Options:"
     echo "  -y, --yes   - Skip confirmation prompt"
     echo ""
-    echo "Note: Infrastructure is deployed from this repo. App build and upload is done from chat-template-frontend repo (see docs/cloudfront_frontend_backend_handoff.md)."
+    echo "Note: Infrastructure is deployed from this repo. App build and upload is done from chat-template-frontend repo (see docs/frontend_interface.md)."
 }
 
 if [ $# -lt 1 ]; then
@@ -157,9 +157,11 @@ deploy_stack() {
         --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
         --output text 2>/dev/null)
     if [ -n "$domain_name" ] && [ "$domain_name" != "None" ]; then
+        local secrets_file
+        secrets_file=$(get_environment_secrets_file "$ENVIRONMENT")
         echo ""
         print_info "CloudFront URL: https://${domain_name}"
-        print_info "Backend handoff: update infra/secrets/${ENVIRONMENT}_secrets.yaml with COGNITO_CALLBACK_URLS, COGNITO_LOGOUT_URLS, FUNCTION_URL_CORS_ALLOW_ORIGINS using https://${domain_name}"
+        print_info "Backend handoff: update ${secrets_file} with COGNITO_CALLBACK_URLS, COGNITO_LOGOUT_URLS, FUNCTION_URL_CORS_ALLOW_ORIGINS using https://${domain_name}"
     fi
 }
 
