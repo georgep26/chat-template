@@ -7,6 +7,7 @@ This test is skipped unless both env vars are set:
 
 import json
 import os
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -23,7 +24,7 @@ RAG_SMOKE_BEARER_TOKEN = os.getenv("RAG_SMOKE_BEARER_TOKEN")
 def test_function_url_smoke():
     """Call deployed Function URL and assert a successful chat response."""
     payload = {
-        "conversation_id": "smoke-test-conversation",
+        "request_id": str(uuid.uuid4()),
         "message": "Reply with a short hello.",
     }
 
@@ -48,5 +49,6 @@ def test_function_url_smoke():
         pytest.fail(f"Smoke test could not reach Function URL: {exc}")
 
     assert status_code == 200
-    assert body["conversation_id"] == payload["conversation_id"]
+    assert uuid.UUID(body["conversation_id"])
     assert isinstance(body.get("answer"), str)
+    assert isinstance(body.get("steps"), list)
