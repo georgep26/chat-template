@@ -33,12 +33,24 @@ def create_history_store(
         if db_creds is None:
             raise ValueError("db_creds is required for postgres backend in memory_store_arguments")
         table_name = memory_store_arguments.get("table_name", "chat_history")
-        return PostgresHistoryStore(db_creds=db_creds, table_name=table_name)
+        conversation_table_name = memory_store_arguments.get("conversation_table_name", "chat_conversations")
+        turn_events_table_name = memory_store_arguments.get("turn_events_table_name", "chat_turn_events")
+        environment = memory_store_arguments.get("environment")
+        return PostgresHistoryStore(
+            db_creds=db_creds,
+            table_name=table_name,
+            conversation_table_name=conversation_table_name,
+            turn_events_table_name=turn_events_table_name,
+            environment=environment,
+        )
     elif memory_backend_type == "aurora_data_api":
         db_cluster_arn = memory_store_arguments.get("db_cluster_arn")
         db_credentials_secret_arn = memory_store_arguments.get("db_credentials_secret_arn")
         database_name = memory_store_arguments.get("database_name")
         table_name = memory_store_arguments.get("table_name", "chat_history")
+        conversation_table_name = memory_store_arguments.get("conversation_table_name", "chat_conversations")
+        turn_events_table_name = memory_store_arguments.get("turn_events_table_name", "chat_turn_events")
+        environment = memory_store_arguments.get("environment")
         region = memory_store_arguments.get("region", "us-east-1")
         
         if not db_cluster_arn:
@@ -53,6 +65,9 @@ def create_history_store(
             db_credentials_secret_arn=db_credentials_secret_arn,
             database_name=database_name,
             table_name=table_name,
+            conversation_table_name=conversation_table_name,
+            turn_events_table_name=turn_events_table_name,
+            environment=environment,
             region=region
         )
     elif memory_backend_type == "dynamo":
@@ -66,4 +81,3 @@ def create_history_store(
         raise NotImplementedError("Local SQLite backend not yet implemented")
     else:
         raise ValueError(f"Unsupported memory backend: {memory_backend_type}")
-
