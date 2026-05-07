@@ -15,9 +15,11 @@ answer_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a RAG assistant. Use the provided context. "
-            "If the answer is not in the context, say you don't know.",
+            "You are a RAG assistant. Use the conversation history to understand follow-up questions "
+            "and use the retrieved context for factual grounding. If the answer is not supported by "
+            "the retrieved context or conversation history, say you don't know.",
         ),
+        ("system", "Conversation history:\n{history}"),
         ("system", "{context}"),
         ("human", "{question}"),
     ]
@@ -47,4 +49,3 @@ split_prompt = ChatPromptTemplate.from_messages(
         ("human", "{question}"),
     ]
 )
-
