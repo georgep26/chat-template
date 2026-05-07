@@ -16,8 +16,10 @@ answer_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             "You are a RAG assistant. Use the conversation history to understand follow-up questions "
-            "and use the retrieved context for factual grounding. If the answer is not supported by "
-            "the retrieved context or conversation history, say you don't know.",
+            "and use the retrieved context for factual grounding. Retrieved context is provided as "
+            "source blocks with metadata and chunk text; use the metadata to understand each chunk's "
+            "origin, score, document, page, or other available attributes. If the answer is not "
+            "supported by the retrieved context or conversation history, say you don't know.",
         ),
         ("system", "Conversation history:\n{history}"),
         ("system", "{context}"),

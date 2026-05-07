@@ -1,10 +1,10 @@
 """Retrieval node for RAG pipeline."""
 
-import os
+import json
 from typing import Any, Dict, List, Optional
 
-import yaml
 from langchain_aws import AmazonKnowledgeBasesRetriever
+from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
@@ -65,6 +65,50 @@ def convert_filters_to_kb_format(retrieval_filters: Dict[str, List[str]]) -> Dic
         return {"andAll": field_filters}
 
 
+def _format_metadata_value(value: Any) -> str:
+    """Format metadata values deterministically for prompt context."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def format_source_metadata(metadata: Dict[str, Any]) -> str:
+    """Format all available source metadata for an answer prompt source block."""
+    metadata_lines = []
+    for key in sorted(metadata):
+        value = metadata[key]
+        if value is None:
+            continue
+        metadata_lines.append(f"{key}: {_format_metadata_value(value)}")
+    return "\n".join(metadata_lines) if metadata_lines else "No metadata available."
+
+
+def format_retrieved_context(docs: List[Document]) -> str:
+    """Format retrieved docs as source blocks containing metadata and chunk text."""
+    if not docs:
+        return "Relevant context:\nNo retrieved source chunks."
+
+    blocks = []
+    for index, doc in enumerate(docs, start=1):
+        metadata = doc.metadata or {}
+        chunk = doc.page_content or ""
+        blocks.append(
+            "\n".join(
+                [
+                    f"<source index=\"{index}\">",
+                    "<metadata>",
+                    format_source_metadata(metadata),
+                    "</metadata>",
+                    "<chunk>",
+                    chunk,
+                    "</chunk>",
+                    "</source>",
+                ]
+            )
+        )
+    return "Relevant context:\n" + "\n\n".join(blocks)
+
+
 def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Retrieve relevant documents from knowledge base."""
     collector = get_trace_collector(config)
@@ -112,12 +156,11 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
     last_user = [m for m in state["messages"] if isinstance(m, HumanMessage)][-1]
     docs = kb_retriever.invoke(last_user.content)
     
-    # Attach retrieved docs as a synthetic system message
-    context_text = "\n\n".join(d.page_content for d in docs)
+    # Attach retrieved docs as metadata-rich synthetic context for the answer model.
     state["messages"].append(
         SystemMessage(
             name="retriever_context",
-            content=f"Relevant context:\n{context_text}",
+            content=format_retrieved_context(docs),
         )
     )
     
