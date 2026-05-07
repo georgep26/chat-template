@@ -12,6 +12,9 @@ dependencies:
   - kaleido-core
   - go-yq
   - pip:
+    # Required for local AWS SSO/Identity Center profiles used by boto3/botocore.
+    # Without the CRT extra, botocore can fail while signing RDS Data API calls.
+    - botocore[crt]
     - -r src/rag_lambda/requirements.txt
     - -r evals/requirements.txt
 # Note: PYTHONPATH is automatically set to the project root via an activation script
