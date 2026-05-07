@@ -3,18 +3,21 @@
 import argparse
 import json
 import os
+import uuid
 from typing import Any, Dict, List
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 from pydantic import ValidationError
 
 from .graph.nodes import answer_node, clarify_node, extract_text_content, rewrite_node, split_node
 from .graph.state import MessagesState
 from .graph.retrieval import retrieve_node
+from .memory.base import ConversationAccessError
 from .memory.factory import create_history_store
 from .memory.chat_summary import summarization_check
 from .api.models import ChatRequest, ChatResponse, Source
+from .tracing import TraceCollector
 from .auth import (
     AuthConfigurationError,
     AuthError,
@@ -24,7 +27,6 @@ from .auth import (
     normalize_headers,
     parse_event_body,
     prepare_body_for_main,
-    scope_conversation_id,
 )
 from utils.aws_utils import get_db_credentials_from_secret
 from utils.config import read_config
@@ -66,7 +68,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     
     config = read_config(config_path)
     rag_chat_config = config.get("rag_chat", {})
-    chat_history_config = rag_chat_config.get("chat_history_store", {})
+    chat_history_config = dict(rag_chat_config.get("chat_history_store", {}))
     summarization_config = rag_chat_config.get("summarization", {})
     retrieval_config = rag_chat_config.get("retrieval", {})
     log.info("Configuration loaded successfully")
@@ -77,8 +79,7 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
 
     # Identity/trace values are prepared by lambda_handler before invoking main().
     effective_user_id = req.user_id or "anonymous"
-    storage_conversation_id = scope_conversation_id(effective_user_id, req.conversation_id)
-    trace_id = event_body.get("trace_id") if isinstance(event_body.get("trace_id"), str) else None
+    trace_id = event_body.get("trace_id") if isinstance(event_body.get("trace_id"), str) else str(uuid.uuid4())
 
     # Extract memory backend type and prepare configuration
     # All other keys in chat_history_config will be passed directly to the factory
@@ -110,10 +111,30 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         **chat_history_config
     )
 
+    conversation_metadata = dict(req.metadata or {})
+    if req.retrieval_filters:
+        conversation_metadata["retrieval_filters"] = req.retrieval_filters
+
+    conversation = memory_store.resolve_or_create_conversation(
+        user_id=effective_user_id,
+        conversation_id=req.conversation_id,
+        request_id=req.request_id,
+        title_seed=req.message,
+        metadata=conversation_metadata,
+    )
+    conversation_id = conversation.conversation_id
+    log.info(
+        "Resolved conversation_id: %s (created=%s, idempotent_replay=%s)",
+        conversation_id,
+        conversation.created,
+        conversation.idempotent_replay,
+    )
+
     # Load prior messages
-    log.info(f"Loading prior messages for conversation_id: {req.conversation_id}")
-    prior_messages: List[BaseMessage] = memory_store.get_messages(storage_conversation_id)
+    log.info(f"Loading prior messages for conversation_id: {conversation_id}")
+    prior_messages: List[BaseMessage] = memory_store.get_messages(conversation_id)
     log.info(f"Loaded {len(prior_messages)} prior messages from conversation history")
+    turn_index = sum(1 for message in prior_messages if isinstance(message, HumanMessage)) + 1
 
     # Check if summarization is needed for long conversations
     log.info(f"Checking if summarization is needed (threshold: {summarization_config.get('summarization_threshold')})")
@@ -138,11 +159,17 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     # Build graph
     log.info("Building RAG graph")
     graph = build_rag_graph()
+    trace_collector = TraceCollector(
+        trace_id=trace_id,
+        conversation_id=conversation_id,
+        turn_index=turn_index,
+    )
 
     # Prepare config for graph invocation (LangGraph expects config in "configurable" key)
     graph_config = {
         "configurable": {
             "rag_chat": rag_chat_config,
+            "trace_collector": trace_collector,
         }
     }
 
@@ -150,18 +177,6 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     log.info("Invoking RAG graph (includes query rewrite, clarification, splitting, retrieval, and answer generation)")
     final_state = graph.invoke(state, config=graph_config)
     log.info("RAG graph execution completed")
-
-    # Extract new messages (everything after prior_messages + user message)
-    new_messages = final_state["messages"][len(prior_messages) + 1 :]
-
-    # Prepare metadata with retrieval_filters if they were used
-    metadata = None
-    if req.retrieval_filters:
-        metadata = {"retrieval_filters": req.retrieval_filters}
-
-    # Append new messages to memory store
-    if new_messages:
-        memory_store.append_messages(storage_conversation_id, new_messages, metadata=metadata)
 
     # Extract answer from final state
     ai_msgs = [m for m in final_state["messages"] if m.type == "ai"]
@@ -184,14 +199,29 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     else:
         log.info("No sources found in final state")
 
+    visible_messages_to_store: List[BaseMessage] = [
+        HumanMessage(content=req.message),
+        AIMessage(content=answer),
+    ]
+    source_ids = [source.document_id for source in sources]
+    persistence_metadata = {
+        **conversation_metadata,
+        "trace_id": trace_id,
+        "request_id": req.request_id,
+        "source_ids": source_ids,
+    }
+    memory_store.append_messages(conversation_id, visible_messages_to_store, metadata=persistence_metadata)
+    memory_store.append_trace_events(conversation_id, trace_collector.events)
+
     resp = ChatResponse(
-        conversation_id=req.conversation_id,
+        conversation_id=conversation_id,
         answer=answer,
         sources=sources,
         trace_id=trace_id,
+        steps=trace_collector.frontend_steps(),
     )
 
-    log.info(f"Response completed for conversation_id: {req.conversation_id} with {len(sources)} sources")
+    log.info(f"Response completed for conversation_id: {conversation_id} with {len(sources)} sources")
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
@@ -250,6 +280,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 "detail": "Server auth configuration is invalid.",
             },
         )
+    except ConversationAccessError as exc:
+        return json_response(404, {"error": "ConversationNotFound", "detail": str(exc)})
     except ValueError as exc:
         return json_response(400, {"error": "BadRequest", "detail": str(exc)})
     except Exception:
@@ -267,15 +299,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="RAG chat application - process chat requests"
     )
-    parser.add_argument(
+    event_source = parser.add_mutually_exclusive_group(required=True)
+    event_source.add_argument(
         "--event-body",
         type=str,
-        required=True,
-        help="JSON string containing the event body (e.g., '{\"conversation_id\": \"123\", \"user_id\": \"user1\", \"message\": \"Hello\"}')",
+        help="JSON string containing the event body (e.g., '{\"user_id\": \"user1\", \"message\": \"Hello\"}')",
+    )
+    event_source.add_argument(
+        "--event-file",
+        type=str,
+        help="Path to a JSON file containing the event body.",
     )
     args = parser.parse_args()
-    # Parse the event_body JSON string
-    event_body = json.loads(args.event_body)
 
-    # Call main function
-    main(event_body)
+    if args.event_file:
+        with open(args.event_file, "r", encoding="utf-8") as event_file:
+            event_body = json.load(event_file)
+    else:
+        event_body = json.loads(args.event_body)
+
+    response = main(event_body)
+    if isinstance(response, dict) and isinstance(response.get("body"), str):
+        try:
+            response = {**response, "body": json.loads(response["body"])}
+        except json.JSONDecodeError:
+            pass
+    print(json.dumps(response, indent=2))
