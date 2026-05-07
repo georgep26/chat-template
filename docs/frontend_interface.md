@@ -114,7 +114,8 @@ Request body:
 
 ```json
 {
-  "conversation_id": "conv-abc-123",
+  "conversation_id": "optional-existing-conversation-uuid",
+  "request_id": "optional-client-generated-idempotency-key",
   "message": "What is the cancellation policy?",
   "user_id": "optional-and-deprecated",
   "metadata": {},
@@ -123,9 +124,10 @@ Request body:
 ```
 
 Request field rules:
-- `conversation_id` (required): conversation/thread key from client.
+- `conversation_id` (optional): omit for the first message in a new conversation. The backend generates an opaque UUID and returns it. Include the returned value on follow-up messages.
+- `request_id` (optional): client-generated idempotency key for a send attempt, especially useful when creating a new conversation.
 - `message` (required): user prompt.
-- `user_id` (optional, deprecated): if provided, must match authenticated user subject.
+- `user_id` (optional, deprecated): ignored for authenticated clients. The JWT subject is the source of truth.
 - `metadata` (optional): arbitrary key-value map.
 - `retrieval_filters` (optional): retrieval filtering object.
 
@@ -133,9 +135,10 @@ Request field summary:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `conversation_id` | string | Yes | Client conversation/thread id |
+| `conversation_id` | string | No | Backend UUID returned by a prior chat response; omit to create a new conversation |
+| `request_id` | string | No | Idempotency key for this send attempt |
 | `message` | string | Yes | User prompt |
-| `user_id` | string | No | Deprecated; must match authenticated token subject if provided |
+| `user_id` | string | No | Deprecated; backend overwrites with authenticated token subject |
 | `metadata` | object | No | Optional key-value metadata |
 | `retrieval_filters` | object | No | Optional retrieval filters |
 
@@ -143,7 +146,7 @@ Success response (`200`):
 
 ```json
 {
-  "conversation_id": "conv-abc-123",
+  "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
   "answer": "Free cancellation is available up to 24 hours before the appointment.",
   "sources": [
     {
@@ -153,7 +156,17 @@ Success response (`200`):
       "chunk": "Cancellation policy text ..."
     }
   ],
-  "trace_id": "optional-request-id"
+  "trace_id": "optional-request-id",
+  "steps": [
+    {
+      "label": "Retrieved sources",
+      "status": "completed",
+      "detail": "Found 5 relevant source chunks.",
+      "metadata": {
+        "source_count": 5
+      }
+    }
+  ]
 }
 ```
 
@@ -161,13 +174,16 @@ Success field summary:
 
 | Field | Type | Notes |
 |---|---|---|
-| `conversation_id` | string | Echo of client conversation id |
+| `conversation_id` | string | Backend conversation UUID; always present |
 | `answer` | string | Assistant response text (may contain markdown) |
 | `sources` | array | Retrieved source chunks |
-| `trace_id` | string/null | Optional request trace id |
+| `trace_id` | string/null | Request trace id linking frontend reports, backend logs, and `chat_turn_events` |
+| `steps` | array | Sanitized workflow trace events for the agent activity UI |
 
 Notes:
 - `config` is intentionally not returned in normal responses.
+- `steps` are frontend-safe summaries. They must not be treated as a complete backend audit trail.
+- Current expected step statuses are `completed` and `failed`; future streaming may also emit `started`.
 
 ## 5. Error Handling Contract
 
@@ -183,14 +199,15 @@ Normalized error shape:
 Expected statuses:
 - `400`: invalid JSON/body schema.
 - `401`: missing/invalid/expired token.
-- `403`: identity mismatch or forbidden action.
-- `404`: unsupported path.
+- `403`: forbidden action.
+- `404`: unsupported path or nonexistent/unauthorized `conversation_id`.
 - `405`: unsupported method.
 - `500`: server error.
 
 Retry guidance:
 - Retryable: transient `500` (use capped backoff), network errors.
 - Non-retryable: `400`, `401`, `403`, `404`, `405`.
+- On a network timeout during a first send, retry with the same `request_id` so the backend can avoid creating another conversation row.
 
 UX guidance:
 - `401`: composable retries once with refreshed token; if still 401, error is shown in assistant message.
@@ -198,9 +215,27 @@ UX guidance:
 - `500`: show generic "try again" and allow retry.
 
 Long-running request guidance:
-- Show loading state with simulated agent steps (sending → retrieving → generating).
+- Use backend-provided `steps` when the response completes.
+- Until streaming is implemented, keep lightweight local pending UI while the request is in flight.
 - Keep request timeout >= 60s.
 - Support user cancellation (`AbortController`).
+
+Conversation lifecycle:
+- First send without `conversation_id` creates a new backend conversation and returns its UUID.
+- Follow-up sends must include the returned `conversation_id`.
+- The frontend should persist the returned `conversation_id` in chat state immediately.
+- Prevent concurrent sends in the same conversation for v1.
+- Conversation list/get/rename endpoints are not implemented yet; keep local conversation state until those APIs exist.
+
+Future streaming event names:
+- `conversation.created`
+- `trace.step.started`
+- `trace.step.completed`
+- `trace.step.failed`
+- `sources.updated`
+- `answer.delta`
+- `answer.completed`
+- `turn.completed`
 
 ## 6. CORS Requirements
 
@@ -344,13 +379,13 @@ chat-template-frontend/
 State (via `useState` — SSR-safe, shared across components):
 - `messages` — array of `ChatMessage` objects
 - `isStreaming` — whether a request is in flight
-- `conversationId` — per-session, persisted in `sessionStorage`
+- `conversationId` — backend conversation UUID, initially `null`, persisted in `sessionStorage`
 - `liveSources` / `liveSteps` — mirrored to the right sidebar panel
 
 Actions:
-- `send(text)` — append user message, post to `/api/chat`, append assistant response with mapped sources
+- `send(text)` — append user message, post to `/api/chat`, store returned `conversation_id`, append assistant response, map `sources`, and replace `liveSteps` with backend `steps`
 - `stop()` — abort in-flight request via `AbortController`
-- `reset()` — clear messages and generate new conversation ID
+- `reset()` — clear messages and clear `conversationId`; the next send creates a backend conversation
 - `toggleReaction(id, value)` — toggle thumbs up/down on a message
 
 Source mapping (Lambda → UI):
@@ -387,7 +422,7 @@ Exposed:
 
 In SSR mode, proxies chat requests to Lambda:
 - Reads `Authorization` header from client request
-- Translates client field names (`conversationId` → `conversation_id`)
+- Translates client field names (`conversationId` → `conversation_id`, `requestId` → `request_id`)
 - Forwards to Lambda Function URL (from private `runtimeConfig`)
 - Returns Lambda JSON response
 - Maps Lambda error responses to Nuxt `createError`
@@ -398,14 +433,15 @@ In static generation mode, this route is not available at runtime. The `useChat`
 
 1. Auth success path: enter email/password → sign in → token → chat page loads.
 2. Auth failure path: expired token → 401 → auto-refresh → retry; if refresh fails → redirect to login.
-3. Conversation continuity: same `conversation_id` preserves thread context across messages.
-4. User isolation: different users with same `conversation_id` do not leak context.
-5. CORS (static mode): frontend origin allowed; blocked origins fail as expected.
-6. Non-200 handling: each status mapped to clear UX (error shown in assistant message).
-7. Latency behavior: agent step indicators (sending → retrieving → generating), cancel flow works.
-8. Source rendering: sources display `document_id`, `chunk`, `source_type`, and `score` safely.
-9. Responsive: three-column layout at desktop → two-column at 1180px → single column at 800px.
-10. Sign out: clears session, redirects to login.
+3. New conversation path: first send omits `conversation_id`; backend returns a UUID; frontend stores it.
+4. Conversation continuity: follow-up sends include the returned `conversation_id` and preserve thread context.
+5. User isolation: a user cannot load another user's backend `conversation_id`; backend returns 404.
+6. CORS (static mode): frontend origin allowed; blocked origins fail as expected.
+7. Non-200 handling: each status mapped to clear UX (error shown in assistant message).
+8. Latency behavior: local pending indicator works until response; returned `steps` replace simulated agent steps.
+9. Source rendering: sources display `document_id`, `chunk`, `source_type`, and `score` safely.
+10. Responsive: three-column layout at desktop → two-column at 1180px → single column at 800px.
+11. Sign out: clears session, redirects to login.
 
 ## 11. Troubleshooting: "Forbidden" (Function URL authorization)
 
