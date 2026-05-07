@@ -1,8 +1,10 @@
 # RAG Chat History Strategy Plan
 
 Created: 2026-05-05  
-Status: Planning / research only  
+Status: V1 backend foundations implemented on migration branch
 Scope: Session and chat-history management for the `chat-template` RAG Lambda.
+
+Implementation note: The initial backend implementation now supports optional `conversation_id`, backend-generated UUID conversations, visible-only chat-history persistence, deployment-managed chat-history schema setup, and synchronous sanitized `steps` backed by persisted `chat_turn_events`. Durable rolling summaries, conversation management endpoints, archive/delete behavior, and streaming delivery remain future work.
 
 ## Goals
 
@@ -48,8 +50,8 @@ The repo already has meaningful pieces:
 - `src/rag_lambda/memory/factory.py` selects the configured backend.
 - `src/rag_lambda/memory/chat_summary.py` can summarize older messages.
 - Config files default to `memory_backend_type: "aurora_data_api"`, which aligns with the current low-cost Aurora/Data API deployment direction.
-- Auth already scopes storage with `scope_conversation_id(user_id, conversation_id)` so two users cannot collide on the same client-provided `conversation_id`.
-- Proposed update: move toward backend-generated UUID conversation ids so `conversation_id` can be the public API id and the message-history key.
+- Previous code scoped storage with `user_id:conversation_id` to avoid collisions.
+- Implemented update: backend-generated UUID conversation ids now act as both the public API id and the message-history key, with ownership stored explicitly on `chat_conversations`.
 - Tests in `tests/test_lambda_handler_auth.py` verify user scoping and config omission.
 
 ## Current Gaps and Risks
