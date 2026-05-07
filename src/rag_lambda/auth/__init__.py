@@ -5,7 +5,6 @@ from .cognito_jwt import (
     AuthContext,
     AuthError,
     authenticate_request,
-    scope_conversation_id,
 )
 from .http_event import (
     extract_http_metadata,
@@ -25,5 +24,4 @@ __all__ = [
     "normalize_headers",
     "parse_event_body",
     "prepare_body_for_main",
-    "scope_conversation_id",
 ]
