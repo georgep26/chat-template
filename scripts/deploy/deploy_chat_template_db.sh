@@ -91,6 +91,9 @@ show_usage() {
     echo "                                   (optional)"
     echo "  --public-ip3 <ip>             - Third public IP address to allow (CIDR format)"
     echo "                                   (optional)"
+    echo "  --skip-chat-history-schema    - Do not apply sql/chat_history_schema.sql after deploy/update"
+    echo "  --reset-chat-history-schema   - Drop and recreate chat history tables before applying schema"
+    echo "                                   (destructive; intended only while chat history is disposable)"
     echo "  -y, --yes                      - Skip confirmation prompt (deploy/update/delete)"
     echo ""
     echo "Examples:"
@@ -111,6 +114,9 @@ show_usage() {
     echo ""
     echo "  # Check stack status"
     echo "  $0 prod status"
+    echo ""
+    echo "  # Recreate disposable chat-history tables after the schema change"
+    echo "  $0 dev deploy --reset-chat-history-schema"
     echo ""
     echo "Note: Aurora Serverless v2 can scale to 0 ACU (with PostgreSQL 13.15+)."
     echo "      Auto-pause after 30 minutes requires additional automation (Lambda + EventBridge)."
@@ -176,6 +182,8 @@ if get_secret_value "$ENVIRONMENT" "database.master_username" >/dev/null 2>&1; t
 fi
 
 AUTO_CONFIRM=false
+APPLY_CHAT_HISTORY_SCHEMA=true
+RESET_CHAT_HISTORY_SCHEMA=false
 
 # Parse additional arguments
 # VPC ID and subnet IDs can be provided via:
@@ -249,6 +257,14 @@ while [[ $# -gt 0 ]]; do
         --subnet-ids)
             SUBNET_IDS="$2"
             shift 2
+            ;;
+        --skip-chat-history-schema)
+            APPLY_CHAT_HISTORY_SCHEMA=false
+            shift
+            ;;
+        --reset-chat-history-schema)
+            RESET_CHAT_HISTORY_SCHEMA=true
+            shift
             ;;
         *)
             # If it's not a recognized option, it might be the action
@@ -368,6 +384,15 @@ elif [ -n "$SUBNET_IDS_DEFAULT" ]; then
     print_info "  - Subnet IDs: $SUBNET_IDS_DEFAULT (from config, will use if not overridden)"
 else
     print_info "  - Subnet IDs: <will auto-detect from VPC stack if available>"
+fi
+if [ "$APPLY_CHAT_HISTORY_SCHEMA" = true ]; then
+    if [ "$RESET_CHAT_HISTORY_SCHEMA" = true ]; then
+        print_warning "Chat history schema reset is enabled; chat_conversations, chat_history, and chat_turn_events will be dropped/recreated."
+    else
+        print_info "  - Chat history schema: apply/create if missing"
+    fi
+else
+    print_info "  - Chat history schema: skipped"
 fi
 
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
@@ -672,6 +697,180 @@ get_db_outputs() {
         --output text 2>/dev/null)
     
     echo "$db_host|$db_port|$db_name"
+}
+
+# Seconds to wait for Aurora to spin up from 0 ACU before retrying SQL.
+DB_STARTUP_WAIT_SECONDS=180
+
+get_db_cluster_arn() {
+    local cluster_id
+    cluster_id=$(aws_cmd cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`DBClusterIdentifier`].OutputValue' \
+        --output text 2>/dev/null)
+
+    if [ -z "$cluster_id" ] || [ "$cluster_id" = "None" ]; then
+        print_error "Could not retrieve DBClusterIdentifier from $STACK_NAME"
+        return 1
+    fi
+
+    aws_cmd rds describe-db-clusters \
+        --db-cluster-identifier "$cluster_id" \
+        --query 'DBClusters[0].DBClusterArn' \
+        --output text 2>/dev/null
+}
+
+get_db_secret_arn() {
+    local secret_arn=""
+
+    if aws_cmd cloudformation describe-stacks --stack-name "$SECRET_STACK_NAME" --query 'Stacks[0].StackId' --output text >/dev/null 2>&1; then
+        secret_arn=$(aws_cmd cloudformation describe-stacks \
+            --stack-name "$SECRET_STACK_NAME" \
+            --query 'Stacks[0].Outputs[?OutputKey==`SecretArn`].OutputValue' \
+            --output text 2>/dev/null)
+    fi
+
+    if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
+        local secret_full_name="${PROJECT_NAME}-${SECRET_NAME}-${ENVIRONMENT}"
+        secret_arn=$(aws_cmd secretsmanager describe-secret \
+            --secret-id "$secret_full_name" \
+            --query 'ARN' \
+            --output text 2>/dev/null)
+    fi
+
+    if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
+        print_error "Could not resolve DB credentials secret ARN"
+        return 1
+    fi
+
+    echo "$secret_arn"
+}
+
+execute_data_api_sql_statement() {
+    local db_cluster_arn="$1"
+    local db_name="$2"
+    local secret_arn="$3"
+    local statement="$4"
+    local output
+
+    output=$(aws_cmd rds-data execute-statement \
+        --resource-arn "$db_cluster_arn" \
+        --secret-arn "$secret_arn" \
+        --database "$db_name" \
+        --sql "$statement" 2>&1)
+    local status=$?
+
+    if [ $status -ne 0 ]; then
+        print_error "$output"
+    fi
+
+    return $status
+}
+
+execute_data_api_sql_statement_with_startup_retry() {
+    local db_cluster_arn="$1"
+    local db_name="$2"
+    local secret_arn="$3"
+    local statement="$4"
+    local description="$5"
+
+    if execute_data_api_sql_statement "$db_cluster_arn" "$db_name" "$secret_arn" "$statement"; then
+        return 0
+    fi
+
+    print_warning "$description failed (database may be starting from 0 ACU). Waiting ${DB_STARTUP_WAIT_SECONDS}s for Aurora to become available..."
+    sleep "$DB_STARTUP_WAIT_SECONDS"
+    print_info "Retrying $description..."
+
+    execute_data_api_sql_statement "$db_cluster_arn" "$db_name" "$secret_arn" "$statement"
+}
+
+run_chat_history_schema_via_data_api() {
+    if [ "$APPLY_CHAT_HISTORY_SCHEMA" = false ]; then
+        print_info "Skipping chat history schema setup."
+        return 0
+    fi
+
+    local sql_file="$PROJECT_ROOT/sql/chat_history_schema.sql"
+    if [ ! -f "$sql_file" ]; then
+        print_error "SQL file not found: $sql_file"
+        return 1
+    fi
+
+    local db_outputs
+    db_outputs=$(get_db_outputs)
+    local db_name
+    db_name=$(echo "$db_outputs" | cut -d'|' -f3)
+    if [ -z "$db_name" ] || [ "$db_name" = "None" ]; then
+        print_error "Could not retrieve database name from DB stack outputs."
+        return 1
+    fi
+
+    local db_cluster_arn
+    db_cluster_arn=$(get_db_cluster_arn)
+    if [ -z "$db_cluster_arn" ] || [ "$db_cluster_arn" = "None" ]; then
+        print_error "Could not resolve DB cluster ARN for RDS Data API."
+        return 1
+    fi
+
+    local secret_arn
+    secret_arn=$(get_db_secret_arn)
+    if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
+        print_error "Could not resolve DB credentials secret ARN."
+        return 1
+    fi
+
+    print_info "Applying chat history schema via RDS Data API..."
+    if [ "$RESET_CHAT_HISTORY_SCHEMA" = true ]; then
+        print_warning "Dropping existing chat history tables before schema creation..."
+        local reset_statements=(
+            "DROP TABLE IF EXISTS chat_turn_events"
+            "DROP TABLE IF EXISTS chat_history"
+            "DROP TABLE IF EXISTS chat_conversations"
+        )
+        local reset_statement
+        for reset_statement in "${reset_statements[@]}"; do
+            if ! execute_data_api_sql_statement_with_startup_retry "$db_cluster_arn" "$db_name" "$secret_arn" "$reset_statement" "reset statement"; then
+                print_error "Failed to execute reset statement: $reset_statement"
+                return 1
+            fi
+        done
+    fi
+
+    local content
+    content=$(grep -v '^[[:space:]]*--' "$sql_file" | grep -v '^[[:space:]]*$' | sed 's/--.*$//' | tr '\n' ' ' | sed 's/;[[:space:]]*/;/g')
+
+    local waited_for_db=false
+    while true; do
+        local count=0
+        local failed_statement=0
+
+        while IFS= read -r -d ';' statement; do
+            statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$statement" ] && continue
+            count=$((count + 1))
+            if ! execute_data_api_sql_statement "$db_cluster_arn" "$db_name" "$secret_arn" "$statement"; then
+                failed_statement=$count
+                break
+            fi
+        done < <(printf '%s;' "$content")
+
+        if [ "$failed_statement" -eq 0 ]; then
+            print_info "Chat history schema setup completed ($count statements)."
+            return 0
+        fi
+
+        if [ "$waited_for_db" = true ]; then
+            print_error "Failed to execute chat history schema statement $failed_statement after waiting for DB to start."
+            print_error "If this environment still has the old session_id chat_history schema, rerun with --reset-chat-history-schema."
+            return 1
+        fi
+
+        print_warning "Schema statement $failed_statement failed (database may be starting from 0 ACU). Waiting ${DB_STARTUP_WAIT_SECONDS}s for Aurora to become available..."
+        sleep "$DB_STARTUP_WAIT_SECONDS"
+        waited_for_db=true
+        print_info "Retrying chat history schema setup..."
+    done
 }
 
 # Function to ensure credentials are provided (prompt if needed)
@@ -1042,13 +1241,16 @@ deploy_stack() {
             print_info "Stack is up to date and ready."
         fi
         
-        # Deploy secret after DB stack is ready (when we did create/update)
-        if [ "$no_updates" = false ]; then
-            deploy_secret
-        fi
+        # Deploy or verify the secret after DB stack is ready. The helper skips if it exists.
+        deploy_secret
         
         # Write generated outputs to environment secrets/state, not committed infra.yaml.
         write_db_outputs || true
+
+        if ! run_chat_history_schema_via_data_api; then
+            print_error "Chat history schema setup failed."
+            exit 1
+        fi
         
         print_info "You can monitor the progress in the AWS Console or with:"
         if [ -n "$AWS_CLI_PROFILE" ]; then
