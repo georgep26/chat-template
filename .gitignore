@@ -281,6 +281,7 @@ creds.yaml
 
 # Scratchpad files
 scratchpad.txt
+scratchpad.json
 
 # Evaluation outputs: local runs only (published/ is committed)
 evals/eval_outputs/local/
