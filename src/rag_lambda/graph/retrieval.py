@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from .state import MessagesState
+from ..tracing import get_trace_collector
 
 
 def convert_filters_to_kb_format(retrieval_filters: Dict[str, List[str]]) -> Dict[str, Any]:
@@ -66,6 +67,9 @@ def convert_filters_to_kb_format(retrieval_filters: Dict[str, List[str]]) -> Dic
 
 def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
     """Retrieve relevant documents from knowledge base."""
+    collector = get_trace_collector(config)
+    trace_step = collector.start_step("retrieve") if collector else None
+
     # Get retrieval config from state (retrieval config is still in state for backward compatibility)
     retrieval_config = state.get("retrieval_config")
     if not retrieval_config:
@@ -93,6 +97,8 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
         kb_filter = convert_filters_to_kb_format(retrieval_filters)
         if kb_filter:
             vector_search_config["filter"] = kb_filter
+    else:
+        kb_filter = None
     
     # Create retriever with the knowledge_base_id from state
     kb_retriever = AmazonKnowledgeBasesRetriever(
@@ -126,4 +132,22 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
         }
         sources.append(source_info)
     state["sources"] = sources
+    if collector and trace_step:
+        collector.complete_step(
+            trace_step,
+            label="Retrieved sources",
+            detail=f"Found {len(sources)} relevant source chunk{'s' if len(sources) != 1 else ''}.",
+            input_summary={
+                "knowledge_base_id": knowledge_base_id,
+                "number_of_results": vector_search_config.get("numberOfResults"),
+                "filters": retrieval_filters or None,
+            },
+            output_summary={
+                "source_count": len(sources),
+                "source_ids": [source["document_id"] for source in sources],
+                "scores": [source["score"] for source in sources],
+            },
+            metadata={"kb_filter_applied": kb_filter is not None},
+            frontend_metadata={"source_count": len(sources)},
+        )
     return state
