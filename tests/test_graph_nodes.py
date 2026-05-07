@@ -24,6 +24,21 @@ def test_format_conversation_history_keeps_visible_prior_messages():
     assert "internal retrieval context" not in history
 
 
+def test_format_prompt_messages_for_debug_shows_roles_and_names():
+    """Prompt debug output keeps role boundaries visible."""
+    formatted = nodes.format_prompt_messages_for_debug(
+        [
+            SystemMessage(content="System instructions."),
+            SystemMessage(name="retriever_context", content="Retrieved context."),
+            HumanMessage(content="Latest question."),
+        ]
+    )
+
+    assert "--- SYSTEM ---\nSystem instructions." in formatted
+    assert "--- SYSTEM name=retriever_context ---\nRetrieved context." in formatted
+    assert "--- HUMAN ---\nLatest question." in formatted
+
+
 def test_answer_node_passes_prior_history_to_prompt(monkeypatch):
     """Answer generation receives previous turns separately from the latest question."""
     captured = {}

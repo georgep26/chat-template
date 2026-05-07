@@ -12,6 +12,10 @@ from langchain_core.runnables import RunnableConfig
 from .prompts import answer_prompt, clarify_prompt, rewrite_prompt, split_prompt
 from .state import MessagesState
 from ..tracing import get_trace_collector
+from utils.logger import get_logger
+
+
+log = get_logger(__name__)
 
 
 def extract_text_content(content: Union[str, List[Dict[str, Any]]]) -> str:
@@ -59,6 +63,27 @@ def format_conversation_history(messages: List[BaseMessage]) -> str:
             history_lines.append(f"Conversation summary: {text}")
 
     return "\n".join(history_lines) if history_lines else "No previous conversation."
+
+
+def format_prompt_messages_for_debug(messages: List[BaseMessage]) -> str:
+    """Format concrete prompt messages for local debugging."""
+    parts = []
+    for message in messages:
+        role = getattr(message, "type", message.__class__.__name__).upper()
+        name = getattr(message, "name", None)
+        label = f"{role} name={name}" if name else role
+        parts.append(f"--- {label} ---\n{extract_text_content(message.content)}")
+    return "\n\n".join(parts)
+
+
+def answer_prompt_debug_enabled() -> bool:
+    """Return whether full answer prompt logging is enabled."""
+    return os.getenv("RAG_DEBUG_ANSWER_PROMPT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def rewrite_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> MessagesState:
@@ -207,9 +232,14 @@ def answer_node(state: MessagesState, config: Optional[RunnableConfig] = None) -
     history = format_conversation_history(state["messages"][:latest_user_index])
     ctx_msgs = [m for m in state["messages"] if getattr(m, "name", "") == "retriever_context"]
     context = ctx_msgs[-1].content if ctx_msgs else ""
-    resp = (answer_prompt | llm).invoke(
-        {"context": context, "history": history, "question": user.content}
-    )
+    prompt_values = {"context": context, "history": history, "question": user.content}
+    if answer_prompt_debug_enabled():
+        formatted_prompt = answer_prompt.format_messages(**prompt_values)
+        log.info(
+            "Formatted answer prompt before LLM invocation:\n%s",
+            format_prompt_messages_for_debug(formatted_prompt),
+        )
+    resp = (answer_prompt | llm).invoke(prompt_values)
     resp_text = extract_text_content(resp.content)
     state["messages"].append(AIMessage(content=resp_text))
     if collector and trace_step:
