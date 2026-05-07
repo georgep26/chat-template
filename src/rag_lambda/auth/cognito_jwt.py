@@ -55,11 +55,6 @@ class CognitoConfig:
     jwks_cache_ttl_seconds: int
 
 
-def scope_conversation_id(user_id: str, conversation_id: str) -> str:
-    """Create a tenant-scoped conversation id to prevent cross-user collisions."""
-    return f"{user_id}:{conversation_id}"
-
-
 def _parse_bool(raw_value: Optional[str], default_value: bool) -> bool:
     """Parse bool-like strings. Empty/None returns the provided default."""
     if raw_value is None:
