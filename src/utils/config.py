@@ -110,7 +110,7 @@ def read_config(config_path: str) -> Dict[str, Any]:
     # Parse content based on file format
     if ext == '.json':
         try:
-            return json.loads(content)
+            return _expand_env_values(json.loads(content))
         except json.JSONDecodeError as e:
             raise json.JSONDecodeError(
                 f"Invalid JSON in config file: {config_path}",
@@ -124,7 +124,7 @@ def read_config(config_path: str) -> Dict[str, Any]:
             )
         
         try:
-            return yaml.safe_load(content)
+            return _expand_env_values(yaml.safe_load(content))
         except yaml.YAMLError as e:
             raise yaml.YAMLError(f"Invalid YAML in config file: {config_path}") from e
     else:
@@ -132,3 +132,13 @@ def read_config(config_path: str) -> Dict[str, Any]:
             f"Unsupported file format: {ext}. Supported formats: .json, .yaml, .yml"
         )
 
+
+def _expand_env_values(value: Any) -> Any:
+    """Expand ${VAR} placeholders in parsed config values."""
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [_expand_env_values(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_env_values(item) for key, item in value.items()}
+    return value
