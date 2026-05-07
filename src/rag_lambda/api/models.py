@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     """Request model for chat API."""
 
-    conversation_id: str
+    conversation_id: Optional[str] = None
+    request_id: Optional[str] = None
     # Deprecated for authenticated clients. The backend derives identity from JWT when auth is enabled.
     user_id: Optional[str] = None
     message: str
@@ -32,4 +33,5 @@ class ChatResponse(BaseModel):
     answer: str
     sources: List[Source] = Field(default_factory=list)
     trace_id: Optional[str] = None
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
     config: Optional[Dict[str, Any]] = None
