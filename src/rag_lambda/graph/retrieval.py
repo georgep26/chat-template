@@ -95,7 +95,8 @@ def format_retrieved_context(docs: List[Document]) -> str:
         blocks.append(
             "\n".join(
                 [
-                    f"<source index=\"{index}\">",
+                    f"<source number=\"{index}\">",
+                    f"source_number: {index}",
                     "<metadata>",
                     format_source_metadata(metadata),
                     "</metadata>",

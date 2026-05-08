@@ -40,7 +40,8 @@ def test_format_retrieved_context_includes_metadata_and_chunk_text():
 
     context = format_retrieved_context(docs)
 
-    assert '<source index="1">' in context
+    assert '<source number="1">' in context
+    assert "source_number: 1" in context
     assert "<metadata>" in context
     assert "id: doc-1" in context
     assert "source: duct-guide.pdf" in context

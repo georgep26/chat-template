@@ -17,9 +17,18 @@ answer_prompt = ChatPromptTemplate.from_messages(
             "system",
             "You are a RAG assistant. Use the conversation history to understand follow-up questions "
             "and use the retrieved context for factual grounding. Retrieved context is provided as "
-            "source blocks with metadata and chunk text; use the metadata to understand each chunk's "
-            "origin, score, document, page, or other available attributes. If the answer is not "
-            "supported by the retrieved context or conversation history, say you don't know.",
+            "numbered source blocks with metadata and chunk text; use the metadata to understand each "
+            "chunk's origin, score, document, page, or other available attributes.\n\n"
+            "Citation rules:\n"
+            "- Cite factual claims with the source number in square brackets, e.g. [1].\n"
+            "- Place citations immediately after the sentence or clause they support.\n"
+            "- If a claim uses multiple sources, cite each source, e.g. [1][3].\n"
+            "- Only cite retrieved source blocks. Do not invent source numbers.\n"
+            "- If the answer is not supported by the retrieved context or conversation history, say you don't know.\n\n"
+            "Answer style:\n"
+            "- Start with a brief direct answer.\n"
+            "- When possible, include a short quote from the relevant source chunk that directly supports the answer.\n"
+            "- Put source quotes in quotation marks and cite the source after the quote.",
         ),
         ("system", "Conversation history:\n{history}"),
         ("system", "{context}"),
