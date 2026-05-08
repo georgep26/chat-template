@@ -31,7 +31,9 @@ source "$SCRIPT_DIR/../utils/deploy_summary.sh"
 # Script Configuration
 # =============================================================================
 
-RESOURCE_NAME="rag_lambda_ecr"
+# RESOURCE_NAME defaults to rag_lambda_ecr but can be overridden by the wrapper
+# script (e.g. resources/history_api_lambda_ecr.sh) via the env var of the same name.
+RESOURCE_NAME="${RESOURCE_NAME:-rag_lambda_ecr}"
 RESOURCE_DISPLAY_NAME="ECR Repository"
 
 # =============================================================================

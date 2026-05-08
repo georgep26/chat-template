@@ -254,6 +254,9 @@ class PostgresHistoryStore(ChatHistoryStore):
                 metadata = json.loads(metadata)
             except json.JSONDecodeError:
                 metadata = {}
+        # Optional timestamp columns (positions 8, 9) — only present when SELECT lists them.
+        created_at = row[8] if len(row) > 8 else None
+        last_message_at = row[9] if len(row) > 9 else None
         return ConversationRecord(
             conversation_id=str(row[0]),
             user_id=row[1],
@@ -263,6 +266,8 @@ class PostgresHistoryStore(ChatHistoryStore):
             summary=row[5],
             summary_message_count=row[6] or 0,
             metadata=metadata,
+            created_at=created_at,
+            last_message_at=last_message_at,
             created=created,
             idempotent_replay=idempotent_replay,
         )
@@ -462,4 +467,103 @@ class PostgresHistoryStore(ChatHistoryStore):
                         json.dumps(record.get("metadata") or {}),
                     ),
                 )
+            self._conn.commit()
+
+    def list_conversations(
+        self,
+        *,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[ConversationRecord]:
+        """List conversations owned by user_id, newest first, excluding soft-deleted rows."""
+        self._ensure_connection()
+        conversation_table_name = sql.Identifier(self._conversation_table_name)
+        query = sql.SQL("""
+            SELECT
+                conversation_id,
+                user_id,
+                title,
+                status,
+                message_count,
+                summary,
+                summary_message_count,
+                metadata,
+                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                to_char(last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            FROM {}
+            WHERE environment = %s
+              AND user_id = %s
+              AND status <> 'deleted'
+            ORDER BY last_message_at DESC NULLS LAST, created_at DESC
+            LIMIT %s OFFSET %s
+        """).format(conversation_table_name)
+        with self._conn.cursor() as cur:
+            cur.execute(query, (self._environment, user_id, int(limit), int(offset)))
+            rows = cur.fetchall()
+        return [self._row_to_conversation(row) for row in rows]
+
+    def rename_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        title: str,
+    ) -> ConversationRecord:
+        """Update title for an owned conversation. Raises if not owned."""
+        self._ensure_connection()
+        normalized_id = self._validated_uuid(conversation_id)
+        clean_title = self._derive_title(title)
+        conversation_table_name = sql.Identifier(self._conversation_table_name)
+        query = sql.SQL("""
+            UPDATE {}
+            SET title = %s, updated_at = NOW()
+            WHERE conversation_id = %s
+              AND user_id = %s
+              AND environment = %s
+              AND status <> 'deleted'
+            RETURNING
+                conversation_id,
+                user_id,
+                title,
+                status,
+                message_count,
+                summary,
+                summary_message_count,
+                metadata,
+                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                to_char(last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        """).format(conversation_table_name)
+        with self._conn.cursor() as cur:
+            cur.execute(query, (clean_title, normalized_id, user_id, self._environment))
+            row = cur.fetchone()
+            if not row:
+                self._conn.rollback()
+                raise ConversationAccessError("Conversation was not found for this user.")
+            self._conn.commit()
+        return self._row_to_conversation(row)
+
+    def delete_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> None:
+        """Soft-delete an owned conversation by setting status='deleted'. Raises if not owned."""
+        self._ensure_connection()
+        normalized_id = self._validated_uuid(conversation_id)
+        conversation_table_name = sql.Identifier(self._conversation_table_name)
+        query = sql.SQL("""
+            UPDATE {}
+            SET status = 'deleted', updated_at = NOW()
+            WHERE conversation_id = %s
+              AND user_id = %s
+              AND environment = %s
+              AND status <> 'deleted'
+        """).format(conversation_table_name)
+        with self._conn.cursor() as cur:
+            cur.execute(query, (normalized_id, user_id, self._environment))
+            if cur.rowcount == 0:
+                self._conn.rollback()
+                raise ConversationAccessError("Conversation was not found for this user.")
             self._conn.commit()

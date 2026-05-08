@@ -14,16 +14,19 @@ User Browser (Nuxt 4 SPA / SSG)
   -> Signs in with email/password via Cognito SRP (in-app login form)
   -> Receives JWTs (ID/Access token)
   -> Posts to Nitro server route /api/chat (SSR mode)
-     OR calls Lambda Function URL directly (static generation mode)
-  -> Lambda validates JWT, runs retrieval/generation, returns answer
+     OR calls RAG Lambda Function URL directly (static generation mode)
+  -> RAG Lambda validates JWT, runs retrieval/generation, persists turn, returns answer
+  -> History API Lambda (separate Function URL) serves /conversations list + reads
+     + rename/delete from the same Aurora tables
 ```
 
 Components:
 - Cognito User Pool: authenticates end users and issues JWTs.
-- Nuxt 4 frontend: obtains token, sends chat requests, renders responses.
-- Nitro server route (SSR mode): proxies `/api/chat` to Lambda, forwards auth header. Keeps Lambda URL server-only.
-- Lambda Function URL: HTTPS endpoint exposed for backend access.
-- RAG Lambda: enforces auth, scopes conversation storage by authenticated user, runs RAG pipeline.
+- Nuxt 4 frontend: obtains token, sends chat requests, renders responses, manages conversation list/history via the History API.
+- Nitro server route (SSR mode): proxies `/api/chat` and `/api/history/*` to the corresponding Lambdas, forwards auth header. Keeps Lambda URLs server-only.
+- RAG Lambda: enforces auth, scopes conversation storage by authenticated user, runs RAG pipeline. Exposed via its own Function URL.
+- History API Lambda: enforces auth, exposes per-user `/conversations` list/get-messages/rename/delete endpoints. Exposed via its own Function URL.
+- Both Lambdas read/write the same Aurora `chat_conversations` / `chat_history` tables, scoped by `(environment, user_id)` from the JWT subject.
 
 ### Deployment Modes
 
@@ -48,7 +51,8 @@ Environment variables use Nuxt's `runtimeConfig` convention (`NUXT_` prefix for 
 
 | Variable | Dev | Staging | Prod | Notes |
 |---|---|---|---|---|
-| `NUXT_PUBLIC_CHAT_API_BASE_URL` | Lambda URL (dev) | Lambda URL (staging) | Lambda URL (prod) | Used in static generation mode; browser calls this directly |
+| `NUXT_PUBLIC_CHAT_API_BASE_URL` | Lambda URL (dev) | Lambda URL (staging) | Lambda URL (prod) | RAG Lambda URL; used in static generation mode; browser calls this directly |
+| `NUXT_PUBLIC_HISTORY_API_BASE_URL` | History API URL (dev) | History API URL (staging) | History API URL (prod) | History API Lambda URL for `/conversations` endpoints (list, get messages, rename, delete) |
 | `NUXT_PUBLIC_COGNITO_REGION` | Required | Required | Required | Usually `us-east-1` |
 | `NUXT_PUBLIC_COGNITO_USER_POOL_ID` | Required | Required | Required | User pool for this environment |
 | `NUXT_PUBLIC_COGNITO_APP_CLIENT_ID` | Required | Required | Required | App client used by SPA |
@@ -185,6 +189,97 @@ Notes:
 - `steps` are frontend-safe summaries. They must not be treated as a complete backend audit trail.
 - Current expected step statuses are `completed` and `failed`; future streaming may also emit `started`.
 
+## 4.5 History API Contract (separate Lambda)
+
+The history API lives on a separate Lambda Function URL (`NUXT_PUBLIC_HISTORY_API_BASE_URL`). It exposes per-user conversation list/read/rename/delete endpoints. It validates the same Cognito JWT and reads from the same Aurora `chat_conversations` and `chat_history` tables. All queries are scoped by `(environment, user_id)` from the JWT subject.
+
+Headers (all endpoints):
+- `Authorization: Bearer <JWT>` (required)
+- `Content-Type: application/json` (for POST)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/conversations?limit=50&offset=0` | List user's conversations, newest first, excluding soft-deleted |
+| `GET` | `/conversations/{conversation_id}/messages` | Ordered messages for an owned conversation |
+| `POST` | `/conversations/{conversation_id}/rename` | Update the conversation title (body: `{"title": "..."}`) |
+| `DELETE` | `/conversations/{conversation_id}` | Soft-delete (sets `status='deleted'`) |
+| `OPTIONS` | (any) | CORS preflight, returns 204 |
+
+`GET /conversations` response (`200`):
+
+```json
+{
+  "conversations": [
+    {
+      "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
+      "title": "Cancellation policy",
+      "status": "active",
+      "message_count": 4,
+      "created_at": "2026-05-04T20:29:52Z",
+      "last_message_at": "2026-05-04T20:31:11Z"
+    }
+  ],
+  "next_offset": null
+}
+```
+
+- `next_offset` is the offset to pass next time when more rows may be available; `null` when the page returned fewer rows than `limit`.
+- `limit` is clamped to `[1, 200]`, default `50`. `offset` is clamped to `[0, 10000]`, default `0`.
+
+`GET /conversations/{id}/messages` response (`200`):
+
+```json
+{
+  "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
+  "messages": [
+    { "role": "user", "content": "What is the cancellation policy?" },
+    { "role": "assistant", "content": "Free cancellation is available up to 24 hours before the appointment." }
+  ]
+}
+```
+
+- Messages are returned in chronological order.
+- `role` is one of `user`, `assistant`, `system`.
+- Per-message `sources` and `steps` are **not** included in v1 (those live in `chat_turn_events`). Historical messages render without source cards.
+
+`POST /conversations/{id}/rename` request:
+
+```json
+{ "title": "New title (1-255 chars)" }
+```
+
+Response (`200`):
+
+```json
+{
+  "conversation": {
+    "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
+    "title": "New title",
+    "status": "active",
+    "message_count": 4,
+    "created_at": "2026-05-04T20:29:52Z",
+    "last_message_at": "2026-05-04T20:31:11Z"
+  }
+}
+```
+
+`DELETE /conversations/{id}` response (`200`):
+
+```json
+{ "conversation_id": "7b5e4c7e-...", "deleted": true }
+```
+
+- Delete is soft (`status='deleted'`); subsequent `GET /conversations` excludes the row.
+- Subsequent reads of a deleted conversation return `404`.
+
+Status codes (all endpoints, same shape as Section 5):
+- `200` — success
+- `204` — OPTIONS preflight
+- `400` — bad request body or query param out of range
+- `401` — missing/invalid/expired token
+- `404` — path not matched, or conversation not owned / not found (we deliberately do not distinguish "not yours" from "doesn't exist")
+- `500` — server error
+
 ## 5. Error Handling Contract
 
 Normalized error shape:
@@ -225,7 +320,7 @@ Conversation lifecycle:
 - Follow-up sends must include the returned `conversation_id`.
 - The frontend should persist the returned `conversation_id` in chat state immediately.
 - Prevent concurrent sends in the same conversation for v1.
-- Conversation list/get/rename endpoints are not implemented yet; keep local conversation state until those APIs exist.
+- Conversation list/get-messages/rename/delete are exposed by the **History API Lambda** — see Section 4.5.
 
 Future streaming event names:
 - `conversation.created`

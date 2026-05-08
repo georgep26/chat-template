@@ -279,6 +279,10 @@ class DataApiHistoryStore(ChatHistoryStore):
             except (json.JSONDecodeError, TypeError):
                 metadata = {}
 
+        # Optional timestamp columns (positions 8, 9) — only present when SELECT lists them.
+        created_at = self._convert_data_api_value(record[8]) if len(record) > 8 else None
+        last_message_at = self._convert_data_api_value(record[9]) if len(record) > 9 else None
+
         return ConversationRecord(
             conversation_id=self._convert_data_api_value(record[0]),
             user_id=self._convert_data_api_value(record[1]),
@@ -288,6 +292,8 @@ class DataApiHistoryStore(ChatHistoryStore):
             summary=self._convert_data_api_value(record[5]),
             summary_message_count=self._convert_data_api_value(record[6]) or 0,
             metadata=metadata,
+            created_at=created_at,
+            last_message_at=last_message_at,
             created=created,
             idempotent_replay=idempotent_replay,
         )
@@ -590,3 +596,105 @@ class DataApiHistoryStore(ChatHistoryStore):
             self._execute_statement(sql, parameters)
 
         log.info("Appended %s trace events to conversation %s", len(trace_events), normalized_id)
+
+    def list_conversations(
+        self,
+        *,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[ConversationRecord]:
+        """List conversations owned by user_id, newest first, excluding soft-deleted rows."""
+        sql = f"""
+            SELECT
+                conversation_id::text,
+                user_id,
+                title,
+                status,
+                message_count,
+                summary,
+                summary_message_count,
+                metadata,
+                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                to_char(last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            FROM {self._conversation_table_name}
+            WHERE environment = :environment
+              AND user_id = :user_id
+              AND status <> 'deleted'
+            ORDER BY last_message_at DESC NULLS LAST, created_at DESC
+            LIMIT :limit OFFSET :offset
+        """
+        parameters = [
+            {"name": "environment", "value": {"stringValue": self._environment}},
+            {"name": "user_id", "value": {"stringValue": user_id}},
+            {"name": "limit", "value": {"longValue": int(limit)}},
+            {"name": "offset", "value": {"longValue": int(offset)}},
+        ]
+        response = self._execute_statement(sql, parameters)
+        return [self._conversation_from_record(record) for record in response.get("records", [])]
+
+    def rename_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        title: str,
+    ) -> ConversationRecord:
+        """Update title for an owned conversation. Raises if not owned."""
+        normalized_id = self._validated_uuid(conversation_id)
+        clean_title = self._derive_title(title)
+        sql = f"""
+            UPDATE {self._conversation_table_name}
+            SET title = :title, updated_at = NOW()
+            WHERE conversation_id = CAST(:conversation_id AS uuid)
+              AND user_id = :user_id
+              AND environment = :environment
+              AND status <> 'deleted'
+            RETURNING
+                conversation_id::text,
+                user_id,
+                title,
+                status,
+                message_count,
+                summary,
+                summary_message_count,
+                metadata,
+                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                to_char(last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        """
+        parameters = [
+            {"name": "title", "value": {"stringValue": clean_title}},
+            {"name": "conversation_id", "value": {"stringValue": normalized_id}},
+            {"name": "user_id", "value": {"stringValue": user_id}},
+            {"name": "environment", "value": {"stringValue": self._environment}},
+        ]
+        response = self._execute_statement(sql, parameters)
+        records = response.get("records", [])
+        if not records:
+            raise ConversationAccessError("Conversation was not found for this user.")
+        return self._conversation_from_record(records[0])
+
+    def delete_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> None:
+        """Soft-delete an owned conversation by setting status='deleted'. Raises if not owned."""
+        normalized_id = self._validated_uuid(conversation_id)
+        sql = f"""
+            UPDATE {self._conversation_table_name}
+            SET status = 'deleted', updated_at = NOW()
+            WHERE conversation_id = CAST(:conversation_id AS uuid)
+              AND user_id = :user_id
+              AND environment = :environment
+              AND status <> 'deleted'
+        """
+        parameters = [
+            {"name": "conversation_id", "value": {"stringValue": normalized_id}},
+            {"name": "user_id", "value": {"stringValue": user_id}},
+            {"name": "environment", "value": {"stringValue": self._environment}},
+        ]
+        response = self._execute_statement(sql, parameters)
+        if response.get("numberOfRecordsUpdated", 0) == 0:
+            raise ConversationAccessError("Conversation was not found for this user.")

@@ -3,7 +3,7 @@
 import pytest
 from jwt import ExpiredSignatureError, InvalidIssuerError, InvalidSignatureError
 
-from src.rag_lambda.auth import cognito_jwt
+from auth import cognito_jwt
 
 
 @pytest.fixture

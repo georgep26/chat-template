@@ -1,8 +1,8 @@
 #!/bin/bash
 # Generate a .env-style handoff file for the frontend repo.
-# Reads CloudFormation outputs from the cognito, frontend, and rag_lambda
-# stacks, plus runtime values from the env secrets file, and writes
-# infra/state/<env>.frontend.handoff.env atomically.
+# Reads CloudFormation outputs from the cognito, frontend, rag_lambda, and
+# history_api_lambda stacks, plus runtime values from the env secrets file,
+# and writes infra/state/<env>.frontend.handoff.env atomically.
 #
 # Idempotent. Safe to invoke standalone or from deploy_all.sh. Skips with a
 # warning when required upstream stacks are not yet deployed.
@@ -87,6 +87,7 @@ print_step "Generating frontend handoff for $ENVIRONMENT"
 cognito_stack=$(get_resource_stack_name "cognito" "$ENVIRONMENT")
 frontend_stack=$(get_resource_stack_name "frontend" "$ENVIRONMENT")
 lambda_stack=$(get_resource_stack_name "rag_lambda" "$ENVIRONMENT")
+history_api_stack=$(get_resource_stack_name "history_api_lambda" "$ENVIRONMENT")
 
 if ! aws_cmd cloudformation describe-stacks --stack-name "$cognito_stack" >/dev/null 2>&1; then
     print_warning "Cognito stack '$cognito_stack' not found; skipping handoff generation"
@@ -100,12 +101,17 @@ if ! aws_cmd cloudformation describe-stacks --stack-name "$lambda_stack" >/dev/n
     print_warning "Lambda stack '$lambda_stack' not found; skipping handoff generation"
     exit 0
 fi
+if ! aws_cmd cloudformation describe-stacks --stack-name "$history_api_stack" >/dev/null 2>&1; then
+    print_warning "History API Lambda stack '$history_api_stack' not found; skipping handoff generation"
+    exit 0
+fi
 
 cognito_region=$(stack_output "$cognito_stack" "CognitoRegion")
 user_pool_id=$(stack_output "$cognito_stack" "UserPoolId")
 app_client_id=$(stack_output "$cognito_stack" "AppClientId")
 cf_domain=$(stack_output "$frontend_stack" "CloudFrontDomainName")
 function_url=$(stack_output "$lambda_stack" "LambdaFunctionUrl")
+history_api_url=$(stack_output "$history_api_stack" "LambdaFunctionUrl")
 
 # Lambda template may name the output differently — fall back to live config.
 if [ -z "$function_url" ] || [ "$function_url" = "None" ] || [ "$function_url" = "null" ]; then
@@ -114,9 +120,16 @@ if [ -z "$function_url" ] || [ "$function_url" = "None" ] || [ "$function_url" =
         --function-name "$function_name" \
         --query 'FunctionUrl' --output text 2>/dev/null || true)
 fi
+if [ -z "$history_api_url" ] || [ "$history_api_url" = "None" ] || [ "$history_api_url" = "null" ]; then
+    history_api_name="${PROJECT_NAME:-chat-template}-${ENVIRONMENT}-history-api"
+    history_api_url=$(aws_cmd lambda get-function-url-config \
+        --function-name "$history_api_name" \
+        --query 'FunctionUrl' --output text 2>/dev/null || true)
+fi
 
-# Strip any trailing slash on function URL for consistent assembly downstream.
+# Strip any trailing slash on function URLs for consistent assembly downstream.
 function_url="${function_url%/}"
+history_api_url="${history_api_url%/}"
 
 missing=()
 [ -z "$cognito_region" ] || [ "$cognito_region" = "None" ] && missing+=("CognitoRegion")
@@ -124,6 +137,7 @@ missing=()
 [ -z "$app_client_id" ] || [ "$app_client_id" = "None" ] && missing+=("AppClientId")
 [ -z "$cf_domain" ] || [ "$cf_domain" = "None" ] && missing+=("CloudFrontDomainName")
 [ -z "$function_url" ] || [ "$function_url" = "None" ] && missing+=("LambdaFunctionUrl")
+[ -z "$history_api_url" ] || [ "$history_api_url" = "None" ] && missing+=("HistoryApiLambdaFunctionUrl")
 
 if [ ${#missing[@]} -gt 0 ]; then
     print_warning "Skipping handoff file: missing stack outputs: ${missing[*]}"
@@ -141,6 +155,7 @@ cat > "$tmp_file" <<EOF
 # Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Environment: ${ENVIRONMENT}
 NUXT_PUBLIC_CHAT_API_BASE_URL=${function_url}
+NUXT_PUBLIC_HISTORY_API_BASE_URL=${history_api_url}
 NUXT_PUBLIC_COGNITO_REGION=${cognito_region}
 NUXT_PUBLIC_COGNITO_USER_POOL_ID=${user_pool_id}
 NUXT_PUBLIC_COGNITO_APP_CLIENT_ID=${app_client_id}

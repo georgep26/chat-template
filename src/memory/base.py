@@ -20,6 +20,8 @@ class ConversationRecord:
     message_count: int = 0
     summary: Optional[str] = None
     summary_message_count: int = 0
+    created_at: Optional[str] = None
+    last_message_at: Optional[str] = None
     created: bool = False
     idempotent_replay: bool = False
 
@@ -87,3 +89,68 @@ class ChatHistoryStore(ABC):
         Stores that do not support trace persistence can leave this as a no-op.
         """
         del conversation_id, trace_events
+
+    def list_conversations(
+        self,
+        *,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[ConversationRecord]:
+        """
+        List conversations owned by user_id, ordered by recency.
+
+        Excludes soft-deleted conversations (status='deleted').
+        Persistent stores must override this; the default raises.
+        """
+        del user_id, limit, offset
+        raise NotImplementedError("list_conversations is not supported by this store")
+
+    def rename_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        title: str,
+    ) -> ConversationRecord:
+        """
+        Update the title for a conversation owned by user_id.
+
+        Raises ConversationAccessError if the conversation is not found or not owned.
+        """
+        del conversation_id, user_id, title
+        raise NotImplementedError("rename_conversation is not supported by this store")
+
+    def delete_conversation(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> None:
+        """
+        Soft-delete a conversation owned by user_id (sets status='deleted').
+
+        Raises ConversationAccessError if the conversation is not found or not owned.
+        """
+        del conversation_id, user_id
+        raise NotImplementedError("delete_conversation is not supported by this store")
+
+    def get_messages_for_user(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        limit: Optional[int] = None,
+    ) -> List[BaseMessage]:
+        """
+        Retrieve messages for a conversation after verifying ownership.
+
+        Raises ConversationAccessError if the conversation is not owned by user_id
+        or has been soft-deleted (status='deleted').
+        """
+        record = self.resolve_or_create_conversation(
+            user_id=user_id, conversation_id=conversation_id,
+        )
+        if record.status == "deleted":
+            raise ConversationAccessError("Conversation was not found for this user.")
+        return self.get_messages(conversation_id, limit=limit)

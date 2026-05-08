@@ -5,9 +5,9 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.rag_lambda.auth.cognito_jwt import AuthContext, AuthError
-from src.rag_lambda.main import lambda_handler, main
-from src.rag_lambda.memory.base import ConversationAccessError, ConversationRecord
+from auth.cognito_jwt import AuthContext, AuthError
+from rag_lambda.main import lambda_handler, main
+from memory.base import ConversationAccessError, ConversationRecord
 
 
 class FakeStore:
@@ -115,10 +115,10 @@ def _mock_config():
 
 
 def _patch_runtime(monkeypatch, store):
-    monkeypatch.setattr("src.rag_lambda.main.read_config", lambda path: copy.deepcopy(_mock_config()))
-    monkeypatch.setattr("src.rag_lambda.main.create_history_store", lambda **kwargs: store)
-    monkeypatch.setattr("src.rag_lambda.main.summarization_check", lambda **kwargs: kwargs["messages"])
-    monkeypatch.setattr("src.rag_lambda.main.build_rag_graph", lambda: FakeGraph())
+    monkeypatch.setattr("rag_lambda.main.read_config", lambda path: copy.deepcopy(_mock_config()))
+    monkeypatch.setattr("rag_lambda.main.create_history_store", lambda **kwargs: store)
+    monkeypatch.setattr("rag_lambda.main.summarization_check", lambda **kwargs: kwargs["messages"])
+    monkeypatch.setattr("rag_lambda.main.build_rag_graph", lambda: FakeGraph())
 
 
 def test_lambda_handler_missing_token_returns_401(monkeypatch):
@@ -146,7 +146,7 @@ def test_lambda_handler_missing_token_returns_401(monkeypatch):
 def test_lambda_handler_bad_token_returns_401(monkeypatch):
     """Invalid token is returned as normalized auth error."""
     monkeypatch.setattr(
-        "src.rag_lambda.main.authenticate_request",
+        "rag_lambda.main.authenticate_request",
         lambda headers, fallback_user_id=None: (_ for _ in ()).throw(
             AuthError("InvalidToken", "Token is invalid.", 401)
         ),
@@ -170,7 +170,7 @@ def test_lambda_handler_mismatched_user_id_overwritten_by_token(monkeypatch):
     store = FakeStore()
     _patch_runtime(monkeypatch, store)
     monkeypatch.setattr(
-        "src.rag_lambda.main.authenticate_request",
+        "rag_lambda.main.authenticate_request",
         lambda headers, fallback_user_id=None: AuthContext(user_id="token-user", claims={"sub": "token-user"}),
     )
 
@@ -202,7 +202,7 @@ def test_lambda_handler_success_and_no_config_leak(monkeypatch):
     store = FakeStore()
     _patch_runtime(monkeypatch, store)
     monkeypatch.setattr(
-        "src.rag_lambda.main.authenticate_request",
+        "rag_lambda.main.authenticate_request",
         lambda headers, fallback_user_id=None: AuthContext(user_id="token-user", claims={"sub": "token-user"}),
     )
 
@@ -252,7 +252,7 @@ def test_lambda_handler_rejects_conversation_owned_by_another_user(monkeypatch):
     store.owners["00000000-0000-4000-8000-000000000002"] = "user-a"
     _patch_runtime(monkeypatch, store)
     monkeypatch.setattr(
-        "src.rag_lambda.main.authenticate_request",
+        "rag_lambda.main.authenticate_request",
         lambda headers, fallback_user_id=None: AuthContext(user_id="user-b", claims={"sub": "user-b"}),
     )
 
