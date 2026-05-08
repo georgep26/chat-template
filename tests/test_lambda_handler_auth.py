@@ -94,6 +94,51 @@ class FakeGraph:
         }
 
 
+class FakeCitedGraph:
+    """Fake graph that returns non-contiguous cited sources."""
+
+    def invoke(self, state, config=None):
+        del config
+        messages = state["messages"] + [
+            AIMessage(
+                content=(
+                    "Source three supports the first claim <[3]>. "
+                    "Source one supports the second claim <[1]>. "
+                    "Source three is reused <[3]>. Plain [2024] text remains."
+                )
+            ),
+        ]
+        return {
+            "messages": messages,
+            "sources": [
+                {
+                    "retrieval_source_number": 1,
+                    "document_id": "doc-1",
+                    "source_type": "document",
+                    "score": 0.9,
+                    "chunk": "source one chunk",
+                    "metadata": {"page_number": 1},
+                },
+                {
+                    "retrieval_source_number": 2,
+                    "document_id": "doc-2",
+                    "source_type": "document",
+                    "score": 0.8,
+                    "chunk": "unused source chunk",
+                    "metadata": {"page_number": 2},
+                },
+                {
+                    "retrieval_source_number": 3,
+                    "document_id": "doc-3",
+                    "source_type": "document",
+                    "score": 0.7,
+                    "chunk": "source three chunk",
+                    "metadata": {"page_number": 3},
+                },
+            ],
+        }
+
+
 def _mock_config():
     return {
         "rag_chat": {
@@ -244,6 +289,34 @@ def test_main_uses_backend_conversation_id_as_storage_key(monkeypatch):
     assert stored_messages[0].content == "hello"
     assert stored_messages[1].content == "hello from test"
     assert all(getattr(message, "name", None) not in {"rewriter", "subqueries"} for message in stored_messages)
+    assert body["sources"] == []
+    assert store.append_calls[0][2]["source_ids"] == []
+
+
+def test_main_normalizes_citations_and_filters_sources(monkeypatch):
+    """Only cited sources are returned and persisted, renumbered by first use."""
+    store = FakeStore()
+    _patch_runtime(monkeypatch, store)
+    monkeypatch.setattr("rag_lambda.main.build_rag_graph", lambda: FakeCitedGraph())
+
+    response = main({"message": "hello", "user_id": "user-a"})
+    body = json.loads(response["body"])
+
+    assert response["statusCode"] == 200
+    assert body["answer"] == (
+        "Source three supports the first claim [1]. "
+        "Source one supports the second claim [2]. "
+        "Source three is reused [1]. Plain [2024] text remains."
+    )
+    assert [source["citation_number"] for source in body["sources"]] == [1, 2]
+    assert [source["document_id"] for source in body["sources"]] == ["doc-3", "doc-1"]
+    assert body["sources"][0]["metadata"] == {"page_number": 3}
+
+    stored_messages = store.append_calls[0][1]
+    assert stored_messages[1].content == body["answer"]
+    metadata = store.append_calls[0][2]
+    assert metadata["source_ids"] == ["doc-3", "doc-1"]
+    assert metadata["citation_map"] == {3: 1, 1: 2}
 
 
 def test_lambda_handler_rejects_conversation_owned_by_another_user(monkeypatch):

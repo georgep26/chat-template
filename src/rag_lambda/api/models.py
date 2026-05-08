@@ -20,10 +20,12 @@ class ChatRequest(BaseModel):
 class Source(BaseModel):
     """Source document information."""
 
+    citation_number: int
     document_id: str
     source_type: str
     score: float
     chunk: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):

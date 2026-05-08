@@ -3,8 +3,8 @@
 from src.rag_lambda.graph.prompts import answer_prompt
 
 
-def test_answer_prompt_instructs_numbered_source_citations():
-    """Answer prompt requires bracketed citations and source quotes."""
+def test_answer_prompt_instructs_sentinel_source_citations():
+    """Answer prompt requires sentinel citations and source quotes."""
     messages = answer_prompt.format_messages(
         history="No previous conversation.",
         context=(
@@ -19,8 +19,9 @@ def test_answer_prompt_instructs_numbered_source_citations():
     )
     system_text = messages[0].content
 
-    assert "Cite factual claims with the source number in square brackets" in system_text
-    assert "e.g. [1]" in system_text
+    assert "Cite factual claims with the sentinel source marker format <[N]>" in system_text
+    assert "e.g. <[1]>" in system_text
+    assert "Do not write plain [N] citations" in system_text
     assert "Place citations immediately after" in system_text
     assert "include a short quote from the relevant source chunk" in system_text
     assert "Do not invent source numbers" in system_text

@@ -151,13 +151,17 @@ Success response (`200`):
 ```json
 {
   "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
-  "answer": "Free cancellation is available up to 24 hours before the appointment.",
+  "answer": "Free cancellation is available up to 24 hours before the appointment [1].",
   "sources": [
     {
+      "citation_number": 1,
       "document_id": "doc-001",
       "source_type": "document",
       "score": 0.92,
-      "chunk": "Cancellation policy text ..."
+      "chunk": "Cancellation policy text ...",
+      "metadata": {
+        "page_number": 3
+      }
     }
   ],
   "trace_id": "optional-request-id",
@@ -180,12 +184,13 @@ Success field summary:
 |---|---|---|
 | `conversation_id` | string | Backend conversation UUID; always present |
 | `answer` | string | Assistant response text (may contain markdown) |
-| `sources` | array | Retrieved source chunks |
+| `sources` | array | Cited source chunks only; empty when the answer has no source citations |
 | `trace_id` | string/null | Request trace id linking frontend reports, backend logs, and `chat_turn_events` |
 | `steps` | array | Sanitized workflow trace events for the agent activity UI |
 
 Notes:
 - `config` is intentionally not returned in normal responses.
+- Answer citations use display numbers like `[1]`; these numbers map to `sources[].citation_number`, not the original retrieval rank.
 - `steps` are frontend-safe summaries. They must not be treated as a complete backend audit trail.
 - Current expected step statuses are `completed` and `failed`; future streaming may also emit `started`.
 
@@ -487,10 +492,12 @@ Source mapping (Lambda → UI):
 
 | Lambda field | UI field |
 |---|---|
+| `citation_number` | displayed citation number / source badge |
 | `document_id` | `title` |
 | `chunk` | `excerpt` |
 | `source_type` | `sourceType` (displayed as metadata) |
 | `score` | `score` (displayed as metadata) |
+| `metadata` | optional source details, such as page/section/title when available |
 | — | `url` (empty string — KB sources have no URL) |
 
 ### 9.3 `useAuth()` composable
@@ -534,7 +541,7 @@ In static generation mode, this route is not available at runtime. The `useChat`
 6. CORS (static mode): frontend origin allowed; blocked origins fail as expected.
 7. Non-200 handling: each status mapped to clear UX (error shown in assistant message).
 8. Latency behavior: local pending indicator works until response; returned `steps` replace simulated agent steps.
-9. Source rendering: sources display `document_id`, `chunk`, `source_type`, and `score` safely.
+9. Source rendering: cited sources display `citation_number`, `document_id`, `chunk`, `source_type`, `score`, and optional `metadata` safely. Answers with no citations should show no source cards.
 10. Responsive: three-column layout at desktop → two-column at 1180px → single column at 800px.
 11. Sign out: clears session, redirects to login.
 

@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from .graph.nodes import answer_node, clarify_node, extract_text_content, rewrite_node, split_node
 from .graph.state import MessagesState
 from .graph.retrieval import retrieve_node
+from .citations import normalize_answer_citations
 from memory.base import ConversationAccessError
 from memory.factory import create_history_store
 from memory.chat_summary import summarization_check
@@ -183,21 +184,28 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     answer = extract_text_content(ai_msgs[-1].content) if ai_msgs else ""
     log.info(f"Extracted answer (length: {len(answer)} characters)")
 
-    # Extract sources from final state
+    # Normalize answer citations and filter sources to cited sources only.
+    raw_sources = final_state.get("sources", [])
+    citation_result = normalize_answer_citations(answer, raw_sources)
+    answer = citation_result.answer
+
+    # Extract cited sources from normalized citation result.
     sources = []
-    if "sources" in final_state:
-        for source_dict in final_state["sources"]:
+    if citation_result.sources:
+        for source_dict in citation_result.sources:
             sources.append(
                 Source(
+                    citation_number=source_dict["citation_number"],
                     document_id=source_dict.get("document_id", "unknown"),
                     source_type=source_dict.get("source_type", "document"),
                     score=source_dict.get("score", 0.0),
                     chunk=source_dict.get("chunk", ""),
+                    metadata=source_dict.get("metadata", {}),
                 )
             )
-        log.info(f"Retrieved {len(sources)} sources from knowledge base")
+        log.info(f"Using {len(sources)} cited sources from {len(raw_sources)} retrieved sources")
     else:
-        log.info("No sources found in final state")
+        log.info(f"No cited sources found in answer from {len(raw_sources)} retrieved sources")
 
     visible_messages_to_store: List[BaseMessage] = [
         HumanMessage(content=req.message),
@@ -209,6 +217,8 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         "trace_id": trace_id,
         "request_id": req.request_id,
         "source_ids": source_ids,
+        "citation_map": citation_result.citation_map,
+        "invalid_citations": citation_result.invalid_citations,
     }
     memory_store.append_messages(conversation_id, visible_messages_to_store, metadata=persistence_metadata)
     memory_store.append_trace_events(conversation_id, trace_collector.events)

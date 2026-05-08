@@ -167,12 +167,15 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
     
     # Capture document metadata for sources
     sources = []
-    for doc in docs:
+    for index, doc in enumerate(docs, start=1):
+        metadata = dict(doc.metadata or {})
         source_info = {
-            "document_id": doc.metadata.get("id", doc.metadata.get("source", "unknown")),
-            "source_type": doc.metadata.get("source_type", "document"),
-            "score": doc.metadata.get("score", 0.0),
+            "retrieval_source_number": index,
+            "document_id": metadata.get("id", metadata.get("source", "unknown")),
+            "source_type": metadata.get("source_type", "document"),
+            "score": metadata.get("score", 0.0),
             "chunk": doc.page_content or "",
+            "metadata": metadata,
         }
         sources.append(source_info)
     state["sources"] = sources
