@@ -6,7 +6,9 @@ This file is the canonical project entry point for coding agents working in this
 
 - This repository is the `chat-template` backend and infrastructure repo for a RAG chat application.
 - The sibling frontend repo is outside this repository. Ignore frontend code unless the user explicitly asks for frontend work.
-- The main backend runtime is the RAG Lambda under `src/rag_lambda/`.
+- The chat backend runtime is the RAG Lambda under `src/rag_lambda/`.
+- The conversation read/admin runtime is the History API Lambda under `src/history_api_lambda/` (list/get-messages/rename/delete).
+- Both Lambdas share `src/auth/` (Cognito JWT) and `src/memory/` (chat history store) — extract reusable code there rather than under either Lambda's package.
 - Infrastructure and deployment are config-driven through `infra/infra.yaml` and scripts under `scripts/`.
 
 ## Required Context
