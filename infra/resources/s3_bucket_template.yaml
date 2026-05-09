@@ -73,6 +73,9 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
       LifecycleConfiguration: !If
         - EnableLifecycle
         - Rules:
@@ -159,4 +162,3 @@ Outputs:
     Value: !GetAtt KnowledgeBaseBucket.RegionalDomainName
     Export:
       Name: !Sub '${AWS::StackName}-BucketRegionalDomainName'
-
