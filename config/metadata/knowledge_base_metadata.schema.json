@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chat-template.local/schemas/knowledge_base_metadata.schema.json",
+  "title": "Chat Template Knowledge Base Metadata",
+  "description": "Shared schema for document metadata and Bedrock sidecar chunk metadata.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "metadata_schema_version",
+    "record_type",
+    "document_id",
+    "document_type",
+    "tenant_id",
+    "collection_id",
+    "location",
+    "access_tier"
+  ],
+  "properties": {
+    "metadata_schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "record_type": {
+      "type": "string",
+      "enum": ["document", "chunk"]
+    },
+    "document_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "chunk_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "document_title": {
+      "type": "string"
+    },
+    "document_description": {
+      "type": "string"
+    },
+    "document_type": {
+      "type": "string",
+      "enum": ["pdf", "word_doc", "image", "web_page", "csv", "excel", "powerpoint", "unknown"]
+    },
+    "filename": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "collection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "location": {
+      "type": "string",
+      "pattern": "^s3://"
+    },
+    "source_location": {
+      "type": "string",
+      "pattern": "^s3://"
+    },
+    "landing_s3_uri": {
+      "type": "string",
+      "pattern": "^s3://"
+    },
+    "source_status": {
+      "type": "string",
+      "enum": ["landing", "processing", "ready", "failed", "archived", "deleted"]
+    },
+    "access_tier": {
+      "type": "string",
+      "enum": ["restricted", "tenant", "public"]
+    },
+    "chunk_type": {
+      "type": "string",
+      "enum": [
+        "section",
+        "page",
+        "table_summary",
+        "figure_summary",
+        "image_summary",
+        "fallback_text"
+      ]
+    },
+    "chunk_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "chapter": {
+      "type": "string"
+    },
+    "section": {
+      "type": "string"
+    },
+    "page_start": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "page_end": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "publish_date": {
+      "type": "string"
+    },
+    "version_label": {
+      "type": "string"
+    },
+    "jurisdiction": {
+      "type": "string"
+    },
+    "code_family": {
+      "type": "string"
+    },
+    "content_type": {
+      "type": "string"
+    },
+    "token_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "char_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uploaded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ingested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "processing": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "custom_metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "chunk"
+          }
+        },
+        "required": ["record_type"]
+      },
+      "then": {
+        "required": ["chunk_id", "chunk_type", "source_location"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "document"
+          }
+        },
+        "required": ["record_type"]
+      },
+      "then": {
+        "required": ["document_title", "filename", "source_status"]
+      }
+    }
+  ]
+}

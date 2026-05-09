@@ -1,0 +1,139 @@
+schema_version: "1.0"
+description: "Field registry for chat-template knowledge-base document and chunk metadata."
+
+fields:
+  metadata_schema_version:
+    type: string
+    scope: [document, chunk]
+    required: true
+    include_for_embedding: false
+    notes: "Metadata contract version. Current value is 1.0."
+  record_type:
+    type: string
+    scope: [document, chunk]
+    required: true
+    allowed_values: [document, chunk]
+    include_for_embedding: false
+  document_id:
+    type: string
+    scope: [document, chunk]
+    required: true
+    include_for_embedding: false
+    notes: "Stable app-owned id for the original document."
+  chunk_id:
+    type: string
+    scope: [chunk]
+    required: true
+    include_for_embedding: false
+    notes: "Stable app-owned id for a citable/retrievable document slice."
+  document_title:
+    type: string
+    scope: [document, chunk]
+    required_for: [document]
+    include_for_embedding: true
+  document_description:
+    type: string
+    scope: [document]
+    required: false
+    include_for_embedding: true
+  document_type:
+    type: string
+    scope: [document, chunk]
+    required: true
+    allowed_values: [pdf, word_doc, image, web_page, csv, excel, powerpoint, unknown]
+    include_for_embedding: true
+  filename:
+    type: string
+    scope: [document, chunk]
+    required_for: [document]
+    include_for_embedding: true
+  tenant_id:
+    type: string
+    scope: [document, chunk, access]
+    required: true
+    include_for_embedding: false
+    notes: "Current implementation uses tenant_id as the user/owner namespace."
+  collection_id:
+    type: string
+    scope: [document, chunk]
+    required: true
+    include_for_embedding: true
+  location:
+    type: s3_uri
+    scope: [document, chunk]
+    required: true
+    include_for_embedding: false
+  source_location:
+    type: s3_uri
+    scope: [document, chunk]
+    required_for: [chunk]
+    include_for_embedding: false
+  landing_s3_uri:
+    type: s3_uri
+    scope: [document, ingestion_job]
+    required: false
+    include_for_embedding: false
+  source_status:
+    type: string
+    scope: [document, ingestion_job]
+    required_for: [document]
+    allowed_values: [landing, processing, ready, failed, archived, deleted]
+    include_for_embedding: false
+  access_tier:
+    type: string
+    scope: [document, chunk, access]
+    required: true
+    allowed_values: [restricted, tenant, public]
+    include_for_embedding: false
+  chunk_type:
+    type: string
+    scope: [chunk]
+    required: true
+    allowed_values: [section, page, table_summary, figure_summary, image_summary, fallback_text]
+    include_for_embedding: true
+  chunk_index:
+    type: integer
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  chapter:
+    type: string
+    scope: [chunk]
+    required: false
+    include_for_embedding: true
+  section:
+    type: string
+    scope: [chunk]
+    required: false
+    include_for_embedding: true
+  page_start:
+    type: integer
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  page_end:
+    type: integer
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  token_count:
+    type: integer
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  char_count:
+    type: integer
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  processing:
+    type: object
+    scope: [document, chunk, ingestion_job]
+    required: false
+    include_for_embedding: false
+  custom_metadata:
+    type: object
+    scope: [document, chunk]
+    required: false
+    include_for_embedding: false
+    notes: "Flexible user/domain-specific metadata. Validate and normalize before use in filters."
