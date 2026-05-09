@@ -144,10 +144,12 @@ deployment_sets:
     resources:
       - rag_lambda_ecr
       - history_api_lambda_ecr
+      - document_ingestion_lambda_ecr
       - cognito
       - frontend
       - rag_lambda
       - history_api_lambda
+      - document_ingestion_lambda
     deploy_cost_control: true
     deploy_config: true
   pr:
@@ -431,6 +433,15 @@ resources:
     config:
       repository_name: "{project}-history-api-lambda-{env}"
       max_image_count: 5
+  # ECR repository for Document Ingestion Lambda
+  document_ingestion_lambda_ecr:
+    enabled: true
+    ownership: owned
+    template: resources/ecr_repo_template.yaml
+    stack_name: "{project}-document-ingestion-lambda-ecr-{env}"
+    config:
+      repository_name: "{project}-document-ingestion-lambda-{env}"
+      max_image_count: 5
   # Frontend static site (S3 + CloudFront)
   # Deployed before cognito so deploy_cognito.sh can read the CloudFront output
   # and append the deployed origin to CallbackUrls/LogoutUrls automatically.
@@ -497,3 +508,24 @@ resources:
       function_url_cors_allow_headers: "Content-Type,Authorization"
       function_url_cors_allow_methods: "GET,POST,DELETE"
       function_url_cors_max_age: 600
+  # Document Ingestion Lambda — first slice processes PDF uploads in kb_landing/
+  # into the durable metadata/raw-document layout. Later phases will add chunk
+  # indexes, artifact extraction, catalogs, and Bedrock KB sync orchestration.
+  document_ingestion_lambda:
+    enabled: true
+    ownership: owned
+    template: resources/document_ingestion_lambda_template.yaml
+    stack_name: "{project}-document-ingestion-lambda-{env}"
+    config:
+      function_name: "{project}-{env}-document-ingestion"
+      memory_size: 1024
+      timeout: 300
+      document_bucket_name: "{project}-{env}-s3-{global_suffix}"
+      landing_prefix: "kb_landing/"
+      raw_prefix: "kb_raw/"
+      index_prefix: "kb_index/"
+      artifacts_prefix: "kb_artifacts/"
+      catalog_prefix: "kb_catalog/{env}/"
+      default_tenant_id: "{env}"
+      default_collection_id: "default"
+      pdf_text_probe_pages: 5
