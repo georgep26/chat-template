@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Document ingestion Lambda for S3 landing-zone processing'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: 'chat-template'
+    Description: 'Name of the project'
+
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['sandbox', 'dev', 'staging', 'prod']
+    Description: 'Environment name'
+
+  AWSRegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region'
+
+  FunctionName:
+    Type: String
+    Description: 'Document ingestion Lambda function name'
+
+  LambdaImageUri:
+    Type: String
+    Description: 'URI of the Lambda container image in ECR'
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    Description: 'Memory size for Lambda function in MB'
+    MinValue: 128
+    MaxValue: 10240
+
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    Description: 'Timeout for Lambda function in seconds'
+    MinValue: 3
+    MaxValue: 900
+
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: 'ARN of the shared Lambda execution role'
+
+  LambdaExecutionRoleName:
+    Type: String
+    Description: 'Name of the shared Lambda execution role'
+
+  DocumentBucketName:
+    Type: String
+    Description: 'S3 bucket that contains landing/raw/index/artifact document prefixes'
+
+  LandingPrefix:
+    Type: String
+    Default: 'kb_landing/'
+    Description: 'Landing-zone S3 prefix that triggers ingestion'
+
+  RawPrefix:
+    Type: String
+    Default: 'kb_raw/'
+    Description: 'Durable raw document S3 prefix'
+
+  IndexPrefix:
+    Type: String
+    Default: 'kb_index/'
+    Description: 'Indexable text artifact S3 prefix'
+
+  ArtifactsPrefix:
+    Type: String
+    Default: 'kb_artifacts/'
+    Description: 'Extracted non-text artifact S3 prefix'
+
+  CatalogPrefix:
+    Type: String
+    Default: 'kb_catalog/'
+    Description: 'Generated catalog/report S3 prefix'
+
+  DefaultTenantId:
+    Type: String
+    Default: 'default'
+    Description: 'Default tenant id when one cannot be inferred from landing key'
+
+  DefaultCollectionId:
+    Type: String
+    Default: 'default'
+    Description: 'Default collection id when one cannot be inferred from landing key'
+
+  PdfTextProbePages:
+    Type: Number
+    Default: 5
+    Description: 'Number of initial PDF pages to probe for embedded text'
+    MinValue: 0
+    MaxValue: 25
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: !If [IsProduction, 30, 7]
+      Tags:
+        - Key: Name
+          Value: !Sub '${FunctionName}-logs'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DocumentIngestionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: 'Processes S3 landing-zone document uploads into metadata and durable document layout'
+      PackageType: Image
+      Code:
+        ImageUri: !Ref LambdaImageUri
+      Role: !Ref LambdaExecutionRoleArn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DOCUMENT_BUCKET_NAME: !Ref DocumentBucketName
+          LANDING_PREFIX: !Ref LandingPrefix
+          RAW_PREFIX: !Ref RawPrefix
+          INDEX_PREFIX: !Ref IndexPrefix
+          ARTIFACTS_PREFIX: !Ref ArtifactsPrefix
+          CATALOG_PREFIX: !Ref CatalogPrefix
+          DEFAULT_TENANT_ID: !Ref DefaultTenantId
+          DEFAULT_COLLECTION_ID: !Ref DefaultCollectionId
+          PDF_TEXT_PROBE_PAGES: !Ref PdfTextProbePages
+      LoggingConfig:
+        LogFormat: JSON
+        LogGroup: !Ref LambdaLogGroup
+      Tags:
+        - Key: Name
+          Value: !Ref FunctionName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DocumentBucketAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${Environment}-document-ingestion-s3-policy'
+      Roles:
+        - !Ref LambdaExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowDocumentBucketList
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${DocumentBucketName}'
+          - Sid: AllowDocumentObjectReadWrite
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource:
+              - !Sub 'arn:aws:s3:::${DocumentBucketName}/${LandingPrefix}*'
+              - !Sub 'arn:aws:s3:::${DocumentBucketName}/${RawPrefix}*'
+              - !Sub 'arn:aws:s3:::${DocumentBucketName}/${IndexPrefix}*'
+              - !Sub 'arn:aws:s3:::${DocumentBucketName}/${ArtifactsPrefix}*'
+              - !Sub 'arn:aws:s3:::${DocumentBucketName}/${CatalogPrefix}*'
+
+  LandingObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-document-ingestion-s3'
+      Description: 'Routes S3 landing-zone object-created events to the document ingestion Lambda'
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref DocumentBucketName
+          object:
+            key:
+              - prefix: !Ref LandingPrefix
+      Targets:
+        - Arn: !GetAtt DocumentIngestionLambda.Arn
+          Id: DocumentIngestionLambdaTarget
+
+  AllowEventBridgeInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DocumentIngestionLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LandingObjectCreatedRule.Arn
+
+Outputs:
+  LambdaFunctionName:
+    Description: 'Name of the document ingestion Lambda function'
+    Value: !Ref DocumentIngestionLambda
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionName'
+
+  LambdaFunctionArn:
+    Description: 'ARN of the document ingestion Lambda function'
+    Value: !GetAtt DocumentIngestionLambda.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionArn'
+
+  LambdaLogGroupName:
+    Description: 'Name of the CloudWatch Log Group'
+    Value: !Ref LambdaLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaLogGroupName'
+
+  EventBridgeRuleName:
+    Description: 'Name of the EventBridge rule that invokes document ingestion'
+    Value: !Ref LandingObjectCreatedRule
+    Export:
+      Name: !Sub '${AWS::StackName}-EventBridgeRuleName'
