@@ -9,6 +9,7 @@ cloudformation/
 ├── db_secret_template.yaml          # Database secret in Secrets Manager
 ├── cost_guard_template.yaml         # Hybrid cost guard resources
 ├── cognito_template.yaml            # Cognito user pool + app client
+├── document_ingestion_lambda_template.yaml # S3 landing-zone document ingestion Lambda
 ├── knowledge_base_template.yaml     # AWS Bedrock Knowledge Base
 ├── lambda_template.yaml             # RAG Lambda function
 ├── light_db_template.yaml           # Aurora Serverless v2 PostgreSQL database
@@ -37,6 +38,12 @@ cloudformation/
   - Creates: Lambda function, CloudWatch log group
   - Requires: Lambda execution role (deployed separately via `infra/roles/lambda_execution_role.yaml`)
 
+- **`document_ingestion_lambda_template.yaml`**: S3 landing-zone document ingestion Lambda
+  - Deployed via: `./scripts/deploy/deploy_document_ingestion_lambda.sh`
+  - Creates: Lambda function, CloudWatch log group, S3 EventBridge rule, and scoped S3 access policy
+  - Current implementation: PDF landing intake into `kb_raw/` metadata/raw layout; other document types are placeholders
+  - Requires: S3 bucket EventBridge notifications and the shared Lambda execution role
+
 - **`cognito_template.yaml`**: Cognito User Pool and app client for SPA authentication
   - Deployed via: `./scripts/deploy/deploy_cognito.sh`
   - Creates: User pool, app client, optional hosted UI domain
@@ -63,6 +70,7 @@ Deploy infrastructure in this order:
 4. **Cognito**: `./scripts/deploy/deploy_cognito.sh dev deploy`
 5. **Lambda Execution Role**: Deploy `infra/roles/lambda_execution_role.yaml` separately
 6. **Lambda Function**: `./scripts/deploy/deploy_rag_lambda.sh dev deploy`
+7. **Document Ingestion Lambda**: `./scripts/deploy/deploy_document_ingestion_lambda.sh dev deploy`
 
 ## Prerequisites
 
@@ -90,6 +98,9 @@ Each template has its own deployment script. See individual script help for deta
 
 # Lambda Function
 ./scripts/deploy/deploy_rag_lambda.sh dev deploy
+
+# Document ingestion Lambda
+./scripts/deploy/deploy_document_ingestion_lambda.sh dev deploy
 ```
 
 ## Important Notes
