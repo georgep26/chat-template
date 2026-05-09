@@ -48,6 +48,16 @@ Parameters:
     Type: String
     Description: 'Name of the shared Lambda execution role'
 
+  AppConfigPath:
+    Type: String
+    Default: 'config/app_config.yaml'
+    Description: 'Path to app configuration file, local path or s3:// URI'
+
+  ConfigS3Bucket:
+    Type: String
+    Default: ''
+    Description: 'S3 bucket name for app config file when AppConfigPath is an S3 URI'
+
   DocumentBucketName:
     Type: String
     Description: 'S3 bucket that contains landing/raw/index/artifact document prefixes'
@@ -96,6 +106,7 @@ Parameters:
 
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
+  HasConfigS3Bucket: !Not [!Equals [!Ref ConfigS3Bucket, '']]
 
 Resources:
   LambdaLogGroup:
@@ -124,6 +135,7 @@ Resources:
       Timeout: !Ref LambdaTimeout
       Environment:
         Variables:
+          APP_CONFIG_PATH: !Ref AppConfigPath
           ENVIRONMENT: !Ref Environment
           DOCUMENT_BUCKET_NAME: !Ref DocumentBucketName
           LANDING_PREFIX: !Ref LandingPrefix
@@ -171,6 +183,27 @@ Resources:
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${IndexPrefix}*'
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${ArtifactsPrefix}*'
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${CatalogPrefix}*'
+
+  LambdaConfigS3Policy:
+    Type: AWS::IAM::Policy
+    Condition: HasConfigS3Bucket
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${Environment}-document-ingestion-config-s3-policy'
+      Roles:
+        - !Ref LambdaExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3ConfigRead
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${ConfigS3Bucket}/*'
+          - Sid: AllowS3ConfigBucketList
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${ConfigS3Bucket}'
 
   LandingObjectCreatedRule:
     Type: AWS::Events::Rule
