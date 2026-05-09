@@ -45,6 +45,18 @@ rag_chat:
       id: "amazon.nova-micro-v1:0"
       temperature: 0.0 # Temperature for the summarization model
       region: "us-east-1" # Region for the summarization model (defaults to the region of the database)
+ingestion:
+  document_bucket_name: "${DOCUMENT_BUCKET_NAME}"
+  landing_prefix: "kb_landing/"
+  raw_prefix: "kb_raw/"
+  index_prefix: "kb_index/"
+  artifacts_prefix: "kb_artifacts/"
+  catalog_prefix: "kb_catalog/${ENVIRONMENT}/"
+  default_tenant_id: "${DEFAULT_TENANT_ID}"
+  default_collection_id: "default"
+  pdf_text_probe_pages: 5 # Number of initial PDF pages to inspect for embedded text.
+  pdf_text_available_min_chars: 100 # Minimum extracted chars before embedded PDF text is considered usable; below this, mark OCR as required.
+
 api:
   host: "0.0.0.0"
   port: 8000
