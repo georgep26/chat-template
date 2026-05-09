@@ -69,6 +69,7 @@ Run one resource directly:
 
 ```bash
 ./scripts/deploy/resources/s3_bucket.sh sandbox deploy
+./scripts/deploy/resources/document_ingestion_lambda.sh sandbox deploy
 ./scripts/deploy/resources/rag_lambda.sh sandbox status
 ./scripts/deploy/resources/chat_db.sh sandbox delete
 ```
