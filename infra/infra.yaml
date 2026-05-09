@@ -520,6 +520,7 @@ resources:
       function_name: "{project}-{env}-document-ingestion"
       memory_size: 1024
       timeout: 300
+      s3_app_config_uri: "s3://{project}-{env}-s3-{global_suffix}/config/app_config.yaml"
       document_bucket_name: "{project}-{env}-s3-{global_suffix}"
       landing_prefix: "kb_landing/"
       raw_prefix: "kb_raw/"
