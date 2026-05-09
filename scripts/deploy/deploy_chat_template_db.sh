@@ -94,6 +94,10 @@ show_usage() {
     echo "  --skip-chat-history-schema    - Do not apply sql/chat_history_schema.sql after deploy/update"
     echo "  --reset-chat-history-schema   - Drop and recreate chat history tables before applying schema"
     echo "                                   (destructive; intended only while chat history is disposable)"
+    echo "  --skip-document-catalog-schema - Do not apply sql/document_catalog_schema.sql after deploy/update"
+    echo "  --reset-document-catalog-schema"
+    echo "                                 - Drop and recreate document catalog tables before applying schema"
+    echo "                                   (destructive; intended only while catalog data is disposable)"
     echo "  -y, --yes                      - Skip confirmation prompt (deploy/update/delete)"
     echo ""
     echo "Examples:"
@@ -184,6 +188,8 @@ fi
 AUTO_CONFIRM=false
 APPLY_CHAT_HISTORY_SCHEMA=true
 RESET_CHAT_HISTORY_SCHEMA=false
+APPLY_DOCUMENT_CATALOG_SCHEMA=true
+RESET_DOCUMENT_CATALOG_SCHEMA=false
 
 # Parse additional arguments
 # VPC ID and subnet IDs can be provided via:
@@ -264,6 +270,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --reset-chat-history-schema)
             RESET_CHAT_HISTORY_SCHEMA=true
+            shift
+            ;;
+        --skip-document-catalog-schema)
+            APPLY_DOCUMENT_CATALOG_SCHEMA=false
+            shift
+            ;;
+        --reset-document-catalog-schema)
+            RESET_DOCUMENT_CATALOG_SCHEMA=true
             shift
             ;;
         *)
@@ -393,6 +407,15 @@ if [ "$APPLY_CHAT_HISTORY_SCHEMA" = true ]; then
     fi
 else
     print_info "  - Chat history schema: skipped"
+fi
+if [ "$APPLY_DOCUMENT_CATALOG_SCHEMA" = true ]; then
+    if [ "$RESET_DOCUMENT_CATALOG_SCHEMA" = true ]; then
+        print_warning "Document catalog schema reset is enabled; document_catalog, document_chunks, document_ingestion_jobs, and document_access_grants will be dropped/recreated."
+    else
+        print_info "  - Document catalog schema: apply/create if missing"
+    fi
+else
+    print_info "  - Document catalog schema: skipped"
 fi
 
 if [[ "$ACTION" == "deploy" || "$ACTION" == "update" ]]; then
@@ -873,6 +896,94 @@ run_chat_history_schema_via_data_api() {
     done
 }
 
+run_document_catalog_schema_via_data_api() {
+    if [ "$APPLY_DOCUMENT_CATALOG_SCHEMA" = false ]; then
+        print_info "Skipping document catalog schema setup."
+        return 0
+    fi
+
+    local sql_file="$PROJECT_ROOT/sql/document_catalog_schema.sql"
+    if [ ! -f "$sql_file" ]; then
+        print_error "SQL file not found: $sql_file"
+        return 1
+    fi
+
+    local db_outputs
+    db_outputs=$(get_db_outputs)
+    local db_name
+    db_name=$(echo "$db_outputs" | cut -d'|' -f3)
+    if [ -z "$db_name" ] || [ "$db_name" = "None" ]; then
+        print_error "Could not retrieve database name from DB stack outputs."
+        return 1
+    fi
+
+    local db_cluster_arn
+    db_cluster_arn=$(get_db_cluster_arn)
+    if [ -z "$db_cluster_arn" ] || [ "$db_cluster_arn" = "None" ]; then
+        print_error "Could not resolve DB cluster ARN for RDS Data API."
+        return 1
+    fi
+
+    local secret_arn
+    secret_arn=$(get_db_secret_arn)
+    if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
+        print_error "Could not resolve DB credentials secret ARN."
+        return 1
+    fi
+
+    print_info "Applying document catalog schema via RDS Data API..."
+    if [ "$RESET_DOCUMENT_CATALOG_SCHEMA" = true ]; then
+        print_warning "Dropping existing document catalog tables before schema creation..."
+        local reset_statements=(
+            "DROP TABLE IF EXISTS document_access_grants"
+            "DROP TABLE IF EXISTS document_chunks"
+            "DROP TABLE IF EXISTS document_ingestion_jobs"
+            "DROP TABLE IF EXISTS document_catalog"
+        )
+        local reset_statement
+        for reset_statement in "${reset_statements[@]}"; do
+            if ! execute_data_api_sql_statement_with_startup_retry "$db_cluster_arn" "$db_name" "$secret_arn" "$reset_statement" "document catalog reset statement"; then
+                print_error "Failed to execute reset statement: $reset_statement"
+                return 1
+            fi
+        done
+    fi
+
+    local content
+    content=$(grep -v '^[[:space:]]*--' "$sql_file" | grep -v '^[[:space:]]*$' | sed 's/--.*$//' | tr '\n' ' ' | sed 's/;[[:space:]]*/;/g')
+
+    local waited_for_db=false
+    while true; do
+        local count=0
+        local failed_statement=0
+
+        while IFS= read -r -d ';' statement; do
+            statement=$(echo "$statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$statement" ] && continue
+            count=$((count + 1))
+            if ! execute_data_api_sql_statement "$db_cluster_arn" "$db_name" "$secret_arn" "$statement"; then
+                failed_statement=$count
+                break
+            fi
+        done < <(printf '%s;' "$content")
+
+        if [ "$failed_statement" -eq 0 ]; then
+            print_info "Document catalog schema setup completed ($count statements)."
+            return 0
+        fi
+
+        if [ "$waited_for_db" = true ]; then
+            print_error "Failed to execute document catalog schema statement $failed_statement after waiting for DB to start."
+            return 1
+        fi
+
+        print_warning "Document catalog schema statement $failed_statement failed (database may be starting from 0 ACU). Waiting ${DB_STARTUP_WAIT_SECONDS}s for Aurora to become available..."
+        sleep "$DB_STARTUP_WAIT_SECONDS"
+        waited_for_db=true
+        print_info "Retrying document catalog schema setup..."
+    done
+}
+
 # Function to ensure credentials are provided (prompt if needed)
 ensure_credentials() {
     # Use provided username or default from config/secrets
@@ -1249,6 +1360,11 @@ deploy_stack() {
 
         if ! run_chat_history_schema_via_data_api; then
             print_error "Chat history schema setup failed."
+            exit 1
+        fi
+
+        if ! run_document_catalog_schema_via_data_api; then
+            print_error "Document catalog schema setup failed."
             exit 1
         fi
         

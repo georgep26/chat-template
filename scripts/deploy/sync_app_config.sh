@@ -153,7 +153,7 @@ sync_env() {
 
         if [ "$DRY_RUN" = true ]; then
             local current
-            current=$(yq -r "${path} // \"\"" "$app_config" 2>/dev/null)
+            current=$(yq -r "${path}" "$app_config" 2>/dev/null)
             [ "$current" = "null" ] && current=""
             if [ "$current" != "$value" ]; then
                 print_info "[$env] ${label}: \"$current\" -> \"$value\""
@@ -176,7 +176,30 @@ sync_env() {
 
         if [ "$DRY_RUN" = true ]; then
             local current
-            current=$(yq -r "${path} // \"\"" "$app_config" 2>/dev/null)
+            current=$(yq -r "${path}" "$app_config" 2>/dev/null)
+            [ "$current" = "null" ] && current=""
+            if [ "$current" != "$value" ]; then
+                print_info "[$env] ${label}: \"$current\" -> $value"
+                updated=$((updated + 1))
+            fi
+        else
+            yq -i "${path} = ${value}" "$app_config"
+            print_info "[$env] Set ${label} = $value"
+            updated=$((updated + 1))
+        fi
+    }
+
+    sync_config_boolean() {
+        local path=$1
+        local value=$2
+        local label=$3
+
+        [ "$value" = "null" ] && value=""
+        [ -z "$value" ] && return 0
+
+        if [ "$DRY_RUN" = true ]; then
+            local current
+            current=$(yq -r "${path}" "$app_config" 2>/dev/null)
             [ "$current" = "null" ] && current=""
             if [ "$current" != "$value" ]; then
                 print_info "[$env] ${label}: \"$current\" -> $value"
@@ -238,7 +261,10 @@ sync_env() {
     fi
 
     local ingestion_bucket landing_prefix raw_prefix index_prefix artifacts_prefix catalog_prefix
-    local default_tenant_id default_collection_id pdf_text_probe_pages
+    local default_tenant_id default_collection_id metadata_schema_version
+    local pdf_text_probe_pages pdf_text_available_min_chars pdf_always_ocr
+    local pdf_front_page_sample_count pdf_random_page_sample_count
+    local pdf_default_chunk_tokens pdf_default_chunk_overlap pdf_embedding_chunk_token_limit_titan_v2
     ingestion_bucket=$(get_resource_config "document_ingestion_lambda" "document_bucket_name" "$env" 2>/dev/null || true)
     landing_prefix=$(get_resource_config "document_ingestion_lambda" "landing_prefix" "$env" 2>/dev/null || true)
     raw_prefix=$(get_resource_config "document_ingestion_lambda" "raw_prefix" "$env" 2>/dev/null || true)
@@ -247,7 +273,15 @@ sync_env() {
     catalog_prefix=$(get_resource_config "document_ingestion_lambda" "catalog_prefix" "$env" 2>/dev/null || true)
     default_tenant_id=$(get_resource_config "document_ingestion_lambda" "default_tenant_id" "$env" 2>/dev/null || true)
     default_collection_id=$(get_resource_config "document_ingestion_lambda" "default_collection_id" "$env" 2>/dev/null || true)
+    metadata_schema_version=$(get_resource_config "document_ingestion_lambda" "metadata_schema_version" "$env" 2>/dev/null || true)
     pdf_text_probe_pages=$(get_resource_config "document_ingestion_lambda" "pdf_text_probe_pages" "$env" 2>/dev/null || true)
+    pdf_text_available_min_chars=$(get_resource_config "document_ingestion_lambda" "pdf_text_available_min_chars" "$env" 2>/dev/null || true)
+    pdf_always_ocr=$(get_resource_config "document_ingestion_lambda" "pdf_always_ocr" "$env" 2>/dev/null || true)
+    pdf_front_page_sample_count=$(get_resource_config "document_ingestion_lambda" "pdf_front_page_sample_count" "$env" 2>/dev/null || true)
+    pdf_random_page_sample_count=$(get_resource_config "document_ingestion_lambda" "pdf_random_page_sample_count" "$env" 2>/dev/null || true)
+    pdf_default_chunk_tokens=$(get_resource_config "document_ingestion_lambda" "pdf_default_chunk_tokens" "$env" 2>/dev/null || true)
+    pdf_default_chunk_overlap=$(get_resource_config "document_ingestion_lambda" "pdf_default_chunk_overlap" "$env" 2>/dev/null || true)
+    pdf_embedding_chunk_token_limit_titan_v2=$(get_resource_config "document_ingestion_lambda" "pdf_embedding_chunk_token_limit_titan_v2" "$env" 2>/dev/null || true)
 
     sync_config_string ".ingestion.document_bucket_name" "$ingestion_bucket" "ingestion.document_bucket_name"
     sync_config_string ".ingestion.landing_prefix" "$landing_prefix" "ingestion.landing_prefix"
@@ -257,7 +291,15 @@ sync_env() {
     sync_config_string ".ingestion.catalog_prefix" "$catalog_prefix" "ingestion.catalog_prefix"
     sync_config_string ".ingestion.default_tenant_id" "$default_tenant_id" "ingestion.default_tenant_id"
     sync_config_string ".ingestion.default_collection_id" "$default_collection_id" "ingestion.default_collection_id"
+    sync_config_string ".ingestion.metadata_schema_version" "$metadata_schema_version" "ingestion.metadata_schema_version"
     sync_config_number ".ingestion.pdf_text_probe_pages" "$pdf_text_probe_pages" "ingestion.pdf_text_probe_pages"
+    sync_config_number ".ingestion.pdf_text_available_min_chars" "$pdf_text_available_min_chars" "ingestion.pdf_text_available_min_chars"
+    sync_config_boolean ".ingestion.pdf_always_ocr" "$pdf_always_ocr" "ingestion.pdf_always_ocr"
+    sync_config_number ".ingestion.pdf_front_page_sample_count" "$pdf_front_page_sample_count" "ingestion.pdf_front_page_sample_count"
+    sync_config_number ".ingestion.pdf_random_page_sample_count" "$pdf_random_page_sample_count" "ingestion.pdf_random_page_sample_count"
+    sync_config_number ".ingestion.pdf_default_chunk_tokens" "$pdf_default_chunk_tokens" "ingestion.pdf_default_chunk_tokens"
+    sync_config_number ".ingestion.pdf_default_chunk_overlap" "$pdf_default_chunk_overlap" "ingestion.pdf_default_chunk_overlap"
+    sync_config_number ".ingestion.pdf_embedding_chunk_token_limit_titan_v2" "$pdf_embedding_chunk_token_limit_titan_v2" "ingestion.pdf_embedding_chunk_token_limit_titan_v2"
 
     if [ $updated -eq 0 ] && [ "$DRY_RUN" = false ]; then
         print_info "[$env] No values in infra to sync (run deploy_chat_template_db.sh and deploy_knowledge_base.sh first)"
