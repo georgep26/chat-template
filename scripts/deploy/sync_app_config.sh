@@ -2,7 +2,8 @@
 
 # Sync App Config Script
 # Pulls common settings from infra/infra.yaml into config/<env>/app_config.yaml for each environment.
-# Updates: knowledge_base_id, db_cluster_arn, db_credentials_secret_arn (only when present in infra).
+# Updates: knowledge_base_id, db_cluster_arn, db_credentials_secret_arn,
+# and ingestion settings that are declared in infra.yaml.
 #
 # Run after deploying DB or Knowledge Base so app configs stay in sync with infra.
 #
@@ -30,8 +31,8 @@ source "$SCRIPT_DIR/../utils/config_parser.sh"
 show_usage() {
     echo "Sync App Config Script"
     echo ""
-    echo "Pulls knowledge_base_id, db_cluster_arn, and db_credentials_secret_arn from"
-    echo "infra/infra.yaml into config/<env>/app_config.yaml for each environment."
+    echo "Pulls knowledge_base_id, db_cluster_arn, db_credentials_secret_arn, and"
+    echo "ingestion settings from infra/infra.yaml into config/<env>/app_config.yaml."
     echo ""
     echo "Usage: $0 [options]"
     echo ""
@@ -142,6 +143,52 @@ sync_env() {
 
     local updated=0
 
+    sync_config_string() {
+        local path=$1
+        local value=$2
+        local label=$3
+
+        [ "$value" = "null" ] && value=""
+        [ -z "$value" ] && return 0
+
+        if [ "$DRY_RUN" = true ]; then
+            local current
+            current=$(yq -r "${path} // \"\"" "$app_config" 2>/dev/null)
+            [ "$current" = "null" ] && current=""
+            if [ "$current" != "$value" ]; then
+                print_info "[$env] ${label}: \"$current\" -> \"$value\""
+                updated=$((updated + 1))
+            fi
+        else
+            yq -i "${path} = \"${value}\"" "$app_config"
+            print_info "[$env] Set ${label} = $value"
+            updated=$((updated + 1))
+        fi
+    }
+
+    sync_config_number() {
+        local path=$1
+        local value=$2
+        local label=$3
+
+        [ "$value" = "null" ] && value=""
+        [ -z "$value" ] && return 0
+
+        if [ "$DRY_RUN" = true ]; then
+            local current
+            current=$(yq -r "${path} // \"\"" "$app_config" 2>/dev/null)
+            [ "$current" = "null" ] && current=""
+            if [ "$current" != "$value" ]; then
+                print_info "[$env] ${label}: \"$current\" -> $value"
+                updated=$((updated + 1))
+            fi
+        else
+            yq -i "${path} = ${value}" "$app_config"
+            print_info "[$env] Set ${label} = $value"
+            updated=$((updated + 1))
+        fi
+    }
+
     if [ -n "$kb_id" ]; then
         if [ "$DRY_RUN" = true ]; then
             local current
@@ -189,6 +236,28 @@ sync_env() {
             updated=$((updated + 1))
         fi
     fi
+
+    local ingestion_bucket landing_prefix raw_prefix index_prefix artifacts_prefix catalog_prefix
+    local default_tenant_id default_collection_id pdf_text_probe_pages
+    ingestion_bucket=$(get_resource_config "document_ingestion_lambda" "document_bucket_name" "$env" 2>/dev/null || true)
+    landing_prefix=$(get_resource_config "document_ingestion_lambda" "landing_prefix" "$env" 2>/dev/null || true)
+    raw_prefix=$(get_resource_config "document_ingestion_lambda" "raw_prefix" "$env" 2>/dev/null || true)
+    index_prefix=$(get_resource_config "document_ingestion_lambda" "index_prefix" "$env" 2>/dev/null || true)
+    artifacts_prefix=$(get_resource_config "document_ingestion_lambda" "artifacts_prefix" "$env" 2>/dev/null || true)
+    catalog_prefix=$(get_resource_config "document_ingestion_lambda" "catalog_prefix" "$env" 2>/dev/null || true)
+    default_tenant_id=$(get_resource_config "document_ingestion_lambda" "default_tenant_id" "$env" 2>/dev/null || true)
+    default_collection_id=$(get_resource_config "document_ingestion_lambda" "default_collection_id" "$env" 2>/dev/null || true)
+    pdf_text_probe_pages=$(get_resource_config "document_ingestion_lambda" "pdf_text_probe_pages" "$env" 2>/dev/null || true)
+
+    sync_config_string ".ingestion.document_bucket_name" "$ingestion_bucket" "ingestion.document_bucket_name"
+    sync_config_string ".ingestion.landing_prefix" "$landing_prefix" "ingestion.landing_prefix"
+    sync_config_string ".ingestion.raw_prefix" "$raw_prefix" "ingestion.raw_prefix"
+    sync_config_string ".ingestion.index_prefix" "$index_prefix" "ingestion.index_prefix"
+    sync_config_string ".ingestion.artifacts_prefix" "$artifacts_prefix" "ingestion.artifacts_prefix"
+    sync_config_string ".ingestion.catalog_prefix" "$catalog_prefix" "ingestion.catalog_prefix"
+    sync_config_string ".ingestion.default_tenant_id" "$default_tenant_id" "ingestion.default_tenant_id"
+    sync_config_string ".ingestion.default_collection_id" "$default_collection_id" "ingestion.default_collection_id"
+    sync_config_number ".ingestion.pdf_text_probe_pages" "$pdf_text_probe_pages" "ingestion.pdf_text_probe_pages"
 
     if [ $updated -eq 0 ] && [ "$DRY_RUN" = false ]; then
         print_info "[$env] No values in infra to sync (run deploy_chat_template_db.sh and deploy_knowledge_base.sh first)"
