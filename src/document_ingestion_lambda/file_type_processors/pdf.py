@@ -94,21 +94,25 @@ class PdfProcessor:
 
             uploaded_at = _isoformat(head.get("LastModified"))
             now = datetime.now(timezone.utc).isoformat()
+            raw_s3_uri = f"s3://{destination_bucket}/{raw_key}"
             metadata = {
-                "metadata_schema_version": "0.1",
+                "metadata_schema_version": self._ingestion_config["metadata_schema_version"],
+                "record_type": "document",
                 "landing_s3_uri": obj.uri,
                 "document_id": document_id,
                 "document_title": title,
                 "document_description": build_document_description("pdf", title, pdf_scan),
                 "document_type": "pdf",
                 "filename": filename,
-                "location": f"s3://{destination_bucket}/{raw_key}",
+                "location": raw_s3_uri,
+                "source_location": raw_s3_uri,
                 "uploaded_at": uploaded_at,
                 "ingested_at": now,
                 "source_status": "processing",
                 "access_tier": "restricted",
                 "tenant_id": tenant_id,
                 "collection_id": collection_id,
+                "custom_metadata": {},
                 "processing": {
                     "stage": "initial_metadata_complete",
                     "pdf": asdict(pdf_scan),
@@ -131,7 +135,7 @@ class PdfProcessor:
                 status="processed",
                 document_type="pdf",
                 document_id=document_id,
-                raw_s3_uri=f"s3://{destination_bucket}/{raw_key}",
+                raw_s3_uri=raw_s3_uri,
                 metadata_s3_uri=f"s3://{destination_bucket}/{metadata_key}",
             )
         finally:
