@@ -266,6 +266,12 @@ deploy_stack() {
             DefaultCollectionId="$DEFAULT_COLLECTION_ID" \
             PdfTextProbePages="$PDF_TEXT_PROBE_PAGES"
 
+    print_step "Refreshing Lambda function image"
+    aws_cmd lambda update-function-code \
+        --function-name "$FUNCTION_NAME" \
+        --image-uri "$LAMBDA_IMAGE_URI" >/dev/null
+    aws_cmd lambda wait function-updated --function-name "$FUNCTION_NAME"
+
     print_complete "Document ingestion Lambda deployed"
 }
 

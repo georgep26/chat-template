@@ -414,7 +414,7 @@ resources:
       embedding_model_id: "amazon.titan-embed-text-v2:0"
       table_name: "bedrock_integration.bedrock_kb"
       s3_bucket_name: "{project}-{env}-s3-{global_suffix}"
-      s3_inclusion_prefix: "kb_sources/"
+      s3_inclusion_prefix: "kb_index/"
   # ECR repository for RAG Lambda (lifecycle policy keeps only the 5 most recent images)
   rag_lambda_ecr:
     enabled: true

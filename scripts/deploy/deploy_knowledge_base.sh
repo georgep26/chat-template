@@ -73,7 +73,7 @@ show_usage() {
     echo "  --promote-kb-from-env <env>     - Promote KB content from source env (e.g. staging)"
     echo "  --promotion-source-role-arn <arn> - Role ARN for reading source env (optional, only needed for cross-account)"
     echo "  --promotion-source-bucket <bucket> - Explicit source bucket (auto-detected if not provided)"
-    echo "  --promotion-source-prefix <prefix> - Source prefix override (default: kb_sources/)"
+    echo "  --promotion-source-prefix <prefix> - Source prefix override (default: kb_index/)"
     echo "  --local-download [path]            - For promotion: download to local path then upload to prod (default: temp dir)"
     echo "  -y, --yes                        - Skip confirmation prompt"
     echo ""
@@ -110,7 +110,7 @@ AUTO_CONFIRM=false
 PROMOTE_KB_FROM_ENV=""
 PROMOTION_SOURCE_ROLE_ARN=""
 PROMOTION_SOURCE_BUCKET=""
-PROMOTION_SOURCE_PREFIX="kb_sources/"
+PROMOTION_SOURCE_PREFIX="kb_index/"
 PROMOTION_LOCAL_DOWNLOAD_PATH=""  # If set, download to this path (or temp dir) then sync to prod
 
 # Parse options

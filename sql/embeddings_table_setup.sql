@@ -16,6 +16,7 @@
 --   * embedding: Vector column (1024 dimensions for amazon.titan-embed-text-v2)
 --   * chunks: Text content
 --   * metadata: JSON metadata
+--   * custom_metadata: JSON metadata from S3 .metadata.json sidecars
 -- ============================================================================
 
 -- Enable pgvector extension
@@ -30,8 +31,14 @@ CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
     id uuid PRIMARY KEY,
     embedding vector(1024),  -- 1024 dimensions for amazon.titan-embed-text-v2 (default model)
     chunks TEXT NOT NULL,
-    metadata JSONB
+    metadata JSONB,
+    custom_metadata JSONB
 );
+
+-- Keep existing disposable sandbox tables compatible with the current Bedrock
+-- RDS field mapping when this script is rerun after a metadata strategy change.
+ALTER TABLE bedrock_integration.bedrock_kb
+ADD COLUMN IF NOT EXISTS custom_metadata JSONB;
 
 -- Create an index on the vector column for efficient similarity search
 -- Using HNSW index for better performance on large datasets
@@ -54,6 +61,12 @@ WITH (m = 16, ef_construction = 64);
 -- CREATE INDEX IF NOT EXISTS bedrock_kb_metadata_idx 
 -- ON bedrock_integration.bedrock_kb 
 -- USING GIN (metadata);
+
+-- Bedrock requires the custom metadata field to be indexed when the RDS field
+-- mapping includes CustomMetadataField.
+CREATE INDEX IF NOT EXISTS bedrock_kb_custom_metadata_idx
+ON bedrock_integration.bedrock_kb
+USING GIN (custom_metadata);
 
 -- Create a GIN index on the chunks column for full-text search
 -- This is required by AWS Bedrock Knowledge Base
@@ -92,4 +105,3 @@ USING gin (to_tsvector('english', chunks));
 --
 -- 4. This script is idempotent - it can be run multiple times safely.
 -- ============================================================================
-

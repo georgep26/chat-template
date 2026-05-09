@@ -11,12 +11,19 @@ import argparse
 import json
 import os
 import secrets
+import uuid
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import unquote_plus
 
 import boto3
 
+from document_ingestion_lambda.catalog_store import (
+    DocumentCatalogStore,
+    create_document_catalog_store,
+)
+from document_ingestion_lambda.file_type_processors.common import infer_landing_scope
 from document_ingestion_lambda.file_type_processors.pdf import PdfProcessor
 from document_ingestion_lambda.models import IngestionResult, S3ObjectRef
 from utils.config import read_config
@@ -32,10 +39,12 @@ class DocumentIngestionService:
         self,
         s3_client: Any,
         ingestion_config: dict[str, Any],
+        catalog_store: DocumentCatalogStore | None = None,
         random_suffix: Callable[[], str] | None = None,
     ) -> None:
         self._s3 = s3_client
         self._ingestion_config = ingestion_config
+        self._catalog_store = catalog_store
         self._random_suffix = random_suffix or (lambda: secrets.token_hex(5))
         self._pdf_processor = PdfProcessor(
             s3_client=s3_client,
@@ -45,6 +54,13 @@ class DocumentIngestionService:
 
     def process_object(self, obj: S3ObjectRef) -> IngestionResult:
         landing_prefix = self._ingestion_config["landing_prefix"]
+        if obj.key.endswith("/"):
+            return IngestionResult(
+                landing_s3_uri=obj.uri,
+                status="skipped",
+                message="Object is an S3 folder marker.",
+            )
+
         if not obj.key.startswith(landing_prefix):
             return IngestionResult(
                 landing_s3_uri=obj.uri,
@@ -55,7 +71,83 @@ class DocumentIngestionService:
         destination_bucket = self._ingestion_config["document_bucket_name"]
         head = self._s3.head_object(Bucket=obj.bucket, Key=obj.key)
         document_type = identify_document_type(obj.key, head.get("ContentType", ""))
+        tenant_id, collection_id = infer_landing_scope(
+            obj.key,
+            landing_prefix,
+            self._ingestion_config["default_tenant_id"],
+            self._ingestion_config["default_collection_id"],
+        )
+        filename = Path(obj.key).name
+        job_id = str(uuid.uuid4())
 
+        if self._catalog_store:
+            self._catalog_store.start_ingestion_job(
+                job_id=job_id,
+                landing_s3_uri=obj.uri,
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                document_type=document_type,
+                filename=filename,
+                input_event={
+                    "bucket": obj.bucket,
+                    "key": obj.key,
+                    "content_type": head.get("ContentType", ""),
+                },
+            )
+
+        try:
+            result = self._route_object(obj, destination_bucket, head, document_type)
+            result.job_id = job_id
+            result.tenant_id = result.tenant_id or tenant_id
+            result.collection_id = result.collection_id or collection_id
+            result.document_type = result.document_type or document_type
+
+            if self._catalog_store:
+                if result.document_metadata:
+                    self._catalog_store.upsert_document(result.document_metadata)
+                if result.chunks:
+                    self._catalog_store.upsert_chunks(result.chunks)
+                self._catalog_store.complete_ingestion_job(
+                    job_id=job_id,
+                    document_id=result.document_id,
+                    status=result.status,
+                    stage="chunk_artifacts_complete"
+                    if result.chunks
+                    else "initial_metadata_complete",
+                    metadata={
+                        "metadata_s3_uri": result.metadata_s3_uri,
+                        "raw_s3_uri": result.raw_s3_uri,
+                        "chunk_count": len(result.chunks),
+                    },
+                )
+
+            return result
+        except Exception as exc:
+            if self._catalog_store:
+                try:
+                    self._catalog_store.fail_ingestion_job(
+                        job_id=job_id,
+                        stage="route_not_implemented"
+                        if isinstance(exc, NotImplementedError)
+                        else "failed",
+                        error={
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                            "document_type": document_type,
+                        },
+                    )
+                except Exception:
+                    log.exception("Failed to mark document ingestion job as failed.")
+            raise
+
+    def _route_object(
+        self,
+        obj: S3ObjectRef,
+        destination_bucket: str,
+        head: dict[str, Any],
+        document_type: str,
+    ) -> IngestionResult:
+        """Route an object to the processor for its document type."""
         if document_type == "pdf":
             return self._pdf_processor.process(obj, destination_bucket, head)
         if document_type == "word_doc":
@@ -80,9 +172,10 @@ def main(event: dict[str, Any]) -> dict[str, Any]:
     log.info("Loading configuration from: %s", config_path)
     config = read_config(config_path)
     ingestion_config = config["ingestion"]
+    catalog_store = create_document_catalog_store(config)
     log.info("Configuration loaded successfully")
 
-    service = DocumentIngestionService(boto3.client("s3"), ingestion_config)
+    service = DocumentIngestionService(boto3.client("s3"), ingestion_config, catalog_store)
     records = list(extract_s3_object_refs(event))
     log.info("Processing %s ingestion record(s)", len(records))
 

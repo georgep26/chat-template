@@ -340,18 +340,20 @@ EOF
         --output text 2>/dev/null)
     
     if [ -n "$actual_bucket" ] && [ "$actual_bucket" != "None" ]; then
-        # Create kb_sources folder
-        print_info "Creating kb_sources folder in bucket..."
-        if aws_cmd s3api put-object \
-            --bucket "$actual_bucket" \
-            --key "kb_sources/" \
-            --content-length 0 >/dev/null 2>&1; then
-            print_complete "Created kb_sources folder"
-        else
-            if aws_cmd s3 ls "s3://$actual_bucket/kb_sources/" >/dev/null 2>&1; then
-                print_info "kb_sources folder already exists"
+        # Create knowledge-base ingestion folders.
+        for folder in kb_landing kb_raw kb_index kb_artifacts kb_catalog; do
+            print_info "Creating ${folder} folder in bucket..."
+            if aws_cmd s3api put-object \
+                --bucket "$actual_bucket" \
+                --key "${folder}/" \
+                --content-length 0 >/dev/null 2>&1; then
+                print_complete "Created ${folder} folder"
+            else
+                if aws_cmd s3 ls "s3://$actual_bucket/${folder}/" >/dev/null 2>&1; then
+                    print_info "${folder} folder already exists"
+                fi
             fi
-        fi
+        done
         
         # Create config folder and upload app_config.yaml
         # Read from local config/<env>/app_config.yaml, upload to s3://bucket/config/app_config.yaml
@@ -372,7 +374,8 @@ EOF
         print_complete "$RESOURCE_DISPLAY_NAME deployment finished"
         echo ""
         print_info "Bucket Name: $actual_bucket"
-        print_info "Upload documents to: s3://$actual_bucket/kb_sources/"
+        print_info "Upload documents to: s3://$actual_bucket/kb_landing/<tenant>/<collection>/"
+        print_info "Knowledge Base indexes generated artifacts under: s3://$actual_bucket/kb_index/"
         print_info "App config: s3://$actual_bucket/$s3_config_key"
     fi
 }

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from document_ingestion_lambda.file_type_processors.common import infer_landing_scope
 from document_ingestion_lambda.models import IngestionResult, S3ObjectRef
 
 try:
@@ -31,6 +32,34 @@ class PdfScanResult:
     text_available: bool | None = None
     ocr_required: bool | None = None
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PdfPageText:
+    """Text extracted from one PDF page."""
+
+    page_number: int
+    text: str
+
+
+@dataclass
+class PdfTextExtractionResult:
+    """Text extracted from the full PDF for deterministic chunk generation."""
+
+    extraction_status: str
+    pages: list[PdfPageText] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PdfChunkArtifact:
+    """S3 artifact and metadata generated for one PDF chunk."""
+
+    key: str
+    sidecar_key: str
+    markdown: str
+    sidecar_metadata: dict[str, Any]
+    catalog_metadata: dict[str, Any]
 
 
 class PdfProcessor:
@@ -117,11 +146,65 @@ class PdfProcessor:
                     "stage": "initial_metadata_complete",
                     "pdf": asdict(pdf_scan),
                     "chunking": {
-                        "status": "placeholder",
-                        "message": "Chunk generation is deferred to the next implementation slice.",
+                        "status": "not_started",
                     },
                 },
             }
+
+            text_extraction = extract_pdf_text_pages(tmp_path)
+            chunk_artifacts = build_page_chunk_artifacts(
+                text_extraction=text_extraction,
+                document_metadata=metadata,
+                destination_bucket=destination_bucket,
+                index_prefix=self._ingestion_config["index_prefix"],
+                default_chunk_tokens=int(self._ingestion_config["pdf_default_chunk_tokens"]),
+                chunk_overlap=float(self._ingestion_config["pdf_default_chunk_overlap"]),
+                embedding_chunk_token_limit=int(
+                    self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
+                ),
+            )
+
+            for artifact in chunk_artifacts:
+                self._s3.put_object(
+                    Bucket=destination_bucket,
+                    Key=artifact.key,
+                    Body=artifact.markdown.encode("utf-8"),
+                    ContentType="text/markdown",
+                )
+                self._s3.put_object(
+                    Bucket=destination_bucket,
+                    Key=artifact.sidecar_key,
+                    Body=json.dumps(
+                        artifact.sidecar_metadata,
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                    ContentType="application/json",
+                )
+
+            metadata["processing"]["pdf_text_extraction"] = {
+                "extraction_status": text_extraction.extraction_status,
+                "page_count": len(text_extraction.pages),
+                "warnings": text_extraction.warnings,
+            }
+            metadata["processing"]["chunking"] = {
+                "status": "complete" if chunk_artifacts else "skipped",
+                "strategy": "pdf_page_text",
+                "chunk_count": len(chunk_artifacts),
+                "index_prefix": join_s3_key(self._ingestion_config["index_prefix"], document_id),
+                "default_chunk_tokens": int(self._ingestion_config["pdf_default_chunk_tokens"]),
+                "chunk_overlap": float(self._ingestion_config["pdf_default_chunk_overlap"]),
+                "embedding_chunk_token_limit": int(
+                    self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
+                ),
+            }
+            if not chunk_artifacts:
+                metadata["processing"]["chunking"]["message"] = (
+                    "No extractable PDF page text was available for chunk generation."
+                )
+            metadata["processing"]["stage"] = (
+                "chunk_artifacts_complete" if chunk_artifacts else "initial_metadata_complete"
+            )
 
             self._s3.put_object(
                 Bucket=destination_bucket,
@@ -133,10 +216,14 @@ class PdfProcessor:
             return IngestionResult(
                 landing_s3_uri=obj.uri,
                 status="processed",
+                tenant_id=tenant_id,
+                collection_id=collection_id,
                 document_type="pdf",
                 document_id=document_id,
                 raw_s3_uri=raw_s3_uri,
                 metadata_s3_uri=f"s3://{destination_bucket}/{metadata_key}",
+                document_metadata=metadata,
+                chunks=[artifact.catalog_metadata for artifact in chunk_artifacts],
             )
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -188,18 +275,254 @@ def scan_pdf(path: Path, probe_pages: int, text_available_min_chars: int) -> Pdf
         )
 
 
-def infer_landing_scope(
-    key: str,
-    landing_prefix: str,
-    default_tenant_id: str,
-    default_collection_id: str,
-) -> tuple[str, str]:
-    """Infer tenant and collection from the landing-zone key."""
-    relative_key = key[len(landing_prefix) :] if key.startswith(landing_prefix) else key
-    parts = [part for part in relative_key.split("/") if part]
-    if len(parts) >= 3:
-        return parts[0], parts[1]
-    return default_tenant_id, default_collection_id
+def extract_pdf_text_pages(path: Path) -> PdfTextExtractionResult:
+    """Extract normalized text from every PDF page."""
+    if PdfReader is None:
+        return PdfTextExtractionResult(
+            extraction_status="pypdf_not_available",
+            warnings=["pypdf is not installed; PDF page text extraction was skipped."],
+        )
+
+    try:
+        reader = PdfReader(str(path))
+        pages: list[PdfPageText] = []
+        warnings: list[str] = []
+        for page_index, page in enumerate(reader.pages):
+            page_number = page_index + 1
+            try:
+                text = clean_extracted_text(page.extract_text() or "")
+                if text:
+                    pages.append(PdfPageText(page_number=page_number, text=text))
+            except Exception as exc:  # pragma: no cover - depends on PDF internals
+                warnings.append(f"page_{page_number}_text_extract_failed:{type(exc).__name__}")
+        return PdfTextExtractionResult(
+            extraction_status="completed",
+            pages=pages,
+            warnings=warnings,
+        )
+    except Exception as exc:
+        return PdfTextExtractionResult(
+            extraction_status="failed",
+            warnings=[f"pdf_text_extraction_failed:{type(exc).__name__}"],
+        )
+
+
+def build_page_chunk_artifacts(
+    *,
+    text_extraction: PdfTextExtractionResult,
+    document_metadata: dict[str, Any],
+    destination_bucket: str,
+    index_prefix: str,
+    default_chunk_tokens: int,
+    chunk_overlap: float,
+    embedding_chunk_token_limit: int,
+) -> list[PdfChunkArtifact]:
+    """Build page-based markdown chunks and Bedrock sidecar metadata."""
+    document_id = document_metadata["document_id"]
+    max_tokens = max(1, min(default_chunk_tokens, embedding_chunk_token_limit))
+    artifacts: list[PdfChunkArtifact] = []
+    chunk_index = 0
+
+    for page in text_extraction.pages:
+        text_parts = split_text_by_estimated_tokens(page.text, max_tokens, chunk_overlap)
+        part_count = len(text_parts)
+        for part_index, text in enumerate(text_parts, start=1):
+            chunk_index += 1
+            chunk_id = build_page_chunk_id(document_id, page.page_number, part_index, part_count)
+            key = join_s3_key(index_prefix, document_id, "pages", f"{chunk_id}.md")
+            metadata = {
+                "metadata_schema_version": document_metadata["metadata_schema_version"],
+                "record_type": "chunk",
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "tenant_id": document_metadata["tenant_id"],
+                "collection_id": document_metadata["collection_id"],
+                "document_title": document_metadata["document_title"],
+                "title": build_page_chunk_title(
+                    document_metadata["document_title"],
+                    page.page_number,
+                    part_index,
+                    part_count,
+                ),
+                "document_type": document_metadata["document_type"],
+                "filename": document_metadata["filename"],
+                "location": f"s3://{destination_bucket}/{key}",
+                "source_location": document_metadata["source_location"],
+                "chunk_type": "page",
+                "chunk_index": chunk_index,
+                "page_start": page.page_number,
+                "page_end": page.page_number,
+                "content_type": "text/markdown",
+                "token_count": estimate_token_count(text),
+                "char_count": len(text),
+                "access_tier": document_metadata.get("access_tier", "restricted"),
+                "custom_metadata": {
+                    "part_index": part_index,
+                    "part_count": part_count,
+                    "extraction_status": text_extraction.extraction_status,
+                },
+                "processing": {
+                    "strategy": "pdf_page_text",
+                    "estimated_token_counter": "whitespace_word_count",
+                    "configured_default_chunk_tokens": default_chunk_tokens,
+                    "configured_chunk_overlap": chunk_overlap,
+                    "configured_embedding_chunk_token_limit": embedding_chunk_token_limit,
+                },
+            }
+            artifacts.append(
+                PdfChunkArtifact(
+                    key=key,
+                    sidecar_key=f"{key}.metadata.json",
+                    markdown=build_chunk_markdown(metadata, text),
+                    sidecar_metadata=build_bedrock_sidecar_metadata(metadata),
+                    catalog_metadata=metadata,
+                )
+            )
+
+    return artifacts
+
+
+def clean_extracted_text(text: str) -> str:
+    """Normalize PDF extractor output while preserving paragraph breaks."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def split_text_by_estimated_tokens(
+    text: str,
+    max_tokens: int,
+    overlap_fraction: float,
+) -> list[str]:
+    """Split text deterministically when a page exceeds the configured token budget."""
+    words = re.findall(r"\S+", text)
+    if not words:
+        return []
+    if len(words) <= max_tokens:
+        return [text.strip()]
+
+    overlap_tokens = int(max_tokens * max(0.0, min(overlap_fraction, 0.8)))
+    step = max(max_tokens - overlap_tokens, 1)
+    parts: list[str] = []
+    start = 0
+    while start < len(words):
+        end = min(start + max_tokens, len(words))
+        parts.append(" ".join(words[start:end]))
+        if end == len(words):
+            break
+        start += step
+    return parts
+
+
+def estimate_token_count(text: str) -> int:
+    """Return a deterministic rough token estimate for ingestion chunk sizing."""
+    return len(re.findall(r"\S+", text))
+
+
+def build_page_chunk_id(
+    document_id: str,
+    page_number: int,
+    part_index: int,
+    part_count: int,
+) -> str:
+    """Build a stable page chunk id for a document upload."""
+    base = f"{document_id}_page_{page_number:04d}"
+    if part_count > 1:
+        return f"{base}_part_{part_index:02d}"
+    return base
+
+
+def build_page_chunk_title(
+    document_title: str,
+    page_number: int,
+    part_index: int,
+    part_count: int,
+) -> str:
+    """Build a readable title for page chunks."""
+    title = f"{document_title} - page {page_number}"
+    if part_count > 1:
+        title = f"{title}, part {part_index}"
+    return title
+
+
+def build_chunk_markdown(metadata: dict[str, Any], text: str) -> str:
+    """Create the markdown artifact indexed by Bedrock Knowledge Bases."""
+    header = [
+        f"# {metadata['title']}",
+        "",
+        f"- document_id: {metadata['document_id']}",
+        f"- chunk_id: {metadata['chunk_id']}",
+        f"- source: {metadata['source_location']}",
+        f"- page: {metadata['page_start']}",
+        "",
+    ]
+    return "\n".join(header) + text.strip() + "\n"
+
+
+def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Create a Bedrock S3 metadata sidecar for one index artifact."""
+    sidecar_fields = {
+        "metadata_schema_version": metadata["metadata_schema_version"],
+        "record_type": metadata["record_type"],
+        "document_id": metadata["document_id"],
+        "chunk_id": metadata["chunk_id"],
+        "tenant_id": metadata["tenant_id"],
+        "collection_id": metadata["collection_id"],
+        "document_title": metadata["document_title"],
+        "title": metadata["title"],
+        "document_type": metadata["document_type"],
+        "filename": metadata["filename"],
+        "source_location": metadata["source_location"],
+        "location": metadata["location"],
+        "chunk_type": metadata["chunk_type"],
+        "chunk_index": metadata["chunk_index"],
+        "page_start": metadata["page_start"],
+        "page_end": metadata["page_end"],
+        "access_tier": metadata["access_tier"],
+    }
+    include_for_embedding = {
+        "metadata_schema_version": False,
+        "record_type": False,
+        "document_id": False,
+        "chunk_id": False,
+        "tenant_id": False,
+        "collection_id": True,
+        "document_title": True,
+        "title": True,
+        "document_type": True,
+        "filename": True,
+        "source_location": False,
+        "location": False,
+        "chunk_type": True,
+        "chunk_index": False,
+        "page_start": False,
+        "page_end": False,
+        "access_tier": False,
+    }
+    return {
+        "metadataAttributes": {
+            key: bedrock_metadata_attribute(
+                value,
+                include_for_embedding=include_for_embedding[key],
+            )
+            for key, value in sidecar_fields.items()
+            if value is not None
+        }
+    }
+
+
+def bedrock_metadata_attribute(value: Any, include_for_embedding: bool) -> dict[str, Any]:
+    """Format a metadata value for Bedrock Knowledge Base S3 sidecars."""
+    if isinstance(value, bool):
+        typed_value = {"type": "BOOLEAN", "booleanValue": value}
+    elif isinstance(value, int) and not isinstance(value, bool):
+        typed_value = {"type": "NUMBER", "numberValue": value}
+    elif isinstance(value, float):
+        typed_value = {"type": "NUMBER", "numberValue": value}
+    else:
+        typed_value = {"type": "STRING", "stringValue": str(value)}
+    return {"value": typed_value, "includeForEmbedding": include_for_embedding}
 
 
 def generate_document_id(

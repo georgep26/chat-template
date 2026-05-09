@@ -48,8 +48,8 @@ Parameters:
 
   S3InclusionPrefix:
     Type: String
-    Default: 'kb_sources/'
-    Description: 'S3 key prefix under which documents for the KB are stored (default: kb_sources/)'
+    Default: 'kb_index/'
+    Description: 'S3 key prefix under which generated text artifacts for the KB are stored (default: kb_index/)'
 
 Resources:
   ########################################
@@ -148,6 +148,7 @@ Resources:
             VectorField: 'embedding'      # vector(N) column
             TextField: 'chunks'           # text column
             MetadataField: 'metadata'     # json/jsonb column
+            CustomMetadataField: 'custom_metadata'  # json/jsonb column for S3 sidecar metadata
             PrimaryKeyField: 'id'         # primary key column
       Tags:
         Name: !Sub '${ProjectName}-kb-${Environment}'
@@ -161,8 +162,8 @@ Resources:
     Type: AWS::Bedrock::DataSource
     Properties:
       KnowledgeBaseId: !Ref KnowledgeBase
-      Name: !Sub '${ProjectName}-kb-datasource-${Environment}'
-      Description: !Sub 'S3 data source for ${ProjectName} Knowledge Base in ${Environment}'
+      Name: !Sub '${ProjectName}-kb-index-datasource-${Environment}'
+      Description: !Sub 'S3 kb_index artifact data source for ${ProjectName} Knowledge Base in ${Environment}'
       # RETAIN avoids "Unable to delete data from vector store" when deleting the stack; vector store is in Aurora and is removed when the DB stack is deleted.
       DataDeletionPolicy: RETAIN
       DataSourceConfiguration:
@@ -173,10 +174,7 @@ Resources:
             - !Ref S3InclusionPrefix
       VectorIngestionConfiguration:
         ChunkingConfiguration:
-          ChunkingStrategy: FIXED_SIZE
-          FixedSizeChunkingConfiguration:
-            MaxTokens: 512
-            OverlapPercentage: 20
+          ChunkingStrategy: NONE
 
 Outputs:
   KnowledgeBaseId:

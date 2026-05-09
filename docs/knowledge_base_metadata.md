@@ -18,6 +18,15 @@ Each ingested document should preserve three layers:
 The Knowledge Base inclusion prefix should point at `kb_index/`. Do not index
 `kb_raw/`, `kb_landing/`, or `kb_artifacts/` by default.
 
+For the Aurora/RDS Bedrock vector store, the Bedrock table must include both:
+
+- `metadata`: Bedrock-managed source metadata.
+- `custom_metadata`: custom metadata from S3 `.metadata.json` sidecars.
+
+`custom_metadata` must have a GIN index. The Knowledge Base RDS field mapping is
+immutable after creation, so adding `customMetadataField` requires recreating the
+Knowledge Base stack in disposable environments.
+
 ## Identifiers
 
 | Field | Scope | Purpose |
@@ -74,6 +83,9 @@ file, for example:
 kb_index/{document_id}/sections/{chunk_id}.md
 kb_index/{document_id}/sections/{chunk_id}.md.metadata.json
 ```
+
+The sidecar values are persisted by Bedrock into the vector table's
+`custom_metadata` field and are returned by `Retrieve` as source metadata.
 
 Required chunk-level fields:
 
@@ -148,4 +160,3 @@ Current Phase 1 PDF tuning fields:
 - `pdf_default_chunk_tokens`
 - `pdf_default_chunk_overlap`
 - `pdf_embedding_chunk_token_limit_titan_v2`
-
