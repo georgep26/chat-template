@@ -60,11 +60,17 @@ def test_retrieve_node_preserves_retrieval_source_number_and_metadata(monkeypatc
     docs = [
         Document(
             page_content="First chunk.",
-            metadata={"id": "doc-1", "score": 0.9, "page_number": 1},
+            metadata={
+                "score": 0.9,
+                "source_metadata": {"document_id": "doc-1", "page_number": 1},
+            },
         ),
         Document(
             page_content="Second chunk.",
-            metadata={"id": "doc-2", "score": 0.8, "page_number": 2},
+            metadata={
+                "score": 0.8,
+                "source_metadata": {"document_id": "doc-2", "page_number": 2},
+            },
         ),
     ]
 
@@ -76,7 +82,7 @@ def test_retrieve_node_preserves_retrieval_source_number_and_metadata(monkeypatc
             del query
             return docs
 
-    monkeypatch.setattr("src.rag_lambda.graph.retrieval.AmazonKnowledgeBasesRetriever", FakeRetriever)
+    monkeypatch.setattr("knowledge.vector_search.AmazonKnowledgeBasesRetriever", FakeRetriever)
 
     state = {
         "messages": [],
