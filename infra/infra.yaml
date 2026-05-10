@@ -144,11 +144,13 @@ deployment_sets:
     resources:
       - rag_lambda_ecr
       - history_api_lambda_ecr
+      - library_api_lambda_ecr
       - document_ingestion_lambda_ecr
       - cognito
       - frontend
       - rag_lambda
       - history_api_lambda
+      - library_api_lambda
       - document_ingestion_lambda
     deploy_cost_control: true
     deploy_config: true
@@ -157,8 +159,10 @@ deployment_sets:
     resources:
       - rag_lambda_ecr
       - history_api_lambda_ecr
+      - library_api_lambda_ecr
       - rag_lambda
       - history_api_lambda
+      - library_api_lambda
     deploy_cost_control: false
     deploy_config: true
 # Cost allocation tags for AWS billing
@@ -433,6 +437,15 @@ resources:
     config:
       repository_name: "{project}-history-api-lambda-{env}"
       max_image_count: 5
+  # ECR repository for Library API Lambda
+  library_api_lambda_ecr:
+    enabled: true
+    ownership: owned
+    template: resources/ecr_repo_template.yaml
+    stack_name: "{project}-library-api-lambda-ecr-{env}"
+    config:
+      repository_name: "{project}-library-api-lambda-{env}"
+      max_image_count: 5
   # ECR repository for Document Ingestion Lambda
   document_ingestion_lambda_ecr:
     enabled: true
@@ -507,6 +520,25 @@ resources:
       function_url_cors_allow_origins: "http://localhost:5173"
       function_url_cors_allow_headers: "Content-Type,Authorization"
       function_url_cors_allow_methods: "GET,POST,DELETE"
+      function_url_cors_max_age: 600
+  # Library API Lambda — read-side document catalog endpoints
+  library_api_lambda:
+    enabled: true
+    ownership: owned
+    template: resources/library_api_lambda_template.yaml
+    stack_name: "{project}-library-api-lambda-{env}"
+    config:
+      function_name: "{project}-{env}-library-api"
+      memory_size: 512
+      timeout: 30
+      s3_app_config_uri: "s3://{project}-{env}-s3-{global_suffix}/config/app_config.yaml"
+      auth_required: "true"
+      cognito_region: "${COGNITO_REGION}"
+      cognito_user_pool_id: "${COGNITO_USER_POOL_ID}"
+      cognito_app_client_id: "${COGNITO_APP_CLIENT_ID}"
+      function_url_cors_allow_origins: "http://localhost:5173"
+      function_url_cors_allow_headers: "Content-Type,Authorization"
+      function_url_cors_allow_methods: "GET"
       function_url_cors_max_age: 600
   # Document Ingestion Lambda — first slice processes PDF uploads in kb_landing/
   # into the durable metadata/raw-document layout. Later phases will add chunk

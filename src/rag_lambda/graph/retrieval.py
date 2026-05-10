@@ -168,12 +168,21 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
     # Capture document metadata for sources
     sources = []
     for index, doc in enumerate(docs, start=1):
-        metadata = dict(doc.metadata or {})
+        raw_metadata = dict(doc.metadata or {})
+        # Bedrock KB retrieval nests custom sidecar fields under "source_metadata".
+        source_meta = raw_metadata.get("source_metadata") or {}
+        # Merge source_metadata fields into a flat metadata dict for the frontend.
+        metadata = {**source_meta}
+        metadata["score"] = raw_metadata.get("score", 0.0)
+        if "location" in raw_metadata:
+            metadata["retrieval_location"] = raw_metadata["location"]
+
+        document_id = source_meta.get("document_id") or raw_metadata.get("id") or raw_metadata.get("source") or "unknown"
         source_info = {
             "retrieval_source_number": index,
-            "document_id": metadata.get("id", metadata.get("source", "unknown")),
-            "source_type": metadata.get("source_type", "document"),
-            "score": metadata.get("score", 0.0),
+            "document_id": document_id,
+            "source_type": source_meta.get("document_type") or raw_metadata.get("source_type", "document"),
+            "score": raw_metadata.get("score", 0.0),
             "chunk": doc.page_content or "",
             "metadata": metadata,
         }

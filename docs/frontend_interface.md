@@ -18,15 +18,18 @@ User Browser (Nuxt 4 SPA / SSG)
   -> RAG Lambda validates JWT, runs retrieval/generation, persists turn, returns answer
   -> History API Lambda (separate Function URL) serves /conversations list + reads
      + rename/delete from the same Aurora tables
+  -> Library API Lambda (separate Function URL) serves /documents list + detail
+     from the document_catalog tables
 ```
 
 Components:
 - Cognito User Pool: authenticates end users and issues JWTs.
-- Nuxt 4 frontend: obtains token, sends chat requests, renders responses, manages conversation list/history via the History API.
-- Nitro server route (SSR mode): proxies `/api/chat` and `/api/history/*` to the corresponding Lambdas, forwards auth header. Keeps Lambda URLs server-only.
+- Nuxt 4 frontend: obtains token, sends chat requests, renders responses, manages conversation list/history via the History API, lists the knowledge-base catalog via the Library API.
+- Nitro server route (SSR mode): proxies `/api/chat`, `/api/history/*`, and `/api/library/*` to the corresponding Lambdas, forwards auth header. Keeps Lambda URLs server-only.
 - RAG Lambda: enforces auth, scopes conversation storage by authenticated user, runs RAG pipeline. Exposed via its own Function URL.
 - History API Lambda: enforces auth, exposes per-user `/conversations` list/get-messages/rename/delete endpoints. Exposed via its own Function URL.
-- Both Lambdas read/write the same Aurora `chat_conversations` / `chat_history` tables, scoped by `(environment, user_id)` from the JWT subject.
+- Library API Lambda: enforces auth, exposes read-only `/documents` list and detail endpoints for the document catalog. Exposed via its own Function URL.
+- The chat Lambdas read/write the same Aurora `chat_conversations` / `chat_history` tables scoped by `(environment, user_id)` from the JWT subject. The Library API reads the `document_catalog` / `document_chunks` tables scoped by `tenant_id` (from JWT custom claim or the configured default).
 
 ### Deployment Modes
 
@@ -46,6 +49,10 @@ Environment variables use Nuxt's `runtimeConfig` convention (`NUXT_` prefix for 
 | `NUXT_CHAT_API_BASE_URL` | Lambda Function URL (never exposed to browser in SSR mode) |
 | `NUXT_CHAT_API_PATH` | Path on Lambda (default `/`) |
 | `NUXT_CHAT_TIMEOUT_MS` | Request timeout in ms (default `65000`) |
+| `NUXT_HISTORY_API_BASE_URL` | History API Lambda Function URL |
+| `NUXT_HISTORY_API_TIMEOUT_MS` | History API request timeout (default `15000`) |
+| `NUXT_LIBRARY_API_BASE_URL` | Library API Lambda Function URL |
+| `NUXT_LIBRARY_API_TIMEOUT_MS` | Library API request timeout (default `15000`) |
 
 ### Public (embedded in client bundle)
 
@@ -53,6 +60,7 @@ Environment variables use Nuxt's `runtimeConfig` convention (`NUXT_` prefix for 
 |---|---|---|---|---|
 | `NUXT_PUBLIC_CHAT_API_BASE_URL` | Lambda URL (dev) | Lambda URL (staging) | Lambda URL (prod) | RAG Lambda URL; used in static generation mode; browser calls this directly |
 | `NUXT_PUBLIC_HISTORY_API_BASE_URL` | History API URL (dev) | History API URL (staging) | History API URL (prod) | History API Lambda URL for `/conversations` endpoints (list, get messages, rename, delete) |
+| `NUXT_PUBLIC_LIBRARY_API_BASE_URL` | Library API URL (dev) | Library API URL (staging) | Library API URL (prod) | Library API Lambda URL for `/documents` endpoints (list, detail) |
 | `NUXT_PUBLIC_COGNITO_REGION` | Required | Required | Required | Usually `us-east-1` |
 | `NUXT_PUBLIC_COGNITO_USER_POOL_ID` | Required | Required | Required | User pool for this environment |
 | `NUXT_PUBLIC_COGNITO_APP_CLIENT_ID` | Required | Required | Required | App client used by SPA |
@@ -283,6 +291,69 @@ Status codes (all endpoints, same shape as Section 5):
 - `400` — bad request body or query param out of range
 - `401` — missing/invalid/expired token
 - `404` — path not matched, or conversation not owned / not found (we deliberately do not distinguish "not yours" from "doesn't exist")
+- `500` — server error
+
+## 4.6 Library API Contract (separate Lambda)
+
+The Library API lives on a separate Lambda Function URL (`NUXT_PUBLIC_LIBRARY_API_BASE_URL`). It exposes read-only document catalog endpoints. It validates the same Cognito JWT and reads from the Aurora `document_catalog` table. All queries are scoped by `tenant_id` (from the JWT custom claim `custom:tenant_id`, falling back to the configured `ingestion.default_tenant_id`).
+
+v1 only returns documents whose `access_tier` is `public` or `internal`. Restricted documents and per-document ACL grants (`document_access_grants`) are out of scope until Phase 5.
+
+Headers (all endpoints):
+- `Authorization: Bearer <JWT>` (required)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/documents?limit=50&offset=0` | List authorized documents, newest first, excluding `source_status='failed'` |
+| `GET` | `/documents/{document_id}` | Single document detail; 404 if not in tenant or not in allowed tiers |
+| `OPTIONS` | (any) | CORS preflight, returns 204 |
+
+`GET /documents` response (`200`):
+
+```json
+{
+  "documents": [
+    {
+      "document_id": "pdf_2021_international_residential_code_2_phase2_chu_63457d8b7e",
+      "tenant_id": "default",
+      "collection_id": "default",
+      "document_title": "2021 International Residential Code",
+      "document_description": null,
+      "filename": "2021_International_Residential_Code-2.pdf",
+      "document_type": "pdf",
+      "source_status": "processing",
+      "access_tier": "public",
+      "location": "s3://bucket/kb_index/.../",
+      "source_location": "s3://bucket/kb_raw/.../original.pdf",
+      "publish_date": null,
+      "version_label": null,
+      "jurisdiction": null,
+      "code_family": "irc",
+      "uploaded_at": "2026-05-09T12:00:00Z",
+      "ingested_at": "2026-05-09T12:15:00Z",
+      "metadata": {}
+    }
+  ],
+  "next_offset": null
+}
+```
+
+- `next_offset` is the offset to pass next time when more rows may be available; `null` when the page returned fewer rows than `limit`.
+- `limit` is clamped to `[1, 200]`, default `50`. `offset` is clamped to `[0, 10000]`, default `0`.
+- `metadata` is a JSONB overflow object. Optional display fields like `publisher`, `page_count`, `edition_year`, `tags` may live here.
+
+`GET /documents/{id}` response (`200`):
+
+```json
+{ "document": { "...": "same row shape as list entry" } }
+```
+
+Status codes:
+- `200` — success
+- `204` — OPTIONS preflight
+- `400` — query param out of range
+- `401` — missing/invalid/expired token
+- `404` — path not matched, or document not in tenant / not in allowed access tiers
 - `500` — server error
 
 ## 5. Error Handling Contract
