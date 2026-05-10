@@ -65,15 +65,29 @@ def parse_event_body(event: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError("Request body must be a JSON object.")
 
 
-def prepare_body_for_main(event_body: Dict[str, Any], auth_user_id: str, trace_id: Optional[str]) -> Dict[str, Any]:
+def prepare_body_for_main(
+    event_body: Dict[str, Any],
+    auth_user_id: str,
+    trace_id: Optional[str],
+    claims: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Inject authenticated identity and trace metadata for main().
 
     When auth is used, the token is the source of truth: body["user_id"] is always
     set to the authenticated user. Any client-sent user_id is overwritten (deprecated).
+    A ``tenant_id`` is also injected from JWT claims when available so retrieval
+    can scope authorization to the caller's tenant.
     """
     body = dict(event_body)
     body["user_id"] = auth_user_id
     if trace_id:
         body["trace_id"] = trace_id
+
+    if claims:
+        for claim_key in ("custom:tenant_id", "tenant_id"):
+            value = claims.get(claim_key)
+            if isinstance(value, str) and value:
+                body["tenant_id"] = value
+                break
 
     return body
