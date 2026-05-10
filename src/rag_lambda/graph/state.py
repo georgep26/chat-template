@@ -11,5 +11,6 @@ class MessagesState(TypedDict, total=False):
     messages: List[BaseMessage]
     sources: List[Dict[str, Any]]  # Document metadata for sources
     retrieval_config: Dict[str, Any]  # Retrieval configuration
-    retrieval_filters: Dict[str, List[str]]  # Retrieval filters for metadata filtering
+    retrieval_filters: Dict[str, Any]  # Retrieval filters for metadata filtering
+    tenant_id: str  # Authenticated tenant id used to scope retrieval authz
 

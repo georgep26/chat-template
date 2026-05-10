@@ -23,6 +23,7 @@ COPY src/rag_lambda/ ${LAMBDA_TASK_ROOT}/rag_lambda/
 # Copy shared modules (extracted from rag_lambda for reuse across Lambdas)
 COPY src/auth/ ${LAMBDA_TASK_ROOT}/auth/
 COPY src/memory/ ${LAMBDA_TASK_ROOT}/memory/
+COPY src/knowledge/ ${LAMBDA_TASK_ROOT}/knowledge/
 
 # Copy utils directory (needed for imports like utils.aws_utils)
 COPY src/utils/ ${LAMBDA_TASK_ROOT}/utils/

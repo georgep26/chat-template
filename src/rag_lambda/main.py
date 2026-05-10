@@ -151,7 +151,11 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
         "messages": prior_messages + [HumanMessage(content=req.message)],
         "retrieval_config": retrieval_config,
     }
-    
+
+    tenant_id_from_body = event_body.get("tenant_id")
+    if isinstance(tenant_id_from_body, str) and tenant_id_from_body:
+        state["tenant_id"] = tenant_id_from_body
+
     # Add retrieval filters to state if provided
     if req.retrieval_filters:
         state["retrieval_filters"] = req.retrieval_filters
@@ -274,7 +278,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     try:
         auth_context = authenticate_request(headers, fallback_user_id=fallback_user_id)
-        prepared_body = prepare_body_for_main(body, auth_context.user_id, trace_id)
+        prepared_body = prepare_body_for_main(
+            body,
+            auth_context.user_id,
+            trace_id,
+            claims=auth_context.claims,
+        )
         return main(prepared_body)
     except ValidationError as exc:
         return json_response(400, {"error": "ValidationError", "detail": str(exc)})
