@@ -1,0 +1,9 @@
+boto3>=1.34.0
+pydantic>=2.0.0
+pyyaml>=6.0
+PyJWT[crypto]>=2.8.0
+langchain-aws>=1.0.0
+langchain-core>=0.3.0
+# Pin numpy to a range that has prebuilt manylinux wheels for the Lambda image
+# (the AL2 base ships gcc 7.3, which can't compile numpy >= 2.4 from source).
+numpy<2.0,>=1.24.0
