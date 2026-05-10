@@ -9,7 +9,8 @@ This file is the canonical project entry point for coding agents working in this
 - The chat backend runtime is the RAG Lambda under `src/rag_lambda/`.
 - The conversation read/admin runtime is the History API Lambda under `src/history_api_lambda/` (list/get-messages/rename/delete).
 - The document catalog read runtime is the Library API Lambda under `src/library_api_lambda/` (list/detail).
-- All three runtime Lambdas share `src/auth/` (Cognito JWT) and `src/utils/` — extract reusable code there rather than under any Lambda's package. The chat Lambdas additionally share `src/memory/` (chat history store).
+- The retrieval-primitives runtime is the Knowledge API Lambda under `src/knowledge_api_lambda/` (vector search, chunk listing/fetch). It exposes the same primitives the RAG Lambda uses internally so external agents (e.g. via MCP) can call them.
+- All four runtime Lambdas share `src/auth/` (Cognito JWT) and `src/utils/` — extract reusable code there rather than under any Lambda's package. The RAG and Knowledge Lambdas additionally share `src/knowledge/` (vector search + chunk reads + S3 artifact fetch). The chat Lambdas additionally share `src/memory/` (chat history store).
 - Infrastructure and deployment are config-driven through `infra/infra.yaml` and scripts under `scripts/`.
 
 ## Required Context

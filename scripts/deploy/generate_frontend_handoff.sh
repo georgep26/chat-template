@@ -89,6 +89,7 @@ frontend_stack=$(get_resource_stack_name "frontend" "$ENVIRONMENT")
 lambda_stack=$(get_resource_stack_name "rag_lambda" "$ENVIRONMENT")
 history_api_stack=$(get_resource_stack_name "history_api_lambda" "$ENVIRONMENT")
 library_api_stack=$(get_resource_stack_name "library_api_lambda" "$ENVIRONMENT")
+knowledge_api_stack=$(get_resource_stack_name "knowledge_api_lambda" "$ENVIRONMENT")
 
 if ! aws_cmd cloudformation describe-stacks --stack-name "$cognito_stack" >/dev/null 2>&1; then
     print_warning "Cognito stack '$cognito_stack' not found; skipping handoff generation"
@@ -110,6 +111,12 @@ if ! aws_cmd cloudformation describe-stacks --stack-name "$library_api_stack" >/
     print_warning "Library API Lambda stack '$library_api_stack' not found; skipping handoff generation"
     exit 0
 fi
+# Knowledge API is optional in early environments; absence is not fatal — emit empty value.
+knowledge_api_present=true
+if ! aws_cmd cloudformation describe-stacks --stack-name "$knowledge_api_stack" >/dev/null 2>&1; then
+    print_warning "Knowledge API Lambda stack '$knowledge_api_stack' not found; emitting empty NUXT_PUBLIC_KNOWLEDGE_API_BASE_URL"
+    knowledge_api_present=false
+fi
 
 cognito_region=$(stack_output "$cognito_stack" "CognitoRegion")
 user_pool_id=$(stack_output "$cognito_stack" "UserPoolId")
@@ -118,6 +125,10 @@ cf_domain=$(stack_output "$frontend_stack" "CloudFrontDomainName")
 function_url=$(stack_output "$lambda_stack" "LambdaFunctionUrl")
 history_api_url=$(stack_output "$history_api_stack" "LambdaFunctionUrl")
 library_api_url=$(stack_output "$library_api_stack" "LambdaFunctionUrl")
+knowledge_api_url=""
+if [ "$knowledge_api_present" = true ]; then
+    knowledge_api_url=$(stack_output "$knowledge_api_stack" "LambdaFunctionUrl")
+fi
 
 # Lambda template may name the output differently — fall back to live config.
 if [ -z "$function_url" ] || [ "$function_url" = "None" ] || [ "$function_url" = "null" ]; then
@@ -138,11 +149,18 @@ if [ -z "$library_api_url" ] || [ "$library_api_url" = "None" ] || [ "$library_a
         --function-name "$library_api_name" \
         --query 'FunctionUrl' --output text 2>/dev/null || true)
 fi
+if [ "$knowledge_api_present" = true ] && { [ -z "$knowledge_api_url" ] || [ "$knowledge_api_url" = "None" ] || [ "$knowledge_api_url" = "null" ]; }; then
+    knowledge_api_name="${PROJECT_NAME:-chat-template}-${ENVIRONMENT}-knowledge-api"
+    knowledge_api_url=$(aws_cmd lambda get-function-url-config \
+        --function-name "$knowledge_api_name" \
+        --query 'FunctionUrl' --output text 2>/dev/null || true)
+fi
 
 # Strip any trailing slash on function URLs for consistent assembly downstream.
 function_url="${function_url%/}"
 history_api_url="${history_api_url%/}"
 library_api_url="${library_api_url%/}"
+knowledge_api_url="${knowledge_api_url%/}"
 
 missing=()
 [ -z "$cognito_region" ] || [ "$cognito_region" = "None" ] && missing+=("CognitoRegion")
@@ -171,6 +189,7 @@ cat > "$tmp_file" <<EOF
 NUXT_PUBLIC_CHAT_API_BASE_URL=${function_url}
 NUXT_PUBLIC_HISTORY_API_BASE_URL=${history_api_url}
 NUXT_PUBLIC_LIBRARY_API_BASE_URL=${library_api_url}
+NUXT_PUBLIC_KNOWLEDGE_API_BASE_URL=${knowledge_api_url}
 NUXT_PUBLIC_COGNITO_REGION=${cognito_region}
 NUXT_PUBLIC_COGNITO_USER_POOL_ID=${user_pool_id}
 NUXT_PUBLIC_COGNITO_APP_CLIENT_ID=${app_client_id}
