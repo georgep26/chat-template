@@ -62,6 +62,13 @@ ingestion:
   pdf_default_chunk_tokens: 1000 # Target token count for fallback PDF chunks when no reliable document hierarchy is found.
   pdf_default_chunk_overlap: 0.2 # Fractional overlap for fallback chunks; section-based chunks should avoid overlap when possible.
   pdf_embedding_chunk_token_limit_titan_v2: 8192 # Max token budget for chunks embedded with amazon.titan-embed-text-v2.
+  # ---- Phase 1: multimodal triage (Nova Lite) ----
+  pdf_triage_enabled: true # Run a multimodal LLM scan over sampled pages to decide OCR-need and section structure.
+  pdf_triage_model_id: "amazon.nova-lite-v1:0" # Bedrock foundation model used for triage Converse calls.
+  pdf_triage_region: "us-east-1" # Bedrock region; defaults to retrieval region when unset.
+  pdf_triage_ocr_threshold: 0.30 # Fraction of sampled pages reporting low-quality text that triggers OCR fallback.
+  pdf_triage_hierarchy_threshold: 0.50 # Fraction of sampled pages sharing the same heading pattern that triggers section chunking.
+  pdf_triage_temperature: 0.0 # Decoding temperature for the per-page triage call.
 
 api:
   host: "0.0.0.0"
