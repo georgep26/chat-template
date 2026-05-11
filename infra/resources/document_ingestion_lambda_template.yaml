@@ -204,6 +204,26 @@ Resources:
             Resource:
               - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
 
+  TextractInvokePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${Environment}-document-ingestion-textract-policy'
+      Roles:
+        - !Ref LambdaExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Phase 3 + 5: table extraction + OCR fallback. Both run async over
+          # S3 inputs; Textract reads the raw PDF directly via the role.
+          - Sid: AllowTextractAsyncJobs
+            Effect: Allow
+            Action:
+              - textract:StartDocumentAnalysis
+              - textract:GetDocumentAnalysis
+              - textract:StartDocumentTextDetection
+              - textract:GetDocumentTextDetection
+            Resource: '*'
+
   LambdaConfigS3Policy:
     Type: AWS::IAM::Policy
     Condition: HasConfigS3Bucket
