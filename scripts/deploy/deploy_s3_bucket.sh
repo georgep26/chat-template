@@ -135,6 +135,8 @@ TEMPLATE_FILE=$(get_resource_template "$RESOURCE_NAME")
 BUCKET_NAME=$(get_resource_config "$RESOURCE_NAME" "bucket_name" "$ENVIRONMENT")
 ENABLE_VERSIONING=$(get_resource_config "$RESOURCE_NAME" "enable_versioning")
 ENABLE_LIFECYCLE=$(get_resource_config "$RESOURCE_NAME" "enable_lifecycle")
+CORS_ALLOWED_ORIGINS=$(get_resource_config "$RESOURCE_NAME" "cors_allowed_origins" "$ENVIRONMENT")
+[ "$CORS_ALLOWED_ORIGINS" = "null" ] && CORS_ALLOWED_ORIGINS=""
 
 # Convert boolean to CloudFormation format
 [ "$ENABLE_VERSIONING" = "true" ] && VERSIONING_STATUS="Enabled" || VERSIONING_STATUS="Suspended"
@@ -274,7 +276,8 @@ deploy_stack() {
   {"ParameterKey": "Environment", "ParameterValue": "$ENVIRONMENT"},
   {"ParameterKey": "BucketName", "ParameterValue": "$BUCKET_NAME"},
   {"ParameterKey": "EnableVersioning", "ParameterValue": "$VERSIONING_STATUS"},
-  {"ParameterKey": "EnableLifecycleRules", "ParameterValue": "$ENABLE_LIFECYCLE"}
+  {"ParameterKey": "EnableLifecycleRules", "ParameterValue": "$ENABLE_LIFECYCLE"},
+  {"ParameterKey": "CorsAllowedOrigins", "ParameterValue": "$CORS_ALLOWED_ORIGINS"}
 ]
 EOF
     
