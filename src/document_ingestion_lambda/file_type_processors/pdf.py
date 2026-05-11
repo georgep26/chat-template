@@ -341,6 +341,7 @@ class PdfProcessor:
                 min_section_chars=int(cfg.get("pdf_section_min_chars") or 40),
                 min_boundaries=int(cfg.get("pdf_section_min_boundaries") or 5),
                 embedding_chunk_token_limit=embedding_token_limit,
+                skip_pages=tuple(triage.toc_pages or ()),
             )
             boundaries, joined = detect_section_boundaries(
                 text_extraction.pages, config=detection_config
