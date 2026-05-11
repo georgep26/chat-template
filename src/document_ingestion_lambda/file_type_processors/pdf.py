@@ -20,6 +20,9 @@ from document_ingestion_lambda.triage import (
     triage_summary_dict,
 )
 
+# Section chunking is imported lazily inside `process()` to keep this module
+# import-graph free of cycles (section_chunking imports back from this module).
+
 try:
     from pypdf import PdfReader
 except ImportError:
@@ -29,6 +32,22 @@ try:  # pragma: no cover - only imported in real runtimes
     import boto3
 except ImportError:
     boto3 = None  # type: ignore[assignment]
+
+
+def _maybe_boto3_client(service: str, region: str | None = None) -> Any | None:
+    """Best-effort boto3 client construction.
+
+    Returns None when boto3 isn't importable (lightweight tests) so callers
+    can treat the absence as 'skip this step'. Tolerates test-stub
+    ``boto3.client`` replacements that don't accept ``region_name``.
+    """
+    if boto3 is None:
+        return None
+    try:
+        return boto3.client(service, region_name=region) if region else boto3.client(service)
+    except TypeError:
+        # Test stubs sometimes replace ``boto3.client`` with a simpler callable.
+        return boto3.client(service)
 
 
 @dataclass
@@ -82,12 +101,14 @@ class PdfProcessor:
         ingestion_config: dict[str, Any],
         random_suffix: Callable[[], str],
         bedrock_client: Any | None = None,
+        textract_client: Any | None = None,
     ) -> None:
         self._s3 = s3_client
         self._ingestion_config = ingestion_config
         self._random_suffix = random_suffix
-        # Lazily created on first use. Tests inject a stub directly.
+        # Lazily created on first use. Tests inject stubs directly.
         self._bedrock_client = bedrock_client
+        self._textract_client = textract_client
 
     def _get_bedrock_client(self) -> Any | None:
         """Return a Bedrock Runtime client, creating one on first use.
@@ -97,11 +118,144 @@ class PdfProcessor:
         """
         if self._bedrock_client is not None:
             return self._bedrock_client
-        if boto3 is None:
-            return None
         region = self._ingestion_config.get("pdf_triage_region") or "us-east-1"
-        self._bedrock_client = boto3.client("bedrock-runtime", region_name=region)
+        self._bedrock_client = _maybe_boto3_client("bedrock-runtime", region)
         return self._bedrock_client
+
+    def _get_textract_client(self) -> Any | None:
+        if self._textract_client is not None:
+            return self._textract_client
+        # Textract is regional; align with Bedrock region so cross-region
+        # data transfer doesn't surprise us.
+        region = self._ingestion_config.get("pdf_triage_region") or "us-east-1"
+        self._textract_client = _maybe_boto3_client("textract", region)
+        return self._textract_client
+
+    def _extract_table_artifacts(
+        self,
+        *,
+        raw_bucket: str,
+        raw_key: str,
+        document_metadata: dict[str, Any],
+        destination_bucket: str,
+    ) -> tuple[list["PdfChunkArtifact"], Any]:
+        """Run Textract over the raw PDF in S3 and emit one chunk per table.
+
+        Lazy-imports the extractor so this module stays free of Textract
+        types at import time. Always-recoverable: missing Textract client
+        or extraction failure yields zero artifacts and a recorded status.
+        """
+        from document_ingestion_lambda.file_type_processors.table_extraction import (
+            TableExtractionConfig,
+            TableExtractionResult,
+            extract_table_chunk_artifacts,
+        )
+
+        cfg = self._ingestion_config
+        enabled = _as_bool(cfg.get("pdf_table_extraction_enabled"), default=True)
+        if not enabled:
+            return [], TableExtractionResult(status="skipped", warnings=["table_extraction_disabled"])
+
+        textract_client = self._get_textract_client()
+        if textract_client is None:
+            return [], TableExtractionResult(
+                status="skipped", warnings=["textract_client_unavailable"]
+            )
+
+        bedrock_client = self._get_bedrock_client()
+        config = TableExtractionConfig(
+            enabled=True,
+            summary_model_id=str(
+                cfg.get("pdf_table_summary_model_id") or "amazon.nova-lite-v1:0"
+            ),
+            summary_region=str(cfg.get("pdf_triage_region") or "us-east-1"),
+            poll_interval_seconds=float(
+                cfg.get("pdf_textract_poll_interval_seconds") or 5.0
+            ),
+            max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
+            max_tables=int(cfg.get("pdf_max_table_extractions") or 500),
+        )
+        artifacts, result = extract_table_chunk_artifacts(
+            raw_s3_bucket=raw_bucket,
+            raw_s3_key=raw_key,
+            document_metadata=document_metadata,
+            destination_bucket=destination_bucket,
+            index_prefix=cfg["index_prefix"],
+            artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
+            textract_client=textract_client,
+            bedrock_client=bedrock_client,
+            config=config,
+        )
+        return artifacts, result
+
+    def _build_chunk_artifacts(
+        self,
+        *,
+        text_extraction: PdfTextExtractionResult,
+        triage: PdfTriageResult,
+        document_metadata: dict[str, Any],
+        destination_bucket: str,
+    ) -> tuple[list["PdfChunkArtifact"], str]:
+        """Decide chunking strategy and emit chunks.
+
+        Returns (artifacts, strategy_name). When the triage signals a high-
+        confidence hierarchy and the regex pass finds enough headings, we
+        emit section-based chunks; otherwise we fall back to the existing
+        page chunker.
+        """
+        # Lazy import: section_chunking imports symbols from this module, so
+        # we avoid a circular import at module load time.
+        from document_ingestion_lambda.file_type_processors.section_chunking import (
+            SectionDetectionConfig,
+            build_section_chunk_artifacts,
+            detect_section_boundaries,
+            should_use_section_chunking,
+        )
+
+        cfg = self._ingestion_config
+        section_enabled = _as_bool(cfg.get("pdf_section_chunking_enabled"), default=True)
+        embedding_token_limit = int(cfg["pdf_embedding_chunk_token_limit_titan_v2"])
+
+        if section_enabled and triage and triage.triage_status == "completed":
+            detection_config = SectionDetectionConfig(
+                hierarchy_kind=triage.hierarchy_kind or "page_only",
+                min_section_chars=int(cfg.get("pdf_section_min_chars") or 40),
+                min_boundaries=int(cfg.get("pdf_section_min_boundaries") or 5),
+                embedding_chunk_token_limit=embedding_token_limit,
+            )
+            boundaries, joined = detect_section_boundaries(
+                text_extraction.pages, config=detection_config
+            )
+            min_confidence = float(cfg.get("pdf_section_min_confidence") or 0.70)
+            if should_use_section_chunking(
+                triage,
+                boundaries,
+                min_boundaries=detection_config.min_boundaries,
+                min_confidence=min_confidence,
+            ):
+                artifacts = build_section_chunk_artifacts(
+                    text_extraction=text_extraction,
+                    boundaries=boundaries,
+                    joined=joined,
+                    document_metadata=document_metadata,
+                    destination_bucket=destination_bucket,
+                    index_prefix=cfg["index_prefix"],
+                    embedding_chunk_token_limit=embedding_token_limit,
+                )
+                if artifacts:
+                    return artifacts, "pdf_section_text"
+
+        # Fall back to the deterministic page chunker.
+        artifacts = build_page_chunk_artifacts(
+            text_extraction=text_extraction,
+            document_metadata=document_metadata,
+            destination_bucket=destination_bucket,
+            index_prefix=cfg["index_prefix"],
+            default_chunk_tokens=int(cfg["pdf_default_chunk_tokens"]),
+            chunk_overlap=float(cfg["pdf_default_chunk_overlap"]),
+            embedding_chunk_token_limit=embedding_token_limit,
+        )
+        return artifacts, "pdf_page_text"
 
     def _run_triage(self, pdf_path: Path, scan: PdfScanResult) -> PdfTriageResult:
         """Run multimodal triage when enabled; always-recoverable.
@@ -226,17 +380,20 @@ class PdfProcessor:
             }
 
             text_extraction = extract_pdf_text_pages(tmp_path)
-            chunk_artifacts = build_page_chunk_artifacts(
+            chunk_artifacts, chunking_strategy = self._build_chunk_artifacts(
                 text_extraction=text_extraction,
+                triage=triage,
                 document_metadata=metadata,
                 destination_bucket=destination_bucket,
-                index_prefix=self._ingestion_config["index_prefix"],
-                default_chunk_tokens=int(self._ingestion_config["pdf_default_chunk_tokens"]),
-                chunk_overlap=float(self._ingestion_config["pdf_default_chunk_overlap"]),
-                embedding_chunk_token_limit=int(
-                    self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
-                ),
             )
+
+            table_artifacts, table_result = self._extract_table_artifacts(
+                raw_bucket=destination_bucket,
+                raw_key=raw_key,
+                document_metadata=metadata,
+                destination_bucket=destination_bucket,
+            )
+            chunk_artifacts.extend(table_artifacts)
 
             for artifact in chunk_artifacts:
                 self._s3.put_object(
@@ -263,7 +420,7 @@ class PdfProcessor:
             }
             metadata["processing"]["chunking"] = {
                 "status": "complete" if chunk_artifacts else "skipped",
-                "strategy": "pdf_page_text",
+                "strategy": chunking_strategy,
                 "chunk_count": len(chunk_artifacts),
                 "index_prefix": join_s3_key(self._ingestion_config["index_prefix"], document_id),
                 "default_chunk_tokens": int(self._ingestion_config["pdf_default_chunk_tokens"]),
@@ -271,6 +428,11 @@ class PdfProcessor:
                 "embedding_chunk_token_limit": int(
                     self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
                 ),
+            }
+            metadata["processing"]["table_extraction"] = {
+                "status": table_result.status,
+                "table_count": table_result.table_count,
+                "warnings": table_result.warnings,
             }
             if not chunk_artifacts:
                 metadata["processing"]["chunking"]["message"] = (
