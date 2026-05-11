@@ -78,3 +78,14 @@ class SearchSource(BaseModel):
 class SearchResponse(BaseModel):
     sources: List[SearchSource]
     result_count: int
+
+
+class RawUrlResponse(BaseModel):
+    """Short-lived presigned URL to a raw original document."""
+
+    url: str
+    expires_at: str
+    filename: str
+    content_type: str
+    disposition: str
+    ttl_seconds: int
