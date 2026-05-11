@@ -138,6 +138,20 @@ ENABLE_LIFECYCLE=$(get_resource_config "$RESOURCE_NAME" "enable_lifecycle")
 CORS_ALLOWED_ORIGINS=$(get_resource_config "$RESOURCE_NAME" "cors_allowed_origins" "$ENVIRONMENT")
 [ "$CORS_ALLOWED_ORIGINS" = "null" ] && CORS_ALLOWED_ORIGINS=""
 
+# Prefer the per-environment secret value when present so the CloudFront
+# frontend origin doesn't have to live in the committed infra.yaml. Reuses
+# FUNCTION_URL_CORS_ALLOW_ORIGINS — the bucket needs the same browser origins
+# the Lambdas already do (PDF.js viewer in the frontend fetches presigned S3
+# URLs, so the bucket and Function URLs must share the allowlist).
+secrets_file=$(get_environment_secrets_file "$ENVIRONMENT" 2>/dev/null || true)
+if [ -n "$secrets_file" ] && [ -f "$secrets_file" ]; then
+    cors_from_secrets=$(yq -r ".config_secrets.FUNCTION_URL_CORS_ALLOW_ORIGINS // \"\"" "$secrets_file" 2>/dev/null || true)
+    [ "$cors_from_secrets" = "null" ] && cors_from_secrets=""
+    if [ -n "$cors_from_secrets" ]; then
+        CORS_ALLOWED_ORIGINS="$cors_from_secrets"
+    fi
+fi
+
 # Convert boolean to CloudFormation format
 [ "$ENABLE_VERSIONING" = "true" ] && VERSIONING_STATUS="Enabled" || VERSIONING_STATUS="Suspended"
 
