@@ -271,6 +271,13 @@ def test_process_pdf_writes_page_chunks_and_bedrock_sidecars(monkeypatch):
     assert metadata["processing"]["stage"] == "chunk_artifacts_complete"
     assert metadata["processing"]["chunking"]["chunk_count"] == 2
 
+    # Triage runs unconditionally now (Phase 1). In this test env pypdfium2 is
+    # not installed so the result lands as "failed" — but the structured field
+    # must still be present so downstream phases can consume it.
+    triage = metadata["processing"]["triage"]
+    assert "triage_status" in triage
+    assert triage["triage_status"] in {"completed", "skipped", "failed"}
+
     assert len(fake_catalog.chunks) == 2
     assert len(fake_catalog.completed_jobs) == 1
     assert fake_catalog.completed_jobs[0]["stage"] == "chunk_artifacts_complete"
