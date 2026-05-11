@@ -3,8 +3,8 @@
 from src.rag_lambda.graph.prompts import answer_prompt
 
 
-def test_answer_prompt_instructs_sentinel_source_citations():
-    """Answer prompt requires sentinel citations and source quotes."""
+def test_answer_prompt_instructs_cite_block_citations():
+    """Answer prompt requires <cite source="N">...</cite> blocks for verbatim quotes."""
     messages = answer_prompt.format_messages(
         history="No previous conversation.",
         context=(
@@ -19,9 +19,12 @@ def test_answer_prompt_instructs_sentinel_source_citations():
     )
     system_text = messages[0].content
 
-    assert "Cite factual claims with the sentinel source marker format <[N]>" in system_text
-    assert "e.g. <[1]>" in system_text
+    # New cite-block format is required.
+    assert '<cite source="N">' in system_text
+    assert "EXACT QUOTE COPIED VERBATIM FROM THE CHUNK" in system_text
+    assert "Do not paraphrase" in system_text
+    # Bare-marker fallback is still documented.
+    assert "<[N]>" in system_text
+    # Backend post-processing reservation is preserved.
     assert "Do not write plain [N] citations" in system_text
-    assert "Place citations immediately after" in system_text
-    assert "include a short quote from the relevant source chunk" in system_text
     assert "Do not invent source numbers" in system_text
