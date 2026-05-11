@@ -69,6 +69,17 @@ ingestion:
   pdf_triage_ocr_threshold: 0.30 # Fraction of sampled pages reporting low-quality text that triggers OCR fallback.
   pdf_triage_hierarchy_threshold: 0.50 # Fraction of sampled pages sharing the same heading pattern that triggers section chunking.
   pdf_triage_temperature: 0.0 # Decoding temperature for the per-page triage call.
+  # ---- Phase 2: section-aware chunking ----
+  pdf_section_chunking_enabled: true # When triage detects hierarchy, emit one chunk per section instead of one per page.
+  pdf_section_min_confidence: 0.70 # Minimum hierarchy_confidence from triage required to attempt section chunking.
+  pdf_section_min_boundaries: 5 # Minimum number of detected headings required to commit to section chunking; below this, fall back to page chunks.
+  pdf_section_min_chars: 40 # Drop "sections" smaller than this many characters as regex false positives.
+  # ---- Phase 3: Textract table extraction ----
+  pdf_table_extraction_enabled: true # Run Textract over the full PDF and emit one chunk per detected table.
+  pdf_table_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to summarize each extracted table for retrieval.
+  pdf_textract_poll_interval_seconds: 5 # Wait between Textract job-status polls.
+  pdf_textract_max_wait_seconds: 540 # Hard ceiling on Textract polling within a single Lambda invocation (leaves headroom under the 600s function timeout).
+  pdf_max_table_extractions: 500 # Hard cap on tables per document to bound cost / Lambda runtime.
 
 api:
   host: "0.0.0.0"
