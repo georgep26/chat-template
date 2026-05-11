@@ -610,7 +610,7 @@ resources:
       pdf_text_probe_pages: 5
       pdf_text_available_min_chars: 100
       pdf_always_ocr: false
-      pdf_front_page_sample_count: 5
+      pdf_front_page_sample_count: 30  # Large enough to capture a full TOC (IRC's spans ~25 pages).
       pdf_random_page_sample_count: 5
       pdf_default_chunk_tokens: 1000
       pdf_default_chunk_overlap: 0.2
