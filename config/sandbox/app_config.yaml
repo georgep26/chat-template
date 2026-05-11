@@ -80,6 +80,14 @@ ingestion:
   pdf_textract_poll_interval_seconds: 5 # Wait between Textract job-status polls.
   pdf_textract_max_wait_seconds: 540 # Hard ceiling on Textract polling within a single Lambda invocation (leaves headroom under the 600s function timeout).
   pdf_max_table_extractions: 500 # Hard cap on tables per document to bound cost / Lambda runtime.
+  # ---- Phase 4: Figure extraction ----
+  pdf_figure_extraction_enabled: true # Use Textract LAYOUT_FIGURE blocks + Nova Lite multimodal to emit one chunk per figure.
+  pdf_figure_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to describe each figure for retrieval.
+  pdf_max_figure_extractions: 200 # Hard cap on figures per document.
+  # ---- Phase 5: OCR fallback via Textract ----
+  pdf_ocr_enabled: true # When triage decides OCR is needed, run Textract DetectDocumentText in place of pypdf text extraction.
+  pdf_ocr_poll_interval_seconds: 5 # Wait between OCR-job status polls.
+  pdf_ocr_max_wait_seconds: 540 # Hard ceiling on OCR polling within a single Lambda invocation.
 
 api:
   host: "0.0.0.0"
