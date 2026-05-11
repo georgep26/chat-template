@@ -97,6 +97,15 @@ class SectionDetectionConfig:
     min_boundaries: int = 5                # below this, fall back to page chunking
     embedding_chunk_token_limit: int = 8192
     multi_part_overlap: float = 0.0        # section parts don't need overlap
+    # Pages flagged as TOC by triage are excluded from boundary detection
+    # so we don't index TOC entries (with dot-leader noise) as if they were
+    # real sections. Body content for those sections lives later in the doc.
+    skip_pages: Sequence[int] = field(default_factory=tuple)
+    # Real chapter/section headings are short — typically 1-7 words.
+    # Sentence fragments that happen to match the regex (e.g. "Chapter 4
+    # provides the requirements for the design and construction of one-
+    # and two-family dwellings") are long. Reject anything past this cap.
+    max_title_words: int = 8
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +169,17 @@ def detect_section_boundaries(
 ) -> tuple[list[SectionBoundary], _JoinedText]:
     """Locate section headings in the joined per-page text.
 
-    Returns (boundaries, joined_text). The joined_text is reused by the
-    chunk builder so callers don't recompute it.
+    Pages listed in ``config.skip_pages`` (typically the triage-detected
+    TOC pages) are removed before joining, so TOC entries like
+    ``R401 General . . . . . . . . . . 4-1`` don't get matched as
+    section bodies.
+
+    Returns ``(boundaries, joined_text)``. The joined_text is reused by
+    the chunk builder so callers don't recompute it.
     """
-    joined = _join_pages(pages)
+    skip_pages = set(config.skip_pages or ())
+    filtered_pages = [p for p in pages if p.page_number not in skip_pages]
+    joined = _join_pages(filtered_pages)
     if not joined.text.strip():
         return [], joined
 
@@ -176,6 +192,15 @@ def detect_section_boundaries(
         section_id = match.group("id")
         title = match.group("title").strip()
         if not section_id or not title:
+            continue
+        # Belt-and-suspenders: even with TOC pages skipped, individual
+        # dot-leader lines can survive on body pages too (e.g. running
+        # cross-references). Reject titles that are mostly dots.
+        if _looks_like_toc_entry(title):
+            continue
+        # Length gate: real headings are short. Sentence-style false
+        # positives are long ("Chapter 4 provides the requirements for...").
+        if _title_word_count(title) > config.max_title_words:
             continue
         raw_matches.append((match.start(), section_id, title))
 
@@ -218,6 +243,27 @@ def detect_section_boundaries(
         if (b.end_offset - b.start_offset) >= config.min_section_chars
     ]
     return filtered, joined
+
+
+def _title_word_count(title: str) -> int:
+    """Count whitespace-separated tokens, ignoring trailing punctuation noise."""
+    return len([w for w in re.split(r"\s+", title.strip()) if w])
+
+
+def _looks_like_toc_entry(title: str) -> bool:
+    """Detect dot-leader TOC entries like 'FOUNDATIONS . . . . . . 4-1'.
+
+    Any title where ≥30% of the visible characters are dots-or-spaces
+    (the leader pattern) is treated as a TOC artifact and rejected. Real
+    section titles use prose, not dot-leaders.
+    """
+    if not title:
+        return False
+    stripped = title.strip()
+    if not stripped:
+        return False
+    leader_chars = sum(1 for ch in stripped if ch in (".", " "))
+    return leader_chars / len(stripped) >= 0.30
 
 
 def _select_pattern(hierarchy_kind: str) -> re.Pattern[str] | None:
