@@ -43,6 +43,11 @@ Parameters:
     MinValue: 0
     MaxValue: 365
 
+  CorsAllowedOrigins:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: 'Allowed origins for browser GET/HEAD on raw documents (needed for PDF.js progressive load via presigned URL). Leave empty to disable CORS.'
+
 Conditions:
   IsProduction: !Equals [!Ref Environment, 'prod']
   HasCustomBucketName: !Not [!Equals [!Ref BucketName, '']]
@@ -50,6 +55,7 @@ Conditions:
   EnableGlacierTransition: !And
     - !Equals [!Ref EnableLifecycleRules, 'true']
     - !Not [!Equals [!Ref TransitionToGlacier, 0]]
+  HasCorsOrigins: !Not [!Equals [!Join [',', !Ref CorsAllowedOrigins], '']]
 
 Resources:
   ########################################
@@ -76,6 +82,15 @@ Resources:
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
+      CorsConfiguration: !If
+        - HasCorsOrigins
+        - CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, HEAD]
+              AllowedOrigins: !Ref CorsAllowedOrigins
+              ExposedHeaders: [ETag, Content-Length, Content-Range, Accept-Ranges]
+              MaxAge: 3000
+        - !Ref AWS::NoValue
       LifecycleConfiguration: !If
         - EnableLifecycle
         - Rules:
