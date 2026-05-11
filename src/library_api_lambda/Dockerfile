@@ -14,6 +14,7 @@ COPY src/library_api_lambda/ ${LAMBDA_TASK_ROOT}/library_api_lambda/
 # Shared modules used across Lambdas.
 COPY src/auth/ ${LAMBDA_TASK_ROOT}/auth/
 COPY src/utils/ ${LAMBDA_TASK_ROOT}/utils/
+COPY src/knowledge/ ${LAMBDA_TASK_ROOT}/knowledge/
 
 # App configuration files (read at runtime by utils.config.read_config).
 COPY config/ ${LAMBDA_TASK_ROOT}/config/
