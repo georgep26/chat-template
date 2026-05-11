@@ -397,6 +397,10 @@ resources:
       bucket_name: "{project}-{env}-s3-{global_suffix}"
       enable_versioning: true
       enable_lifecycle: true
+      # CORS origins for browser progressive-download of raw documents via
+      # presigned URL (PDF.js viewer). Comma-delimited list; leave empty to
+      # disable CORS. Production should include the CloudFront frontend domain.
+      cors_allowed_origins: "http://localhost:5173"
   # Aurora Serverless database
   chat_db:
     enabled: true
@@ -567,6 +571,9 @@ resources:
       document_bucket_name: "{project}-{env}-s3-{global_suffix}"
       artifact_key_prefix: "kb_index/"
       artifact_max_bytes: 262144
+      raw_key_prefix: "kb_raw/"
+      raw_url_ttl_default: 300
+      raw_url_ttl_max: 900
       auth_required: "true"
       cognito_region: "${COGNITO_REGION}"
       cognito_user_pool_id: "${COGNITO_USER_POOL_ID}"
