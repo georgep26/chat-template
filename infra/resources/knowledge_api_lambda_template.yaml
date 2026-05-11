@@ -81,6 +81,25 @@ Parameters:
     Description: 'Maximum size in bytes of a chunk artifact returned to clients'
     MinValue: 1024
 
+  RawKeyPrefix:
+    Type: String
+    Default: 'kb_raw/'
+    Description: 'S3 key prefix under which raw original documents live (presign GETs limited to this prefix)'
+
+  RawUrlTtlDefault:
+    Type: Number
+    Default: 300
+    Description: 'Default TTL (seconds) for presigned raw-document URLs'
+    MinValue: 60
+    MaxValue: 900
+
+  RawUrlTtlMax:
+    Type: Number
+    Default: 900
+    Description: 'Maximum TTL (seconds) allowed for presigned raw-document URLs'
+    MinValue: 60
+    MaxValue: 900
+
   LambdaExecutionRoleArn:
     Type: String
     Description: 'ARN of the Lambda execution role (from lambda_execution_role stack)'
@@ -166,6 +185,8 @@ Resources:
           ENVIRONMENT: !Ref Environment
           DOCUMENT_BUCKET_NAME: !Ref DocumentBucketName
           ARTIFACT_MAX_BYTES: !Ref ArtifactMaxBytes
+          RAW_URL_TTL_DEFAULT: !Ref RawUrlTtlDefault
+          RAW_URL_TTL_MAX: !Ref RawUrlTtlMax
           AUTH_REQUIRED: !If
             - HasAuthRequiredOverride
             - !Ref AuthRequired
@@ -259,6 +280,11 @@ Resources:
             Action:
               - s3:GetObject
             Resource: !Sub 'arn:aws:s3:::${DocumentBucketName}/${ArtifactKeyPrefix}*'
+          - Sid: AllowKbRawPresign
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${DocumentBucketName}/${RawKeyPrefix}*'
 
 Outputs:
   LambdaFunctionName:
