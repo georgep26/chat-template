@@ -91,7 +91,14 @@ def test_section_codes_pattern_finds_irc_style_sections():
 def test_section_codes_drops_tiny_false_positives():
     """A "section heading" with no body should be filtered out via min_section_chars."""
     pages = _pages(
-        "5.1 General\n5.2 Scope\n5.3 Some real content goes here that is long enough to keep.\n" * 1,
+        (
+            "5.1 General\n"   # heading-only, no body → dropped
+            "5.2 Scope\n"     # heading-only, no body → dropped
+            "5.3 Materials\n"
+            "This section governs allowable materials and their use in "
+            "foundation systems. The provisions herein cover concrete, "
+            "masonry, wood, and steel components.\n"
+        ),
     )
     boundaries, _ = detect_section_boundaries(
         pages,
@@ -100,9 +107,10 @@ def test_section_codes_drops_tiny_false_positives():
             min_section_chars=40,
         ),
     )
-    # Only "5.3 Some real content..." has enough body length.
+    # Only "5.3 Materials" has enough body length to survive min_section_chars.
     ids = [b.section_id for b in boundaries]
     assert ids == ["5.3"]
+    assert boundaries[0].title == "Materials"
 
 
 def test_chapter_heading_pattern_finds_prose_chapters():
@@ -125,6 +133,81 @@ def test_chapter_heading_pattern_finds_prose_chapters():
     assert ids == ["5", "6"]
     assert "FOUNDATIONS" in titles[0] or titles[0] == "FOUNDATIONS"
     assert "Wall Construction" in titles[1]
+
+
+def test_skip_pages_excludes_toc_pages_from_detection():
+    """TOC pages listed via skip_pages must not contribute boundaries."""
+    pages = [
+        PdfPageText(
+            page_number=10,  # TOC page — these "headings" are TOC entries
+            text=(
+                "R401 General . . . . . . . . . . . . . . . . . . . . . . . . 4-1\n"
+                "R501 General . . . . . . . . . . . . . . . . . . . . . . . . 5-1\n"
+                "R601 General . . . . . . . . . . . . . . . . . . . . . . . . 6-1\n"
+            ),
+        ),
+        PdfPageText(
+            page_number=40,  # Real body page
+            text=(
+                "R401 General\n"
+                "The provisions of this chapter shall control the design and "
+                "construction of the foundation and foundation spaces for "
+                "buildings. Foundations shall be capable of accommodating all "
+                "loads of Section R301.\n"
+            ),
+        ),
+    ]
+    boundaries, _ = detect_section_boundaries(
+        pages,
+        config=SectionDetectionConfig(
+            hierarchy_kind="section_codes", skip_pages=(10,),
+        ),
+    )
+    # Only the body page produces a boundary.
+    assert len(boundaries) == 1
+    assert boundaries[0].section_id == "R401"
+    assert boundaries[0].start_page == 40
+
+
+def test_dot_leader_entries_rejected_even_on_non_toc_pages():
+    """Body pages can carry dot-leader cross-refs; reject those too."""
+    pages = _pages(
+        (
+            "R401 General . . . . . . . . . . . . . . . . . . 4-1\n"  # leader noise
+            "R402 Materials\nThis section governs allowable materials and "
+            "their use in foundation systems. The provisions herein cover "
+            "concrete, masonry, wood, and steel components."
+        )
+    )
+    boundaries, _ = detect_section_boundaries(
+        pages, config=SectionDetectionConfig(hierarchy_kind="section_codes")
+    )
+    ids = [b.section_id for b in boundaries]
+    assert ids == ["R402"]
+
+
+def test_max_title_words_rejects_sentence_style_false_positives():
+    """A line like 'Chapter 4 provides the requirements for the design and construction...'
+    matches the chapter_heading regex but is a prose summary, not a heading."""
+    pages = _pages(
+        (
+            "Chapter 4 provides the requirements for the design and construction "
+            "of foundations and foundation spaces for buildings.\n"
+            "Chapter 5 — Floors\n"
+            "Floor systems shall be designed in accordance with this chapter. "
+            "Joist span tables provide allowable spans for various species and grades."
+        )
+    )
+    boundaries, _ = detect_section_boundaries(
+        pages,
+        config=SectionDetectionConfig(
+            hierarchy_kind="chapter_heading", max_title_words=8
+        ),
+    )
+    ids = [b.section_id for b in boundaries]
+    # Only "Chapter 5 — Floors" survives — the long prose summary is rejected.
+    assert ids == ["5"]
+    assert boundaries[0].title == "Floors"
 
 
 def test_unknown_hierarchy_kind_returns_empty():

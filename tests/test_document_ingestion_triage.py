@@ -214,6 +214,34 @@ def test_aggregate_reports_hierarchy_when_majority_consistent():
     assert out.hierarchy_kind == "section_codes"
 
 
+def test_aggregate_uses_toc_pages_as_secondary_hierarchy_trigger():
+    """A multi-page TOC implies hierarchy even when individual pages look text-only.
+
+    Scenario: a code document's 14-page TOC gets classified as ``page_only``
+    (a TOC is a list of references, not numbered headings), dragging
+    hierarchy_fraction below threshold. The toc_pages signal rescues it.
+    """
+    # 15 pages, all classified as page_only by Nova Lite — but 4 of them are
+    # flagged as TOC pages. Without the toc trigger, hierarchy_fraction=0.0.
+    decisions = []
+    for p in range(1, 16):
+        decisions.append({
+            "page_number": p,
+            "embedded_text_quality": "high",
+            "heading_pattern": "page_only",
+            "appears_to_be_toc": p in (5, 6, 7, 8),
+            "contains_table": False,
+            "contains_figure": False,
+        })
+    out = _aggregate_decisions(decisions, base_config(toc_pages_signal=3))
+    assert out.has_hierarchy is True
+    assert out.hierarchy_kind == "section_codes"  # default for code-style docs
+    # hierarchy_confidence is derived from toc-signal strength
+    # (4 toc pages / 3 signal threshold = 1.33 → capped at 1.0) so the
+    # downstream section-chunker confidence gate can clear.
+    assert out.hierarchy_confidence == 1.0
+
+
 def test_aggregate_no_hierarchy_when_pages_are_text_only():
     decisions = [
         {"page_number": p, "embedded_text_quality": "high", "heading_pattern": "page_only", "appears_to_be_toc": False, "contains_table": False, "contains_figure": False}
