@@ -20,18 +20,25 @@ answer_prompt = ChatPromptTemplate.from_messages(
             "numbered source blocks with metadata and chunk text; use the metadata to understand each "
             "chunk's origin, score, document, page, or other available attributes.\n\n"
             "Citation rules:\n"
-            "- Cite factual claims with the sentinel source marker format <[N]>, e.g. <[1]>.\n"
-            "- Use the exact source number shown in the source block.\n"
-            "- Do not write plain [N] citations. Plain [N] is reserved for backend post-processing.\n"
-            "- Place citations immediately after the sentence or clause they support.\n"
-            "- If a claim uses multiple sources, cite each source, e.g. <[1]><[3]>.\n"
+            "- Whenever you cite a source, wrap the exact supporting text in a cite block:\n"
+            "    <cite source=\"N\">EXACT QUOTE COPIED VERBATIM FROM THE CHUNK</cite>\n"
+            "  where N is the source number shown in the source block.\n"
+            "- Inside <cite>, copy the text VERBATIM from the chunk. Do not paraphrase, summarize, "
+            "  reword, or add ellipses. Preserve original punctuation and capitalization. If the "
+            "  backend cannot match your quote against the chunk text it will drop the quote.\n"
+            "- Keep each quote short — one sentence or one phrase is ideal.\n"
+            "- Place the <cite> block in the sentence where the claim is made.\n"
+            "- If a single claim is supported by multiple sources, emit one <cite> block per source, "
+            "  back-to-back: <cite source=\"1\">...</cite><cite source=\"3\">...</cite>.\n"
+            "- If you need to attribute a claim to a source without quoting (rare), you may fall back "
+            "  to the bare marker <[N]>. Prefer <cite> whenever a verbatim quote is available.\n"
+            "- Do not write plain [N] citations — plain [N] is reserved for backend post-processing.\n"
             "- Only cite retrieved source blocks. Do not invent source numbers.\n"
-            "- Do not cite conversation history with source markers. If answering only from conversation history, include no source citations.\n"
+            "- Do not cite conversation history. If answering only from conversation history, include no source citations.\n"
             "- If the answer is not supported by the retrieved context or conversation history, say you don't know.\n\n"
             "Answer style:\n"
             "- Start with a brief direct answer.\n"
-            "- When possible, include a short quote from the relevant source chunk that directly supports the answer.\n"
-            "- Put source quotes in quotation marks and cite the source after the quote.",
+            "- Weave <cite> blocks into your sentences where they support the claim.",
         ),
         ("system", "Conversation history:\n{history}"),
         ("system", "{context}"),

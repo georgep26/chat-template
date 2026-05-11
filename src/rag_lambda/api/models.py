@@ -25,6 +25,8 @@ class Source(BaseModel):
     source_type: str
     score: float
     chunk: str
+    cited_quotes: List[str] = Field(default_factory=list)
+    quote_verified: bool = True
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

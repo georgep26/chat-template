@@ -192,6 +192,11 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     raw_sources = final_state.get("sources", [])
     citation_result = normalize_answer_citations(answer, raw_sources)
     answer = citation_result.answer
+    if citation_result.dropped_quotes:
+        log.info(
+            "Dropped %d unverified citation quote(s) (paraphrase or hallucination).",
+            len(citation_result.dropped_quotes),
+        )
 
     # Extract cited sources from normalized citation result.
     sources = []
@@ -204,6 +209,8 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
                     source_type=source_dict.get("source_type", "document"),
                     score=source_dict.get("score", 0.0),
                     chunk=source_dict.get("chunk", ""),
+                    cited_quotes=source_dict.get("cited_quotes", []),
+                    quote_verified=source_dict.get("quote_verified", True),
                     metadata=source_dict.get("metadata", {}),
                 )
             )
