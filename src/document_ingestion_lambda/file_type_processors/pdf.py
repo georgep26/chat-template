@@ -131,62 +131,181 @@ class PdfProcessor:
         self._textract_client = _maybe_boto3_client("textract", region)
         return self._textract_client
 
-    def _extract_table_artifacts(
+    def _extract_text(
         self,
         *,
+        pdf_path: Path,
+        triage: PdfTriageResult,
+        raw_bucket: str,
+        raw_key: str,
+    ) -> tuple[PdfTextExtractionResult, dict[str, Any] | None]:
+        """Return text-extraction result, switching to Textract OCR when triage signals it.
+
+        The fallback ordering preserves the existing pypdf path's behavior
+        when triage is skipped or fails — OCR only runs when the multimodal
+        pass said this document needs it.
+        """
+        cfg = self._ingestion_config
+        ocr_enabled = _as_bool(cfg.get("pdf_ocr_enabled"), default=True)
+        ocr_required = (
+            ocr_enabled
+            and triage is not None
+            and triage.triage_status == "completed"
+            and bool(triage.ocr_required)
+        )
+        if not ocr_required:
+            return extract_pdf_text_pages(pdf_path), None
+
+        from document_ingestion_lambda.file_type_processors.ocr import (
+            OcrConfig,
+            extract_pdf_text_via_ocr,
+        )
+
+        textract_client = self._get_textract_client()
+        if textract_client is None:
+            return (
+                extract_pdf_text_pages(pdf_path),
+                {"status": "skipped", "warnings": ["textract_client_unavailable"]},
+            )
+        config = OcrConfig(
+            enabled=True,
+            poll_interval_seconds=float(cfg.get("pdf_ocr_poll_interval_seconds") or 5.0),
+            max_wait_seconds=float(cfg.get("pdf_ocr_max_wait_seconds") or 540.0),
+        )
+        extraction, ocr_result = extract_pdf_text_via_ocr(
+            raw_s3_bucket=raw_bucket,
+            raw_s3_key=raw_key,
+            textract_client=textract_client,
+            config=config,
+        )
+        diagnostics = {
+            "status": ocr_result.status,
+            "job_id": ocr_result.job_id,
+            "page_count": ocr_result.page_count,
+            "warnings": ocr_result.warnings,
+        }
+        return extraction, diagnostics
+
+    def _extract_assets(
+        self,
+        *,
+        pdf_path: Path,
         raw_bucket: str,
         raw_key: str,
         document_metadata: dict[str, Any],
         destination_bucket: str,
-    ) -> tuple[list["PdfChunkArtifact"], Any]:
-        """Run Textract over the raw PDF in S3 and emit one chunk per table.
+    ) -> tuple[list["PdfChunkArtifact"], dict[str, Any]]:
+        """Run a single Textract job and build both table + figure chunks.
 
-        Lazy-imports the extractor so this module stays free of Textract
-        types at import time. Always-recoverable: missing Textract client
-        or extraction failure yields zero artifacts and a recorded status.
+        Phases 3 + 4 share one Textract ``AnalyzeDocument`` job (one charge
+        per page) — splitting them would double the cost. Returns the
+        combined chunk artifacts plus a dict suitable for merging into
+        ``processing`` on the document metadata.
         """
         from document_ingestion_lambda.file_type_processors.table_extraction import (
             TableExtractionConfig,
             TableExtractionResult,
             extract_table_chunk_artifacts,
+            run_textract_analysis,
+        )
+        from document_ingestion_lambda.file_type_processors.figure_extraction import (
+            FigureExtractionConfig,
+            FigureExtractionResult,
+            extract_figure_chunk_artifacts,
         )
 
         cfg = self._ingestion_config
-        enabled = _as_bool(cfg.get("pdf_table_extraction_enabled"), default=True)
-        if not enabled:
-            return [], TableExtractionResult(status="skipped", warnings=["table_extraction_disabled"])
+        tables_enabled = _as_bool(cfg.get("pdf_table_extraction_enabled"), default=True)
+        figures_enabled = _as_bool(cfg.get("pdf_figure_extraction_enabled"), default=True)
+        if not tables_enabled and not figures_enabled:
+            return [], {
+                "table_extraction": {"status": "skipped", "table_count": 0, "warnings": ["disabled"]},
+                "figure_extraction": {"status": "skipped", "figure_count": 0, "warnings": ["disabled"]},
+            }
 
         textract_client = self._get_textract_client()
         if textract_client is None:
-            return [], TableExtractionResult(
-                status="skipped", warnings=["textract_client_unavailable"]
-            )
+            return [], {
+                "table_extraction": {"status": "skipped", "table_count": 0, "warnings": ["textract_client_unavailable"]},
+                "figure_extraction": {"status": "skipped", "figure_count": 0, "warnings": ["textract_client_unavailable"]},
+            }
 
-        bedrock_client = self._get_bedrock_client()
-        config = TableExtractionConfig(
-            enabled=True,
-            summary_model_id=str(
-                cfg.get("pdf_table_summary_model_id") or "amazon.nova-lite-v1:0"
-            ),
-            summary_region=str(cfg.get("pdf_triage_region") or "us-east-1"),
-            poll_interval_seconds=float(
-                cfg.get("pdf_textract_poll_interval_seconds") or 5.0
-            ),
-            max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
-            max_tables=int(cfg.get("pdf_max_table_extractions") or 500),
-        )
-        artifacts, result = extract_table_chunk_artifacts(
+        # One Textract job, two consumers.
+        blocks, fetch_warnings = run_textract_analysis(
             raw_s3_bucket=raw_bucket,
             raw_s3_key=raw_key,
-            document_metadata=document_metadata,
-            destination_bucket=destination_bucket,
-            index_prefix=cfg["index_prefix"],
-            artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
             textract_client=textract_client,
-            bedrock_client=bedrock_client,
-            config=config,
+            poll_interval_seconds=float(cfg.get("pdf_textract_poll_interval_seconds") or 5.0),
+            max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
         )
-        return artifacts, result
+        if fetch_warnings:
+            return [], {
+                "table_extraction": {"status": "failed", "table_count": 0, "warnings": fetch_warnings},
+                "figure_extraction": {"status": "failed", "figure_count": 0, "warnings": fetch_warnings},
+            }
+
+        bedrock_client = self._get_bedrock_client()
+        artifacts: list["PdfChunkArtifact"] = []
+        diagnostics: dict[str, Any] = {}
+
+        if tables_enabled:
+            table_config = TableExtractionConfig(
+                enabled=True,
+                summary_model_id=str(
+                    cfg.get("pdf_table_summary_model_id") or "amazon.nova-lite-v1:0"
+                ),
+                summary_region=str(cfg.get("pdf_triage_region") or "us-east-1"),
+                poll_interval_seconds=float(cfg.get("pdf_textract_poll_interval_seconds") or 5.0),
+                max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
+                max_tables=int(cfg.get("pdf_max_table_extractions") or 500),
+            )
+            table_artifacts, table_result = extract_table_chunk_artifacts(
+                blocks=blocks,
+                document_metadata=document_metadata,
+                destination_bucket=destination_bucket,
+                index_prefix=cfg["index_prefix"],
+                artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
+                bedrock_client=bedrock_client,
+                config=table_config,
+            )
+            artifacts.extend(table_artifacts)
+            diagnostics["table_extraction"] = {
+                "status": table_result.status,
+                "table_count": table_result.table_count,
+                "warnings": table_result.warnings,
+            }
+        else:
+            diagnostics["table_extraction"] = {"status": "skipped", "table_count": 0, "warnings": ["disabled"]}
+
+        if figures_enabled:
+            figure_config = FigureExtractionConfig(
+                enabled=True,
+                summary_model_id=str(
+                    cfg.get("pdf_figure_summary_model_id") or "amazon.nova-lite-v1:0"
+                ),
+                max_figures=int(cfg.get("pdf_max_figure_extractions") or 200),
+            )
+            figure_artifacts, figure_result = extract_figure_chunk_artifacts(
+                blocks=blocks,
+                pdf_path=pdf_path,
+                document_metadata=document_metadata,
+                destination_bucket=destination_bucket,
+                index_prefix=cfg["index_prefix"],
+                artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
+                bedrock_client=bedrock_client,
+                s3_client=self._s3,
+                config=figure_config,
+            )
+            artifacts.extend(figure_artifacts)
+            diagnostics["figure_extraction"] = {
+                "status": figure_result.status,
+                "figure_count": figure_result.figure_count,
+                "warnings": figure_result.warnings,
+            }
+        else:
+            diagnostics["figure_extraction"] = {"status": "skipped", "figure_count": 0, "warnings": ["disabled"]}
+
+        return artifacts, diagnostics
 
     def _build_chunk_artifacts(
         self,
@@ -379,7 +498,14 @@ class PdfProcessor:
                 },
             }
 
-            text_extraction = extract_pdf_text_pages(tmp_path)
+            text_extraction, ocr_diagnostics = self._extract_text(
+                pdf_path=tmp_path,
+                triage=triage,
+                raw_bucket=destination_bucket,
+                raw_key=raw_key,
+            )
+            if ocr_diagnostics is not None:
+                metadata["processing"]["ocr"] = ocr_diagnostics
             chunk_artifacts, chunking_strategy = self._build_chunk_artifacts(
                 text_extraction=text_extraction,
                 triage=triage,
@@ -387,13 +513,14 @@ class PdfProcessor:
                 destination_bucket=destination_bucket,
             )
 
-            table_artifacts, table_result = self._extract_table_artifacts(
+            asset_artifacts, asset_diagnostics = self._extract_assets(
+                pdf_path=tmp_path,
                 raw_bucket=destination_bucket,
                 raw_key=raw_key,
                 document_metadata=metadata,
                 destination_bucket=destination_bucket,
             )
-            chunk_artifacts.extend(table_artifacts)
+            chunk_artifacts.extend(asset_artifacts)
 
             for artifact in chunk_artifacts:
                 self._s3.put_object(
@@ -429,11 +556,8 @@ class PdfProcessor:
                     self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
                 ),
             }
-            metadata["processing"]["table_extraction"] = {
-                "status": table_result.status,
-                "table_count": table_result.table_count,
-                "warnings": table_result.warnings,
-            }
+            metadata["processing"]["table_extraction"] = asset_diagnostics["table_extraction"]
+            metadata["processing"]["figure_extraction"] = asset_diagnostics["figure_extraction"]
             if not chunk_artifacts:
                 metadata["processing"]["chunking"]["message"] = (
                     "No extractable PDF page text was available for chunk generation."
