@@ -321,6 +321,18 @@ ARTIFACT_MAX_BYTES=$(get_resource_config "$RESOURCE_NAME" "artifact_max_bytes" "
 [ "$ARTIFACT_MAX_BYTES" = "null" ] && ARTIFACT_MAX_BYTES=""
 [ -z "$ARTIFACT_MAX_BYTES" ] && ARTIFACT_MAX_BYTES="262144"
 
+RAW_KEY_PREFIX=$(get_resource_config "$RESOURCE_NAME" "raw_key_prefix" "$ENVIRONMENT")
+[ "$RAW_KEY_PREFIX" = "null" ] && RAW_KEY_PREFIX=""
+[ -z "$RAW_KEY_PREFIX" ] && RAW_KEY_PREFIX="kb_raw/"
+
+RAW_URL_TTL_DEFAULT=$(get_resource_config "$RESOURCE_NAME" "raw_url_ttl_default" "$ENVIRONMENT")
+[ "$RAW_URL_TTL_DEFAULT" = "null" ] && RAW_URL_TTL_DEFAULT=""
+[ -z "$RAW_URL_TTL_DEFAULT" ] && RAW_URL_TTL_DEFAULT="300"
+
+RAW_URL_TTL_MAX=$(get_resource_config "$RESOURCE_NAME" "raw_url_ttl_max" "$ENVIRONMENT")
+[ "$RAW_URL_TTL_MAX" = "null" ] && RAW_URL_TTL_MAX=""
+[ -z "$RAW_URL_TTL_MAX" ] && RAW_URL_TTL_MAX="900"
+
 # ECR configuration from infra.yaml
 ECR_REPO_NAME=$(get_resource_config "knowledge_api_lambda_ecr" "repository_name" "$ENVIRONMENT")
 ECR_MAX_IMAGE_COUNT=$(get_resource_config "knowledge_api_lambda_ecr" "max_image_count")
@@ -1319,6 +1331,7 @@ deploy_stack() {
     export AUTH_REQUIRED COGNITO_REGION COGNITO_USER_POOL_ID COGNITO_APP_CLIENT_ID
     export CORS_ALLOW_ORIGINS CORS_ALLOW_HEADERS CORS_ALLOW_METHODS CORS_MAX_AGE
     export DOCUMENT_BUCKET_NAME ARTIFACT_KEY_PREFIX ARTIFACT_MAX_BYTES
+    export RAW_KEY_PREFIX RAW_URL_TTL_DEFAULT RAW_URL_TTL_MAX
 
     python3 - "$param_file" << 'PYEOF'
 import json
@@ -1353,6 +1366,9 @@ params = [
     {"ParameterKey": "DocumentBucketName", "ParameterValue": v("DOCUMENT_BUCKET_NAME")},
     {"ParameterKey": "ArtifactKeyPrefix", "ParameterValue": v("ARTIFACT_KEY_PREFIX") or "kb_index/"},
     {"ParameterKey": "ArtifactMaxBytes", "ParameterValue": v("ARTIFACT_MAX_BYTES") or "262144"},
+    {"ParameterKey": "RawKeyPrefix", "ParameterValue": v("RAW_KEY_PREFIX") or "kb_raw/"},
+    {"ParameterKey": "RawUrlTtlDefault", "ParameterValue": v("RAW_URL_TTL_DEFAULT") or "300"},
+    {"ParameterKey": "RawUrlTtlMax", "ParameterValue": v("RAW_URL_TTL_MAX") or "900"},
 ]
 with open(sys.argv[1], "w") as f:
     json.dump(params, f, indent=2)
