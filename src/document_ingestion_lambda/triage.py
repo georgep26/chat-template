@@ -91,6 +91,11 @@ class TriageConfig:
     random_page_sample_count: int = 5
     ocr_threshold: float = 0.30
     hierarchy_threshold: float = 0.50
+    # A multi-page TOC is itself overwhelming evidence of section hierarchy
+    # — even when the TOC pages themselves don't look like body content with
+    # numbered headings. Treat ``toc_pages >= toc_pages_signal`` as a
+    # secondary trigger for ``has_hierarchy``.
+    toc_pages_signal: int = 3
     temperature: float = 0.0
     max_tokens_per_page: int = 256
     # Render scale: 1.0 ≈ ~72 DPI; 2.0 ≈ ~144 DPI. Nova Lite handles either
@@ -393,12 +398,40 @@ def _aggregate_decisions(
         if count > dominant_count:
             dominant_pattern, dominant_count = pat, count
     hierarchy_fraction = dominant_count / total if dominant_pattern else 0.0
-    has_hierarchy = hierarchy_fraction >= config.hierarchy_threshold
-    hierarchy_kind = dominant_pattern if has_hierarchy else "page_only"
 
     toc_pages = sorted(
         d["page_number"] for d in usable if d.get("appears_to_be_toc")
     )
+
+    # Primary signal: a critical mass of sampled pages share the same
+    # numbered/chapter heading pattern. Secondary signal: a multi-page TOC.
+    # The TOC trigger handles a common pitfall where 30 front-matter pages
+    # of a structured code document include 10-20 pages of TOC (which the
+    # model correctly classifies as ``page_only`` because TOCs are lists
+    # of references, not bodies of numbered sections). Without this
+    # secondary path, a heavily-TOC'd front sample drags
+    # ``hierarchy_fraction`` below threshold and section chunking never
+    # triggers on the exact documents that need it most.
+    toc_signal_strength = (
+        min(1.0, len(toc_pages) / max(config.toc_pages_signal, 1))
+        if config.toc_pages_signal > 0
+        else 0.0
+    )
+    has_hierarchy = (
+        hierarchy_fraction >= config.hierarchy_threshold
+        or len(toc_pages) >= config.toc_pages_signal
+    )
+    if has_hierarchy:
+        # Default to section_codes when triggered solely by TOC presence,
+        # since most code/spec documents use numeric section identifiers.
+        hierarchy_kind = dominant_pattern or "section_codes"
+        # When the TOC trigger is what carried us over the line, surface
+        # that strength so the downstream section-chunker confidence gate
+        # doesn't reject on a near-zero ``hierarchy_fraction``.
+        effective_confidence = max(hierarchy_fraction, toc_signal_strength)
+    else:
+        hierarchy_kind = "page_only"
+        effective_confidence = hierarchy_fraction
     table_pages = sorted(
         d["page_number"] for d in usable if d.get("contains_table")
     )
@@ -412,7 +445,7 @@ def _aggregate_decisions(
         ocr_confidence=round(ocr_confidence, 3),
         has_hierarchy=has_hierarchy,
         hierarchy_kind=hierarchy_kind,
-        hierarchy_confidence=round(hierarchy_fraction, 3),
+        hierarchy_confidence=round(effective_confidence, 3),
         toc_pages=toc_pages,
         table_pages=table_pages,
         figure_pages=figure_pages,
