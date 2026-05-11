@@ -28,15 +28,15 @@ Parameters:
 
   LambdaMemorySize:
     Type: Number
-    Default: 1024
-    Description: 'Memory size for Lambda function in MB'
+    Default: 2048
+    Description: 'Memory size for Lambda function in MB. Bumped to 2048 to accommodate multimodal triage (pypdfium2 page rendering + Bedrock Converse).'
     MinValue: 128
     MaxValue: 10240
 
   LambdaTimeout:
     Type: Number
-    Default: 300
-    Description: 'Timeout for Lambda function in seconds'
+    Default: 600
+    Description: 'Timeout for Lambda function in seconds. 600s allows multimodal triage on ~10 sampled pages plus all downstream phases.'
     MinValue: 3
     MaxValue: 900
 
@@ -183,6 +183,26 @@ Resources:
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${IndexPrefix}*'
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${ArtifactsPrefix}*'
               - !Sub 'arn:aws:s3:::${DocumentBucketName}/${CatalogPrefix}*'
+
+  BedrockInvokePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${Environment}-document-ingestion-bedrock-policy'
+      Roles:
+        - !Ref LambdaExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Phase 1 (triage) uses Nova Lite; later phases may use other
+          # foundation models for table/figure summarization. Resource is
+          # scoped to foundation-model ARNs in this region only.
+          - Sid: AllowBedrockInvokeFoundationModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:Converse
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
 
   LambdaConfigS3Policy:
     Type: AWS::IAM::Policy
