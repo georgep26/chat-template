@@ -167,6 +167,10 @@ Success response (`200`):
       "source_type": "document",
       "score": 0.92,
       "chunk": "Cancellation policy text ...",
+      "cited_quotes": [
+        "Free cancellation is available up to 24 hours before the appointment"
+      ],
+      "quote_verified": true,
       "metadata": {
         "page_number": 3
       }
@@ -201,6 +205,15 @@ Notes:
 - Answer citations use display numbers like `[1]`; these numbers map to `sources[].citation_number`, not the original retrieval rank.
 - `steps` are frontend-safe summaries. They must not be treated as a complete backend audit trail.
 - Current expected step statuses are `completed` and `failed`; future streaming may also emit `started`.
+
+Per-source cited-quote fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `cited_quotes` | string[] | Verbatim spans the model quoted from `chunk` to support the citation. Empty when the source was cited without a quote, or when every emitted quote failed verbatim verification (in that case the `[N]` badge still appears in `answer`). Order matches the order the model used them in the answer text. |
+| `quote_verified` | boolean | `true` when every entry in `cited_quotes` is a verbatim (whitespace- and case-insensitive) substring of `chunk`. Today the backend drops any non-matching quote, so this flag is informational and will stay `true` whenever `cited_quotes` is non-empty. Frontend may rely on it as a stable schema for future verification policies. |
+
+Quotes are intended for in-line "evidence" rendering and document-viewer search/highlight. The backend already inlines each verified quote in the `answer` text as `"…" [N]`, so the frontend can either render the answer as-is or strip the quote-pair markers and surface the quotes in source cards / hover previews.
 
 ## 4.5 History API Contract (separate Lambda)
 
@@ -355,6 +368,75 @@ Status codes:
 - `401` — missing/invalid/expired token
 - `404` — path not matched, or document not in tenant / not in allowed access tiers
 - `500` — server error
+
+## 4.7 Knowledge API Contract (separate Lambda)
+
+The Knowledge API exposes agent-callable retrieval primitives on a separate Lambda Function URL (`NUXT_PUBLIC_KNOWLEDGE_API_BASE_URL`). The same primitives are used internally by the RAG Lambda graph; this API is what the frontend (and any future MCP agent) should call when it needs vector search, chunk lookup, or a presigned URL to an original document. JWT auth and tenant scoping are identical to the History and Library APIs.
+
+Headers (all endpoints):
+
+- `Authorization: Bearer <id_token>`
+- `Content-Type: application/json` (for `POST`)
+
+Endpoints:
+
+- `POST /search` — vector search over the Knowledge Base.
+- `GET /documents/{document_id}/chunks` — list chunk metadata for a document (`limit`, `offset` query params).
+- `GET /chunks/{chunk_id}` — fetch a single chunk's metadata + content (markdown).
+- `GET /documents/{document_id}/raw-url` — issue a short-lived presigned S3 URL to the original document (view or download).
+
+### `GET /documents/{document_id}/raw-url`
+
+Returns a presigned `GET` URL into the raw-document S3 prefix. The URL inherits the Lambda role's delegated permissions, so the caller who receives it does not need their own AWS credentials — they just need to use the URL before it expires.
+
+Query parameters:
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `disposition` | `inline` \| `attachment` | `inline` | Sets `Response-Content-Disposition`. Use `attachment` to force a download with the original filename. |
+| `page` | integer | _none_ | Optional page hint. Appended after the signed query as `#page=N`. Native browser PDF viewers and PDF.js will respect it. |
+| `ttl` | integer (seconds) | `300` | URL lifetime. Clamped server-side to `[60, 900]`. |
+
+Success response (`200`):
+
+```json
+{
+  "url": "https://kb-bucket.s3.us-east-1.amazonaws.com/kb_raw/doc-1/original/2021-irc.pdf?X-Amz-…#page=107",
+  "expires_at": "2026-05-10T03:05:00Z",
+  "filename": "2021-irc.pdf",
+  "content_type": "application/pdf",
+  "disposition": "inline",
+  "ttl_seconds": 300
+}
+```
+
+Response field summary:
+
+| Field | Type | Notes |
+|---|---|---|
+| `url` | string | Presigned S3 GET URL, valid until `expires_at`. Treat it as user-scoped and short-lived — do not store, log, or share. |
+| `expires_at` | string (ISO8601, UTC) | When the signed URL stops working. Re-request a fresh one when expired. |
+| `filename` | string | Original filename from the catalog row. Use it for download UX (e.g. `download` attribute on `<a>`). |
+| `content_type` | string | Inferred from filename extension; `application/octet-stream` for unknown types. |
+| `disposition` | string | Echo of the requested disposition. |
+| `ttl_seconds` | integer | Effective (post-clamp) TTL the server signed. |
+
+Status codes:
+
+- `200` — URL issued
+- `204` — OPTIONS preflight
+- `400` — invalid `disposition`, `page`, or `ttl`
+- `401` — missing/invalid/expired token
+- `404` — document not in tenant / not in allowed access tiers / unknown id
+- `502` — backend could not safely build a URL (e.g. catalog row points outside `kb_raw/`)
+- `500` — server error
+
+Usage notes:
+
+- Treat the URL as **single-user, short-lived**. Do not embed it in cached or shared responses; the frontend should fetch a fresh URL each time the user opens or downloads a document.
+- For "open in viewer" flows, set `disposition=inline` and embed the URL in a PDF.js viewer iframe (or a native `<embed>`). Append `#page=N` server-side via the `page` query — the fragment survives the signed query.
+- For "download" flows, set `disposition=attachment`. The browser will use the `filename` from `Response-Content-Disposition`.
+- Cited-quote highlighting: pair the `cited_quotes` from the chat response with PDF.js search parameters (e.g. `?file=<url>#page=107&search=<quote>&highlight=true&phrase=true`) so the cited span is highlighted on open. The backend does not pre-render highlights — it returns the URL and the quote text; the frontend wires them together.
 
 ## 5. Error Handling Contract
 
