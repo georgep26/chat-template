@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from knowledge.document_read import DocumentReadStore
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -69,6 +70,14 @@ class CatalogReadStore:
         self._region = region
         self._rds_data = rds_data_client or boto3.client("rds-data", region_name=region)
         self._max_retries = max_retries
+        self._document_read_store = DocumentReadStore(
+            db_cluster_arn=db_cluster_arn,
+            db_credentials_secret_arn=db_credentials_secret_arn,
+            database_name=database_name,
+            region=region,
+            rds_data_client=self._rds_data,
+            max_retries=max_retries,
+        )
 
     # Public read API ---------------------------------------------------
 
@@ -112,32 +121,19 @@ class CatalogReadStore:
         tenant_id: str,
         access_tiers: List[str],
     ) -> Optional[Dict[str, Any]]:
-        """Fetch a single authorized catalog row or ``None``."""
+        """Fetch a single authorized catalog row or ``None``.
+
+        Delegates to the shared :class:`knowledge.document_read.DocumentReadStore`
+        so the Library API and the Knowledge API enforce identical authz on
+        catalog reads.
+        """
         if not access_tiers:
             return None
-
-        tier_placeholders = ", ".join(f":tier_{i}" for i in range(len(access_tiers)))
-        sql = f"""
-            SELECT {_SELECT_COLUMNS}
-            FROM document_catalog
-            WHERE document_id = :document_id
-              AND tenant_id = :tenant_id
-              AND source_status <> 'failed'
-              AND access_tier IN ({tier_placeholders})
-            LIMIT 1
-        """
-        params = [
-            self._string_parameter("document_id", document_id),
-            self._string_parameter("tenant_id", tenant_id),
-        ]
-        for i, tier in enumerate(access_tiers):
-            params.append(self._string_parameter(f"tier_{i}", tier))
-
-        response = self._execute_statement(sql, params)
-        records = response.get("records", [])
-        if not records:
-            return None
-        return self._row_to_dict(records[0])
+        return self._document_read_store.get_document(
+            document_id=document_id,
+            tenant_id=tenant_id,
+            access_tiers=access_tiers,
+        )
 
     # Helpers -----------------------------------------------------------
 
