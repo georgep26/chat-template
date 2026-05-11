@@ -21,7 +21,15 @@ from knowledge.artifact_fetch import (
     fetch_chunk_content,
 )
 from knowledge.chunk_read import ChunkReadStore, create_chunk_read_store
+from knowledge.document_read import DocumentReadStore, create_document_read_store
 from knowledge.filters import FilterError
+from knowledge.raw_url import (
+    DEFAULT_TTL_SECONDS,
+    MAX_TTL_SECONDS,
+    MIN_TTL_SECONDS,
+    RawUrlError,
+    build_raw_document_url,
+)
 from knowledge.vector_search import search
 from utils.config import read_config
 from utils.logger import get_logger
@@ -31,6 +39,7 @@ from .api.models import (
     ChunkSummary,
     GetChunkResponse,
     ListChunksResponse,
+    RawUrlResponse,
     SearchRequest,
     SearchResponse,
     SearchSource,
@@ -41,20 +50,29 @@ log = get_logger(__name__)
 
 # Cache state across warm invocations.
 _STORE: Optional[ChunkReadStore] = None
+_DOCUMENT_STORE: Optional[DocumentReadStore] = None
 _DEFAULT_TENANT_ID: Optional[str] = None
 _KB_ID: Optional[str] = None
 _KB_REGION: Optional[str] = None
 _DOCUMENT_BUCKET: Optional[str] = None
 _ARTIFACT_MAX_BYTES: int = DEFAULT_MAX_BYTES
+_RAW_URL_TTL_DEFAULT: int = DEFAULT_TTL_SECONDS
+_RAW_URL_TTL_MAX: int = MAX_TTL_SECONDS
+
+# Match the Library API's v1 access-tier scope so the raw-url endpoint does
+# not leak documents the Library would refuse to surface.
+_CATALOG_ACCESS_TIERS = ("public", "internal")
 
 
 _DOCUMENT_CHUNKS_PATTERN = re.compile(r"^/documents/([^/]+)/chunks$")
+_DOCUMENT_RAW_URL_PATTERN = re.compile(r"^/documents/([^/]+)/raw-url$")
 _CHUNK_PATTERN = re.compile(r"^/chunks/([^/]+)$")
 
 
 def _load_runtime_config() -> ChunkReadStore:
     """Read the hydrated app config and cache the values we need at request time."""
     global _DEFAULT_TENANT_ID, _KB_ID, _KB_REGION, _DOCUMENT_BUCKET, _ARTIFACT_MAX_BYTES
+    global _DOCUMENT_STORE, _RAW_URL_TTL_DEFAULT, _RAW_URL_TTL_MAX
 
     config_path = os.getenv("APP_CONFIG_PATH", "config/app_config.yml")
     config = read_config(config_path)
@@ -63,6 +81,12 @@ def _load_runtime_config() -> ChunkReadStore:
     if store is None:
         raise RuntimeError(
             "Chunk read store could not be created — Data API settings are missing."
+        )
+
+    _DOCUMENT_STORE = create_document_read_store(config)
+    if _DOCUMENT_STORE is None:
+        raise RuntimeError(
+            "Document read store could not be created — Data API settings are missing."
         )
 
     rag_chat_config = config.get("rag_chat", {}) or {}
@@ -94,6 +118,24 @@ def _load_runtime_config() -> ChunkReadStore:
         except (TypeError, ValueError):
             log.warning("Ignoring invalid ARTIFACT_MAX_BYTES=%r", max_bytes_env)
 
+    ttl_default_env = os.getenv("RAW_URL_TTL_DEFAULT")
+    if ttl_default_env:
+        try:
+            _RAW_URL_TTL_DEFAULT = max(
+                MIN_TTL_SECONDS, min(MAX_TTL_SECONDS, int(ttl_default_env))
+            )
+        except (TypeError, ValueError):
+            log.warning("Ignoring invalid RAW_URL_TTL_DEFAULT=%r", ttl_default_env)
+
+    ttl_max_env = os.getenv("RAW_URL_TTL_MAX")
+    if ttl_max_env:
+        try:
+            _RAW_URL_TTL_MAX = max(
+                MIN_TTL_SECONDS, min(MAX_TTL_SECONDS, int(ttl_max_env))
+            )
+        except (TypeError, ValueError):
+            log.warning("Ignoring invalid RAW_URL_TTL_MAX=%r", ttl_max_env)
+
     return store
 
 
@@ -102,6 +144,14 @@ def _get_store() -> ChunkReadStore:
     if _STORE is None:
         _STORE = _load_runtime_config()
     return _STORE
+
+
+def _get_document_store() -> DocumentReadStore:
+    if _DOCUMENT_STORE is None:
+        _get_store()
+    if _DOCUMENT_STORE is None:
+        raise RuntimeError("Document read store could not be initialized.")
+    return _DOCUMENT_STORE
 
 
 def _get_kb_id() -> str:
@@ -157,6 +207,9 @@ def _parse_int(
 def _route(method: str, path: str) -> Optional[Dict[str, Any]]:
     if path == "/search" and method == "POST":
         return {"name": "search"}
+    raw_url_match = _DOCUMENT_RAW_URL_PATTERN.match(path)
+    if raw_url_match and method == "GET":
+        return {"name": "get_raw_url", "document_id": raw_url_match.group(1)}
     chunks_match = _DOCUMENT_CHUNKS_PATTERN.match(path)
     if chunks_match and method == "GET":
         return {"name": "list_chunks", "document_id": chunks_match.group(1)}
@@ -256,6 +309,77 @@ def _handle_get_chunk(chunk_id: str, tenant_id: str) -> Dict[str, Any]:
     return json_response(200, response.model_dump())
 
 
+def _handle_get_raw_url(
+    event: Dict[str, Any], document_id: str, tenant_id: str
+) -> Dict[str, Any]:
+    qs = event.get("queryStringParameters") or {}
+    if not isinstance(qs, dict):
+        qs = {}
+
+    disposition = (qs.get("disposition") or "inline").strip().lower()
+    if disposition not in ("inline", "attachment"):
+        raise ValueError(
+            "Invalid disposition; must be 'inline' or 'attachment'."
+        )
+
+    ttl = _parse_int(
+        qs.get("ttl"),
+        default=_RAW_URL_TTL_DEFAULT,
+        minimum=MIN_TTL_SECONDS,
+        maximum=_RAW_URL_TTL_MAX,
+    )
+
+    page_value = qs.get("page")
+    page: Optional[int] = None
+    if page_value not in (None, ""):
+        page = _parse_int(page_value, default=1, minimum=1, maximum=100_000)
+
+    row = _get_document_store().get_document(
+        document_id=document_id,
+        tenant_id=tenant_id,
+        access_tiers=list(_CATALOG_ACCESS_TIERS),
+    )
+    if row is None:
+        return json_response(
+            404,
+            {"error": "DocumentNotFound", "detail": "Document not found."},
+        )
+
+    location = row.get("location") or ""
+    filename = row.get("filename") or None
+
+    try:
+        result = build_raw_document_url(
+            location=location,
+            expected_bucket=_get_document_bucket(),
+            ttl_seconds=ttl,
+            disposition=disposition,
+            page=page,
+            response_filename=filename,
+        )
+    except RawUrlError as exc:
+        log.warning(
+            "Raw URL build failed for document %s: %s", document_id, exc
+        )
+        return json_response(
+            502,
+            {
+                "error": "RawUrlError",
+                "detail": "Could not issue a presigned URL for this document.",
+            },
+        )
+
+    response = RawUrlResponse(
+        url=result.url,
+        expires_at=result.expires_at,
+        filename=result.filename,
+        content_type=result.content_type,
+        disposition=result.disposition,
+        ttl_seconds=result.ttl_seconds,
+    )
+    return json_response(200, response.model_dump())
+
+
 # Lambda entrypoint ------------------------------------------------------
 
 
@@ -300,6 +424,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return _handle_list_chunks(event, route["document_id"], tenant_id)
         if route["name"] == "get_chunk":
             return _handle_get_chunk(route["chunk_id"], tenant_id)
+        if route["name"] == "get_raw_url":
+            return _handle_get_raw_url(event, route["document_id"], tenant_id)
         return json_response(404, {"error": "NotFound", "detail": "Path not found."})
     except FilterError as exc:
         return json_response(400, {"error": "InvalidFilter", "detail": str(exc)})
