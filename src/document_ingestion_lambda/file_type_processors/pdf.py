@@ -13,11 +13,22 @@ from typing import Any, Callable
 
 from document_ingestion_lambda.file_type_processors.common import infer_landing_scope
 from document_ingestion_lambda.models import IngestionResult, S3ObjectRef
+from document_ingestion_lambda.triage import (
+    PdfTriageResult,
+    TriageConfig,
+    multimodal_triage,
+    triage_summary_dict,
+)
 
 try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
+
+try:  # pragma: no cover - only imported in real runtimes
+    import boto3
+except ImportError:
+    boto3 = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -70,10 +81,70 @@ class PdfProcessor:
         s3_client: Any,
         ingestion_config: dict[str, Any],
         random_suffix: Callable[[], str],
+        bedrock_client: Any | None = None,
     ) -> None:
         self._s3 = s3_client
         self._ingestion_config = ingestion_config
         self._random_suffix = random_suffix
+        # Lazily created on first use. Tests inject a stub directly.
+        self._bedrock_client = bedrock_client
+
+    def _get_bedrock_client(self) -> Any | None:
+        """Return a Bedrock Runtime client, creating one on first use.
+
+        Returns None when boto3 is not available (e.g. lightweight test envs);
+        callers must treat this as "skip the Bedrock-backed step".
+        """
+        if self._bedrock_client is not None:
+            return self._bedrock_client
+        if boto3 is None:
+            return None
+        region = self._ingestion_config.get("pdf_triage_region") or "us-east-1"
+        self._bedrock_client = boto3.client("bedrock-runtime", region_name=region)
+        return self._bedrock_client
+
+    def _run_triage(self, pdf_path: Path, scan: PdfScanResult) -> PdfTriageResult:
+        """Run multimodal triage when enabled; always-recoverable.
+
+        Returns a "skipped" result when triage is disabled or boto3 is
+        unavailable, and a "failed" result on any exception. The caller
+        treats both as "no signal, proceed with deterministic defaults".
+        """
+        config = self._build_triage_config()
+        if not config.enabled:
+            return PdfTriageResult.skipped("triage_disabled")
+        page_count = scan.page_count or 0
+        if page_count <= 0:
+            return PdfTriageResult.skipped("no_page_count")
+
+        client = self._get_bedrock_client()
+        if client is None:
+            return PdfTriageResult.skipped("bedrock_client_unavailable")
+
+        try:
+            return multimodal_triage(
+                pdf_path=pdf_path,
+                page_count=page_count,
+                config=config,
+                bedrock_client=client,
+            )
+        except Exception as exc:
+            return PdfTriageResult.failed(
+                f"triage_unexpected_error:{type(exc).__name__}"
+            )
+
+    def _build_triage_config(self) -> TriageConfig:
+        cfg = self._ingestion_config
+        return TriageConfig(
+            enabled=_as_bool(cfg.get("pdf_triage_enabled"), default=True),
+            model_id=str(cfg.get("pdf_triage_model_id") or "amazon.nova-lite-v1:0"),
+            region=str(cfg.get("pdf_triage_region") or "us-east-1"),
+            front_page_sample_count=int(cfg.get("pdf_front_page_sample_count") or 5),
+            random_page_sample_count=int(cfg.get("pdf_random_page_sample_count") or 5),
+            ocr_threshold=float(cfg.get("pdf_triage_ocr_threshold") or 0.30),
+            hierarchy_threshold=float(cfg.get("pdf_triage_hierarchy_threshold") or 0.50),
+            temperature=float(cfg.get("pdf_triage_temperature") or 0.0),
+        )
 
     def process(
         self,
@@ -98,6 +169,8 @@ class PdfProcessor:
                 int(self._ingestion_config["pdf_text_probe_pages"]),
                 int(self._ingestion_config["pdf_text_available_min_chars"]),
             )
+
+            triage = self._run_triage(tmp_path, pdf_scan)
 
             title = pdf_scan.title or title_from_filename(filename)
             document_id = generate_document_id("pdf", title, filename, self._random_suffix())
@@ -145,6 +218,7 @@ class PdfProcessor:
                 "processing": {
                     "stage": "initial_metadata_complete",
                     "pdf": asdict(pdf_scan),
+                    "triage": triage_summary_dict(triage),
                     "chunking": {
                         "status": "not_started",
                     },
@@ -380,6 +454,21 @@ def build_page_chunk_artifacts(
             )
 
     return artifacts
+
+
+def _as_bool(value: Any, *, default: bool) -> bool:
+    """Coerce config values (str/bool/None) to bool with a sane default."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no"):
+            return False
+    if value is None:
+        return default
+    return default
 
 
 def clean_extracted_text(text: str) -> str:
