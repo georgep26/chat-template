@@ -615,3 +615,25 @@ resources:
       pdf_default_chunk_tokens: 1000
       pdf_default_chunk_overlap: 0.2
       pdf_embedding_chunk_token_limit_titan_v2: 8192
+      pdf_embedding_chunk_char_limit_titan_v2: 10000
+      pdf_triage_enabled: true
+      pdf_triage_model_id: "amazon.nova-lite-v1:0"
+      pdf_triage_region: "us-east-1"
+      pdf_triage_ocr_threshold: 0.30
+      pdf_triage_hierarchy_threshold: 0.50
+      pdf_triage_temperature: 0.0
+      pdf_section_chunking_enabled: true
+      pdf_section_min_confidence: 0.70
+      pdf_section_min_boundaries: 5
+      pdf_section_min_chars: 40
+      pdf_table_extraction_enabled: true
+      pdf_table_summary_model_id: "amazon.nova-lite-v1:0"
+      pdf_textract_poll_interval_seconds: 5
+      pdf_textract_max_wait_seconds: 540
+      pdf_max_table_extractions: 500
+      pdf_figure_extraction_enabled: true
+      pdf_figure_summary_model_id: "amazon.nova-lite-v1:0"
+      pdf_max_figure_extractions: 200
+      pdf_ocr_enabled: true
+      pdf_ocr_poll_interval_seconds: 5
+      pdf_ocr_max_wait_seconds: 540
