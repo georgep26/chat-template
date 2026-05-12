@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 import uuid
@@ -334,6 +335,7 @@ class PdfProcessor:
         cfg = self._ingestion_config
         section_enabled = _as_bool(cfg.get("pdf_section_chunking_enabled"), default=True)
         embedding_token_limit = int(cfg["pdf_embedding_chunk_token_limit_titan_v2"])
+        embedding_char_limit = int(cfg["pdf_embedding_chunk_char_limit_titan_v2"])
 
         if section_enabled and triage and triage.triage_status == "completed":
             detection_config = SectionDetectionConfig(
@@ -361,6 +363,7 @@ class PdfProcessor:
                     destination_bucket=destination_bucket,
                     index_prefix=cfg["index_prefix"],
                     embedding_chunk_token_limit=embedding_token_limit,
+                    embedding_chunk_char_limit=embedding_char_limit,
                 )
                 if artifacts:
                     return artifacts, "pdf_section_text"
@@ -555,6 +558,9 @@ class PdfProcessor:
                 "chunk_overlap": float(self._ingestion_config["pdf_default_chunk_overlap"]),
                 "embedding_chunk_token_limit": int(
                     self._ingestion_config["pdf_embedding_chunk_token_limit_titan_v2"]
+                ),
+                "embedding_chunk_char_limit": int(
+                    self._ingestion_config["pdf_embedding_chunk_char_limit_titan_v2"]
                 ),
             }
             metadata["processing"]["table_extraction"] = asset_diagnostics["table_extraction"]
@@ -770,30 +776,61 @@ def split_text_by_estimated_tokens(
     text: str,
     max_tokens: int,
     overlap_fraction: float,
+    max_chars: int | None = None,
 ) -> list[str]:
-    """Split text deterministically when a page exceeds the configured token budget."""
+    """Split text deterministically when text exceeds the embedding budget."""
     words = re.findall(r"\S+", text)
     if not words:
         return []
-    if len(words) <= max_tokens:
+    max_tokens = max(1, max_tokens)
+    max_chars = max_chars if max_chars and max_chars > 0 else None
+    if estimate_token_count(text) <= max_tokens and (
+        max_chars is None or len(text) <= max_chars
+    ):
         return [text.strip()]
 
     overlap_tokens = int(max_tokens * max(0.0, min(overlap_fraction, 0.8)))
-    step = max(max_tokens - overlap_tokens, 1)
     parts: list[str] = []
     start = 0
     while start < len(words):
-        end = min(start + max_tokens, len(words))
-        parts.append(" ".join(words[start:end]))
-        if end == len(words):
+        end = start
+        part_words: list[str] = []
+        part_char_count = 0
+        while end < len(words):
+            word = words[end]
+            candidate_char_count = part_char_count + len(word) + (1 if part_words else 0)
+            candidate_word_count = len(part_words) + 1
+            candidate_token_count = max(
+                candidate_word_count,
+                math.ceil(candidate_char_count / 2),
+            )
+            exceeds_token_budget = candidate_token_count > max_tokens
+            exceeds_char_budget = max_chars is not None and candidate_char_count > max_chars
+            if part_words and (exceeds_token_budget or exceeds_char_budget):
+                break
+            part_words.append(word)
+            part_char_count = candidate_char_count
+            end += 1
+
+        if not part_words:
+            part_words = [words[start]]
+            end = start + 1
+
+        parts.append(" ".join(part_words))
+        if end >= len(words):
             break
-        start += step
+        if overlap_tokens:
+            start = max(end - overlap_tokens, start + 1)
+        else:
+            start = end
     return parts
 
 
 def estimate_token_count(text: str) -> int:
-    """Return a deterministic rough token estimate for ingestion chunk sizing."""
-    return len(re.findall(r"\S+", text))
+    """Return a conservative deterministic token estimate for chunk sizing."""
+    word_count = len(re.findall(r"\S+", text))
+    char_count = len(text)
+    return max(word_count, math.ceil(char_count / 2))
 
 
 def build_page_chunk_id(
@@ -838,7 +875,7 @@ def build_chunk_markdown(metadata: dict[str, Any], text: str) -> str:
 
 def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Create a Bedrock S3 metadata sidecar for one index artifact."""
-    sidecar_fields = {
+    sidecar_fields: dict[str, Any] = {
         "metadata_schema_version": metadata["metadata_schema_version"],
         "record_type": metadata["record_type"],
         "document_id": metadata["document_id"],
@@ -857,6 +894,23 @@ def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "page_end": metadata["page_end"],
         "access_tier": metadata["access_tier"],
     }
+    optional_fields = (
+        "chapter",
+        "section",
+        "heading_path",
+        "content_type",
+        "token_count",
+        "char_count",
+        "asset_location",
+        "summary_location",
+        "description",
+        "caption",
+    )
+    for key in optional_fields:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            sidecar_fields[key] = value
+
     include_for_embedding = {
         "metadata_schema_version": False,
         "record_type": False,
@@ -875,6 +929,16 @@ def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "page_start": False,
         "page_end": False,
         "access_tier": False,
+        "chapter": True,
+        "section": True,
+        "heading_path": True,
+        "content_type": False,
+        "token_count": False,
+        "char_count": False,
+        "asset_location": False,
+        "summary_location": False,
+        "description": True,
+        "caption": True,
     }
     return {
         "metadataAttributes": {
