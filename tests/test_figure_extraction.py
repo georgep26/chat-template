@@ -163,6 +163,15 @@ def test_figure_chunks_one_per_layout_figure(tmp_path):
     # The cropped PNG bytes landed in S3 once per figure.
     assert len(s3.objects) == 3
 
+    sidecar_attrs = artifacts[0].sidecar_metadata["metadataAttributes"]
+    assert sidecar_attrs["chunk_type"]["value"]["stringValue"] == "figure"
+    assert sidecar_attrs["description"]["value"]["stringValue"] == "Diagram of stair geometry."
+    assert sidecar_attrs["asset_location"]["value"]["stringValue"].startswith(
+        "s3://documents-bucket/kb_artifacts/pdf_test_doc/figures/"
+    )
+    assert sidecar_attrs["description"]["includeForEmbedding"] is True
+    assert sidecar_attrs["asset_location"]["includeForEmbedding"] is False
+
 
 def test_figure_caption_copied_from_layout_text_child(tmp_path):
     pdf = tmp_path / "fake.pdf"
@@ -188,6 +197,9 @@ def test_figure_caption_copied_from_layout_text_child(tmp_path):
     )
     assert len(artifacts) == 1
     assert artifacts[0].catalog_metadata["caption"] == "Figure 3-1 Stair geometry"
+    attrs = artifacts[0].sidecar_metadata["metadataAttributes"]
+    assert attrs["caption"]["value"]["stringValue"] == "Figure 3-1 Stair geometry"
+    assert attrs["caption"]["includeForEmbedding"] is True
 
 
 def test_skipped_when_disabled(tmp_path):

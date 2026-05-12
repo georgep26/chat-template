@@ -250,6 +250,17 @@ def test_extract_table_chunks_one_per_table():
     user_msg = bedrock.calls[0]["messages"][0]["content"][0]["text"]
     assert "| Species | Fb |" in user_msg
 
+    sidecar_attrs = artifacts[0].sidecar_metadata["metadataAttributes"]
+    assert sidecar_attrs["chunk_type"]["value"]["stringValue"] == "table"
+    assert sidecar_attrs["description"]["value"]["stringValue"] == (
+        "Table of design values for southern pine."
+    )
+    assert sidecar_attrs["asset_location"]["value"]["stringValue"].startswith(
+        "s3://bucket/kb_artifacts/pdf_test_doc/tables/"
+    )
+    assert sidecar_attrs["description"]["includeForEmbedding"] is True
+    assert sidecar_attrs["asset_location"]["includeForEmbedding"] is False
+
 
 def test_textract_start_called_with_tables_and_layout_feature_types():
     blocks = _table_blocks(

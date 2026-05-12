@@ -398,6 +398,28 @@ def test_build_section_chunks_splits_oversized_sections_into_parts():
     assert part_counts == {len(artifacts)}
 
 
+def test_build_section_chunks_respects_character_limit():
+    long_body = "word " * 200
+    pages = _pages(f"5.4 Character Limited Section\n{long_body}")
+    boundaries, joined = detect_section_boundaries(
+        pages, config=SectionDetectionConfig(hierarchy_kind="section_codes")
+    )
+
+    artifacts = build_section_chunk_artifacts(
+        text_extraction=PdfTextExtractionResult(extraction_status="completed", pages=pages),
+        boundaries=boundaries,
+        joined=joined,
+        document_metadata=_document_metadata(),
+        destination_bucket="bucket",
+        index_prefix="kb_index/",
+        embedding_chunk_token_limit=8192,
+        embedding_chunk_char_limit=120,
+    )
+
+    assert len(artifacts) > 1
+    assert all(artifact.catalog_metadata["char_count"] <= 120 for artifact in artifacts)
+
+
 def test_build_section_chunks_emits_bedrock_sidecar_with_section_fields():
     pages = _pages(
         "R311.7.5.1 Risers\nRiser body content goes here at a reasonable length."
@@ -413,8 +435,14 @@ def test_build_section_chunks_emits_bedrock_sidecar_with_section_fields():
         destination_bucket="bucket",
         index_prefix="kb_index/",
         embedding_chunk_token_limit=8192,
+        embedding_chunk_char_limit=10000,
     )
     sidecar = artifacts[0].sidecar_metadata
     attrs = sidecar["metadataAttributes"]
     assert attrs["chunk_type"]["value"]["stringValue"] == "section"
     assert attrs["chunk_id"]["value"]["stringValue"] == "pdf_test_doc_section_r311_7_5_1"
+    assert attrs["section"]["value"]["stringValue"] == "R311.7.5.1"
+    assert attrs["chapter"]["value"]["stringValue"] == "R311"
+    assert attrs["heading_path"]["value"]["stringValue"] == "R311/R311.7/R311.7.5/R311.7.5.1"
+    assert attrs["section"]["includeForEmbedding"] is True
+    assert attrs["token_count"]["includeForEmbedding"] is False

@@ -110,6 +110,7 @@ def ingestion_config() -> dict[str, object]:
         "pdf_default_chunk_tokens": 1000,
         "pdf_default_chunk_overlap": 0.2,
         "pdf_embedding_chunk_token_limit_titan_v2": 8192,
+        "pdf_embedding_chunk_char_limit_titan_v2": 10000,
     }
 
 
@@ -427,6 +428,7 @@ def test_lambda_handler_reads_ingestion_section_from_app_config():
                 "pdf_default_chunk_tokens": 1000,
                 "pdf_default_chunk_overlap": 0.2,
                 "pdf_embedding_chunk_token_limit_titan_v2": 8192,
+                "pdf_embedding_chunk_char_limit_titan_v2": 10000,
             }
         }
         ingestion_main.boto3.client = lambda service_name: fake_s3
