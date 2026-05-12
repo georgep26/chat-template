@@ -59,11 +59,38 @@ ingestion:
   pdf_text_probe_pages: 5 # Number of initial PDF pages to inspect for embedded text.
   pdf_text_available_min_chars: 100 # Minimum extracted chars before embedded PDF text is considered usable; below this, mark OCR as required.
   pdf_always_ocr: false # Force OCR for PDFs even when embedded text appears usable.
-  pdf_front_page_sample_count: 5 # Number of front-matter pages to sample for hierarchy/OCR triage in later ingestion phases.
+  pdf_front_page_sample_count: 30 # Number of front-matter pages to sample for hierarchy/OCR triage; IRC-style documents can have long TOCs.
   pdf_random_page_sample_count: 5 # Number of additional random pages to sample for hierarchy/OCR triage in later ingestion phases.
   pdf_default_chunk_tokens: 1000 # Target token count for fallback PDF chunks when no reliable document hierarchy is found.
   pdf_default_chunk_overlap: 0.2 # Fractional overlap for fallback chunks; section-based chunks should avoid overlap when possible.
   pdf_embedding_chunk_token_limit_titan_v2: 8192 # Max token budget for chunks embedded with amazon.titan-embed-text-v2.
+  pdf_embedding_chunk_char_limit_titan_v2: 10000 # Conservative max body characters per embedding artifact to stay below Titan token and Bedrock input-size limits.
+  # ---- Phase 1: multimodal triage (Nova Lite) ----
+  pdf_triage_enabled: true # Run a multimodal LLM scan over sampled pages to decide OCR-need and section structure.
+  pdf_triage_model_id: "amazon.nova-lite-v1:0" # Bedrock foundation model used for triage Converse calls.
+  pdf_triage_region: "us-east-1" # Bedrock region; defaults to retrieval region when unset.
+  pdf_triage_ocr_threshold: 0.30 # Fraction of sampled pages reporting low-quality text that triggers OCR fallback.
+  pdf_triage_hierarchy_threshold: 0.50 # Fraction of sampled pages sharing the same heading pattern that triggers section chunking.
+  pdf_triage_temperature: 0.0 # Decoding temperature for the per-page triage call.
+  # ---- Phase 2: section-aware chunking ----
+  pdf_section_chunking_enabled: true # When triage detects hierarchy, emit one chunk per section instead of one per page.
+  pdf_section_min_confidence: 0.70 # Minimum hierarchy_confidence from triage required to attempt section chunking.
+  pdf_section_min_boundaries: 5 # Minimum number of detected headings required to commit to section chunking; below this, fall back to page chunks.
+  pdf_section_min_chars: 40 # Drop "sections" smaller than this many characters as regex false positives.
+  # ---- Phase 3: Textract table extraction ----
+  pdf_table_extraction_enabled: true # Run Textract over the full PDF and emit one chunk per detected table.
+  pdf_table_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to summarize each extracted table for retrieval.
+  pdf_textract_poll_interval_seconds: 5 # Wait between Textract job-status polls.
+  pdf_textract_max_wait_seconds: 540 # Hard ceiling on Textract polling within a single Lambda invocation.
+  pdf_max_table_extractions: 500 # Hard cap on tables per document to bound cost and Lambda runtime.
+  # ---- Phase 4: Figure extraction ----
+  pdf_figure_extraction_enabled: true # Use Textract LAYOUT_FIGURE blocks + Nova Lite multimodal to emit one chunk per figure.
+  pdf_figure_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to describe each figure for retrieval.
+  pdf_max_figure_extractions: 200 # Hard cap on figures per document.
+  # ---- Phase 5: OCR fallback via Textract ----
+  pdf_ocr_enabled: true # When triage decides OCR is needed, run Textract DetectDocumentText in place of pypdf text extraction.
+  pdf_ocr_poll_interval_seconds: 5 # Wait between OCR-job status polls.
+  pdf_ocr_max_wait_seconds: 540 # Hard ceiling on OCR polling within a single Lambda invocation.
 
 api:
   host: "0.0.0.0"
