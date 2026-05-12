@@ -264,7 +264,15 @@ sync_env() {
     local default_tenant_id default_collection_id metadata_schema_version
     local pdf_text_probe_pages pdf_text_available_min_chars pdf_always_ocr
     local pdf_front_page_sample_count pdf_random_page_sample_count
-    local pdf_default_chunk_tokens pdf_default_chunk_overlap pdf_embedding_chunk_token_limit_titan_v2
+    local pdf_default_chunk_tokens pdf_default_chunk_overlap
+    local pdf_embedding_chunk_token_limit_titan_v2 pdf_embedding_chunk_char_limit_titan_v2
+    local pdf_triage_enabled pdf_triage_model_id pdf_triage_region
+    local pdf_triage_ocr_threshold pdf_triage_hierarchy_threshold pdf_triage_temperature
+    local pdf_section_chunking_enabled pdf_section_min_confidence pdf_section_min_boundaries pdf_section_min_chars
+    local pdf_table_extraction_enabled pdf_table_summary_model_id
+    local pdf_textract_poll_interval_seconds pdf_textract_max_wait_seconds pdf_max_table_extractions
+    local pdf_figure_extraction_enabled pdf_figure_summary_model_id pdf_max_figure_extractions
+    local pdf_ocr_enabled pdf_ocr_poll_interval_seconds pdf_ocr_max_wait_seconds
     ingestion_bucket=$(get_resource_config "document_ingestion_lambda" "document_bucket_name" "$env" 2>/dev/null || true)
     landing_prefix=$(get_resource_config "document_ingestion_lambda" "landing_prefix" "$env" 2>/dev/null || true)
     raw_prefix=$(get_resource_config "document_ingestion_lambda" "raw_prefix" "$env" 2>/dev/null || true)
@@ -282,6 +290,28 @@ sync_env() {
     pdf_default_chunk_tokens=$(get_resource_config "document_ingestion_lambda" "pdf_default_chunk_tokens" "$env" 2>/dev/null || true)
     pdf_default_chunk_overlap=$(get_resource_config "document_ingestion_lambda" "pdf_default_chunk_overlap" "$env" 2>/dev/null || true)
     pdf_embedding_chunk_token_limit_titan_v2=$(get_resource_config "document_ingestion_lambda" "pdf_embedding_chunk_token_limit_titan_v2" "$env" 2>/dev/null || true)
+    pdf_embedding_chunk_char_limit_titan_v2=$(get_resource_config "document_ingestion_lambda" "pdf_embedding_chunk_char_limit_titan_v2" "$env" 2>/dev/null || true)
+    pdf_triage_enabled=$(get_resource_config "document_ingestion_lambda" "pdf_triage_enabled" "$env" 2>/dev/null || true)
+    pdf_triage_model_id=$(get_resource_config "document_ingestion_lambda" "pdf_triage_model_id" "$env" 2>/dev/null || true)
+    pdf_triage_region=$(get_resource_config "document_ingestion_lambda" "pdf_triage_region" "$env" 2>/dev/null || true)
+    pdf_triage_ocr_threshold=$(get_resource_config "document_ingestion_lambda" "pdf_triage_ocr_threshold" "$env" 2>/dev/null || true)
+    pdf_triage_hierarchy_threshold=$(get_resource_config "document_ingestion_lambda" "pdf_triage_hierarchy_threshold" "$env" 2>/dev/null || true)
+    pdf_triage_temperature=$(get_resource_config "document_ingestion_lambda" "pdf_triage_temperature" "$env" 2>/dev/null || true)
+    pdf_section_chunking_enabled=$(get_resource_config "document_ingestion_lambda" "pdf_section_chunking_enabled" "$env" 2>/dev/null || true)
+    pdf_section_min_confidence=$(get_resource_config "document_ingestion_lambda" "pdf_section_min_confidence" "$env" 2>/dev/null || true)
+    pdf_section_min_boundaries=$(get_resource_config "document_ingestion_lambda" "pdf_section_min_boundaries" "$env" 2>/dev/null || true)
+    pdf_section_min_chars=$(get_resource_config "document_ingestion_lambda" "pdf_section_min_chars" "$env" 2>/dev/null || true)
+    pdf_table_extraction_enabled=$(get_resource_config "document_ingestion_lambda" "pdf_table_extraction_enabled" "$env" 2>/dev/null || true)
+    pdf_table_summary_model_id=$(get_resource_config "document_ingestion_lambda" "pdf_table_summary_model_id" "$env" 2>/dev/null || true)
+    pdf_textract_poll_interval_seconds=$(get_resource_config "document_ingestion_lambda" "pdf_textract_poll_interval_seconds" "$env" 2>/dev/null || true)
+    pdf_textract_max_wait_seconds=$(get_resource_config "document_ingestion_lambda" "pdf_textract_max_wait_seconds" "$env" 2>/dev/null || true)
+    pdf_max_table_extractions=$(get_resource_config "document_ingestion_lambda" "pdf_max_table_extractions" "$env" 2>/dev/null || true)
+    pdf_figure_extraction_enabled=$(get_resource_config "document_ingestion_lambda" "pdf_figure_extraction_enabled" "$env" 2>/dev/null || true)
+    pdf_figure_summary_model_id=$(get_resource_config "document_ingestion_lambda" "pdf_figure_summary_model_id" "$env" 2>/dev/null || true)
+    pdf_max_figure_extractions=$(get_resource_config "document_ingestion_lambda" "pdf_max_figure_extractions" "$env" 2>/dev/null || true)
+    pdf_ocr_enabled=$(get_resource_config "document_ingestion_lambda" "pdf_ocr_enabled" "$env" 2>/dev/null || true)
+    pdf_ocr_poll_interval_seconds=$(get_resource_config "document_ingestion_lambda" "pdf_ocr_poll_interval_seconds" "$env" 2>/dev/null || true)
+    pdf_ocr_max_wait_seconds=$(get_resource_config "document_ingestion_lambda" "pdf_ocr_max_wait_seconds" "$env" 2>/dev/null || true)
 
     sync_config_string ".ingestion.document_bucket_name" "$ingestion_bucket" "ingestion.document_bucket_name"
     sync_config_string ".ingestion.landing_prefix" "$landing_prefix" "ingestion.landing_prefix"
@@ -300,6 +330,28 @@ sync_env() {
     sync_config_number ".ingestion.pdf_default_chunk_tokens" "$pdf_default_chunk_tokens" "ingestion.pdf_default_chunk_tokens"
     sync_config_number ".ingestion.pdf_default_chunk_overlap" "$pdf_default_chunk_overlap" "ingestion.pdf_default_chunk_overlap"
     sync_config_number ".ingestion.pdf_embedding_chunk_token_limit_titan_v2" "$pdf_embedding_chunk_token_limit_titan_v2" "ingestion.pdf_embedding_chunk_token_limit_titan_v2"
+    sync_config_number ".ingestion.pdf_embedding_chunk_char_limit_titan_v2" "$pdf_embedding_chunk_char_limit_titan_v2" "ingestion.pdf_embedding_chunk_char_limit_titan_v2"
+    sync_config_boolean ".ingestion.pdf_triage_enabled" "$pdf_triage_enabled" "ingestion.pdf_triage_enabled"
+    sync_config_string ".ingestion.pdf_triage_model_id" "$pdf_triage_model_id" "ingestion.pdf_triage_model_id"
+    sync_config_string ".ingestion.pdf_triage_region" "$pdf_triage_region" "ingestion.pdf_triage_region"
+    sync_config_number ".ingestion.pdf_triage_ocr_threshold" "$pdf_triage_ocr_threshold" "ingestion.pdf_triage_ocr_threshold"
+    sync_config_number ".ingestion.pdf_triage_hierarchy_threshold" "$pdf_triage_hierarchy_threshold" "ingestion.pdf_triage_hierarchy_threshold"
+    sync_config_number ".ingestion.pdf_triage_temperature" "$pdf_triage_temperature" "ingestion.pdf_triage_temperature"
+    sync_config_boolean ".ingestion.pdf_section_chunking_enabled" "$pdf_section_chunking_enabled" "ingestion.pdf_section_chunking_enabled"
+    sync_config_number ".ingestion.pdf_section_min_confidence" "$pdf_section_min_confidence" "ingestion.pdf_section_min_confidence"
+    sync_config_number ".ingestion.pdf_section_min_boundaries" "$pdf_section_min_boundaries" "ingestion.pdf_section_min_boundaries"
+    sync_config_number ".ingestion.pdf_section_min_chars" "$pdf_section_min_chars" "ingestion.pdf_section_min_chars"
+    sync_config_boolean ".ingestion.pdf_table_extraction_enabled" "$pdf_table_extraction_enabled" "ingestion.pdf_table_extraction_enabled"
+    sync_config_string ".ingestion.pdf_table_summary_model_id" "$pdf_table_summary_model_id" "ingestion.pdf_table_summary_model_id"
+    sync_config_number ".ingestion.pdf_textract_poll_interval_seconds" "$pdf_textract_poll_interval_seconds" "ingestion.pdf_textract_poll_interval_seconds"
+    sync_config_number ".ingestion.pdf_textract_max_wait_seconds" "$pdf_textract_max_wait_seconds" "ingestion.pdf_textract_max_wait_seconds"
+    sync_config_number ".ingestion.pdf_max_table_extractions" "$pdf_max_table_extractions" "ingestion.pdf_max_table_extractions"
+    sync_config_boolean ".ingestion.pdf_figure_extraction_enabled" "$pdf_figure_extraction_enabled" "ingestion.pdf_figure_extraction_enabled"
+    sync_config_string ".ingestion.pdf_figure_summary_model_id" "$pdf_figure_summary_model_id" "ingestion.pdf_figure_summary_model_id"
+    sync_config_number ".ingestion.pdf_max_figure_extractions" "$pdf_max_figure_extractions" "ingestion.pdf_max_figure_extractions"
+    sync_config_boolean ".ingestion.pdf_ocr_enabled" "$pdf_ocr_enabled" "ingestion.pdf_ocr_enabled"
+    sync_config_number ".ingestion.pdf_ocr_poll_interval_seconds" "$pdf_ocr_poll_interval_seconds" "ingestion.pdf_ocr_poll_interval_seconds"
+    sync_config_number ".ingestion.pdf_ocr_max_wait_seconds" "$pdf_ocr_max_wait_seconds" "ingestion.pdf_ocr_max_wait_seconds"
 
     if [ $updated -eq 0 ] && [ "$DRY_RUN" = false ]; then
         print_info "[$env] No values in infra to sync (run deploy_chat_template_db.sh and deploy_knowledge_base.sh first)"
