@@ -83,13 +83,13 @@ fields:
     type: string
     scope: [document, chunk, access]
     required: true
-    allowed_values: [restricted, tenant, public]
+    allowed_values: [restricted, internal, public]
     include_for_embedding: false
   chunk_type:
     type: string
     scope: [chunk]
     required: true
-    allowed_values: [section, page, table_summary, figure_summary, image_summary, fallback_text]
+    allowed_values: [section, page, table, figure, image, fallback_text]
     include_for_embedding: true
   chunk_index:
     type: integer
@@ -126,6 +126,27 @@ fields:
     scope: [chunk]
     required: false
     include_for_embedding: false
+  asset_location:
+    type: s3_uri
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+    notes: "Pointer to an extracted non-text artifact, such as a figure crop or table artifact."
+  summary_location:
+    type: s3_uri
+    scope: [chunk]
+    required: false
+    include_for_embedding: false
+  description:
+    type: string
+    scope: [chunk]
+    required: false
+    include_for_embedding: true
+  caption:
+    type: string
+    scope: [chunk]
+    required: false
+    include_for_embedding: true
   processing:
     type: object
     scope: [document, chunk, ingestion_job]
