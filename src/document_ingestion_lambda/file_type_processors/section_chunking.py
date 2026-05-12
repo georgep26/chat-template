@@ -300,6 +300,7 @@ def build_section_chunk_artifacts(
     destination_bucket: str,
     index_prefix: str,
     embedding_chunk_token_limit: int,
+    embedding_chunk_char_limit: int | None = None,
 ) -> list[PdfChunkArtifact]:
     """Emit one chunk per section, splitting into parts when a section is too big."""
     document_id = document_metadata["document_id"]
@@ -316,6 +317,7 @@ def build_section_chunk_artifacts(
             section_text,
             embedding_chunk_token_limit,
             overlap_fraction=0.0,  # sections shouldn't overlap; the heading text appears once
+            max_chars=embedding_chunk_char_limit,
         )
         part_count = max(len(parts), 1)
 
@@ -380,6 +382,7 @@ def build_section_chunk_artifacts(
                 "processing": {
                     "strategy": "pdf_section_text",
                     "configured_embedding_chunk_token_limit": embedding_chunk_token_limit,
+                    "configured_embedding_chunk_char_limit": embedding_chunk_char_limit,
                 },
             }
             artifacts.append(
