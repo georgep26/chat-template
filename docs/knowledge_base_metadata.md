@@ -57,7 +57,7 @@ Required document-level fields:
 | `location` | string | Raw document S3 URI. |
 | `source_location` | string | Raw document S3 URI. Same as `location` for document rows. |
 | `source_status` | string | `landing`, `processing`, `ready`, `failed`, `archived`, or `deleted`. |
-| `access_tier` | string | `restricted`, `tenant`, or `public`. Default to `restricted`. |
+| `access_tier` | string | `restricted`, `internal`, or `public`. Default to `restricted`. |
 
 Common optional fields:
 
@@ -95,7 +95,7 @@ Required chunk-level fields:
 | `record_type` | string | `chunk`. |
 | `document_id` | string | Parent document id. |
 | `chunk_id` | string | Stable app-owned chunk id. |
-| `chunk_type` | string | `section`, `page`, `table_summary`, `figure_summary`, `image_summary`, or `fallback_text`. |
+| `chunk_type` | string | `section`, `page`, `table`, `figure`, `image`, or `fallback_text`. |
 | `tenant_id` | string | Same authorization namespace as the document. |
 | `collection_id` | string | Same collection as the document. |
 | `location` | string | S3 URI for the chunk artifact. |
@@ -115,6 +115,10 @@ Common optional chunk fields:
 | `token_count` | integer | Token count used for chunking validation. |
 | `char_count` | integer | Character count of the artifact text. |
 | `content_type` | string | Artifact content type, such as `text/markdown`. |
+| `asset_location` | string | Optional S3 URI for an extracted non-text artifact, such as a figure crop or table artifact. |
+| `summary_location` | string | Optional S3 URI for a separate summary artifact when one exists. |
+| `description` | string | Optional generated description for figure/image/table retrieval. |
+| `caption` | string | Optional source-visible caption copied from the document. |
 | `custom_metadata` | object | Flexible domain metadata. |
 
 ## Authorization
@@ -150,7 +154,7 @@ Ingestion tuning values live under `ingestion` in `config/<env>/app_config.yaml`
 Do not hide default ingestion behavior in Lambda code; add tunable values to
 app config with comments.
 
-Current Phase 1 PDF tuning fields:
+Current PDF ingestion tuning fields:
 
 - `pdf_text_probe_pages`
 - `pdf_text_available_min_chars`
@@ -160,3 +164,25 @@ Current Phase 1 PDF tuning fields:
 - `pdf_default_chunk_tokens`
 - `pdf_default_chunk_overlap`
 - `pdf_embedding_chunk_token_limit_titan_v2`
+- `pdf_embedding_chunk_char_limit_titan_v2`
+- `pdf_triage_enabled`
+- `pdf_triage_model_id`
+- `pdf_triage_region`
+- `pdf_triage_ocr_threshold`
+- `pdf_triage_hierarchy_threshold`
+- `pdf_triage_temperature`
+- `pdf_section_chunking_enabled`
+- `pdf_section_min_confidence`
+- `pdf_section_min_boundaries`
+- `pdf_section_min_chars`
+- `pdf_table_extraction_enabled`
+- `pdf_table_summary_model_id`
+- `pdf_textract_poll_interval_seconds`
+- `pdf_textract_max_wait_seconds`
+- `pdf_max_table_extractions`
+- `pdf_figure_extraction_enabled`
+- `pdf_figure_summary_model_id`
+- `pdf_max_figure_extractions`
+- `pdf_ocr_enabled`
+- `pdf_ocr_poll_interval_seconds`
+- `pdf_ocr_max_wait_seconds`
