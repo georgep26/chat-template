@@ -75,16 +75,16 @@
     },
     "access_tier": {
       "type": "string",
-      "enum": ["restricted", "tenant", "public"]
+      "enum": ["restricted", "internal", "public"]
     },
     "chunk_type": {
       "type": "string",
       "enum": [
         "section",
         "page",
-        "table_summary",
-        "figure_summary",
-        "image_summary",
+        "table",
+        "figure",
+        "image",
         "fallback_text"
       ]
     },
@@ -119,6 +119,20 @@
       "type": "string"
     },
     "content_type": {
+      "type": "string"
+    },
+    "asset_location": {
+      "type": "string",
+      "pattern": "^s3://"
+    },
+    "summary_location": {
+      "type": "string",
+      "pattern": "^s3://"
+    },
+    "description": {
+      "type": "string"
+    },
+    "caption": {
       "type": "string"
     },
     "token_count": {
