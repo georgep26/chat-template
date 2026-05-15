@@ -12,7 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from document_ingestion_lambda.file_type_processors.common import infer_landing_scope
+from document_ingestion_lambda.file_type_processors.common import (
+    infer_landing_scope,
+    require_default_access_tier,
+)
 from document_ingestion_lambda.models import IngestionResult, S3ObjectRef
 from document_ingestion_lambda.triage import (
     PdfTriageResult,
@@ -431,6 +434,7 @@ class PdfProcessor:
     ) -> IngestionResult:
         """Process a PDF S3 object into raw storage and metadata."""
         filename = Path(obj.key).name
+        access_tier = require_default_access_tier(self._ingestion_config)
         tenant_id, collection_id = infer_landing_scope(
             obj.key,
             self._ingestion_config["landing_prefix"],
@@ -488,7 +492,7 @@ class PdfProcessor:
                 "uploaded_at": uploaded_at,
                 "ingested_at": now,
                 "source_status": "processing",
-                "access_tier": "restricted",
+                "access_tier": access_tier,
                 "tenant_id": tenant_id,
                 "collection_id": collection_id,
                 "custom_metadata": {},
