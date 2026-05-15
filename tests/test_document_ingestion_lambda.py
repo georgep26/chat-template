@@ -104,6 +104,7 @@ def ingestion_config() -> dict[str, object]:
         "catalog_prefix": "kb_catalog/sandbox/",
         "default_tenant_id": "sandbox",
         "default_collection_id": "default",
+        "default_access_tier": "public",
         "metadata_schema_version": "1.0",
         "pdf_text_probe_pages": 5,
         "pdf_text_available_min_chars": 100,
@@ -177,6 +178,7 @@ def test_process_pdf_copies_raw_file_and_writes_metadata():
     assert metadata["location"] == result.raw_s3_uri
     assert metadata["source_location"] == result.raw_s3_uri
     assert metadata["source_status"] == "processing"
+    assert metadata["access_tier"] == "public"
     assert metadata["tenant_id"] == "user-123"
     assert metadata["collection_id"] == "building-code"
     assert metadata["processing"]["stage"] == "initial_metadata_complete"
@@ -238,6 +240,7 @@ def test_process_pdf_writes_page_chunks_and_bedrock_sidecars(monkeypatch):
         "s3://documents-bucket/kb_index/pdf_code_sample_2021_abc123/pages/"
         "pdf_code_sample_2021_abc123_page_0001.md"
     )
+    assert result.chunks[0]["access_tier"] == "public"
 
     markdown_obj = fake_s3.objects[
         (
@@ -263,6 +266,7 @@ def test_process_pdf_writes_page_chunks_and_bedrock_sidecars(monkeypatch):
         == "pdf_code_sample_2021_abc123_page_0001"
     )
     assert sidecar["metadataAttributes"]["page_start"]["value"]["numberValue"] == 1
+    assert sidecar["metadataAttributes"]["access_tier"]["value"]["stringValue"] == "public"
     assert sidecar["metadataAttributes"]["tenant_id"]["includeForEmbedding"] is False
 
     metadata_obj = fake_s3.objects[
@@ -319,6 +323,7 @@ def test_process_pdf_writes_ingestion_job_and_document_catalog():
     assert len(fake_catalog.documents) == 1
     assert fake_catalog.documents[0]["document_id"] == "pdf_code_sample_2021_abc123"
     assert fake_catalog.documents[0]["source_location"] == result.raw_s3_uri
+    assert fake_catalog.documents[0]["access_tier"] == "public"
 
     assert len(fake_catalog.completed_jobs) == 1
     assert fake_catalog.completed_jobs[0]["job_id"] == result.job_id
@@ -422,6 +427,7 @@ def test_lambda_handler_reads_ingestion_section_from_app_config():
                 "index_prefix": "custom_index/",
                 "default_tenant_id": "tenant-from-config",
                 "default_collection_id": "collection-from-config",
+                "default_access_tier": "internal",
                 "metadata_schema_version": "1.0",
                 "pdf_text_probe_pages": 9,
                 "pdf_text_available_min_chars": 250,
@@ -456,3 +462,6 @@ def test_lambda_handler_reads_ingestion_section_from_app_config():
         and key.endswith("/document_metadata.json")
     ]
     assert len(metadata_keys) == 1
+    metadata_obj = fake_s3.objects[("config-bucket", metadata_keys[0])]
+    metadata = json.loads(metadata_obj["Body"].decode("utf-8"))  # type: ignore[union-attr]
+    assert metadata["access_tier"] == "internal"
