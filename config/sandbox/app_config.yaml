@@ -23,7 +23,7 @@ rag_chat:
     number_of_results: 10 # Number of results to retrieve from the knowledge base
   generation: # Generation settings for the answer
     model: # Model to use for generation
-      id: "amazon.nova-micro-v1:0"
+      id: "us.anthropic.claude-sonnet-4-6" # Bedrock US inference profile for Claude Sonnet 4.6.
       temperature: 0.0 # Temperature for the generation model
       region: "us-east-1" # Region for the generation model (defaults to the region of the database)
   chat_history_store: # History of the conversation settings
