@@ -218,9 +218,12 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
     else:
         log.info(f"No cited sources found in answer from {len(raw_sources)} retrieved sources")
 
+    ai_additional_kwargs: Dict[str, Any] = {}
+    if sources:
+        ai_additional_kwargs["sources"] = [s.model_dump() for s in sources]
     visible_messages_to_store: List[BaseMessage] = [
         HumanMessage(content=req.message),
-        AIMessage(content=answer),
+        AIMessage(content=answer, additional_kwargs=ai_additional_kwargs),
     ]
     source_ids = [source.document_id for source in sources]
     persistence_metadata = {

@@ -1,6 +1,6 @@
 """Response shapes for the history API Lambda."""
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,7 @@ class MessageRecord(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
     created_at: Optional[str] = None
+    sources: Optional[List[Dict[str, Any]]] = None
 
 
 class GetMessagesResponse(BaseModel):

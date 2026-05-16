@@ -100,7 +100,17 @@ def _message_record(message: BaseMessage) -> Optional[MessageRecord]:
         content = "".join(parts)
     if not isinstance(content, str):
         content = str(content)
-    return MessageRecord(role=role, content=content)
+
+    sources: Optional[List[Dict[str, Any]]] = None
+    if role == "assistant":
+        additional = getattr(message, "additional_kwargs", None) or {}
+        candidate = additional.get("sources") if isinstance(additional, dict) else None
+        if isinstance(candidate, list) and candidate:
+            sources = [item for item in candidate if isinstance(item, dict)]
+            if not sources:
+                sources = None
+
+    return MessageRecord(role=role, content=content, sources=sources)
 
 
 def _parse_int(value: Optional[str], *, default: int, minimum: int, maximum: int) -> int:
@@ -158,7 +168,7 @@ def _handle_get_messages(conversation_id: str, user_id: str) -> Dict[str, Any]:
     )
     records = [r for r in (_message_record(m) for m in messages) if r is not None]
     response = GetMessagesResponse(conversation_id=conversation_id, messages=records)
-    return json_response(200, response.model_dump())
+    return json_response(200, response.model_dump(exclude_none=True))
 
 
 def _handle_rename(conversation_id: str, user_id: str, body: Dict[str, Any]) -> Dict[str, Any]:

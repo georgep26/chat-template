@@ -259,14 +259,30 @@ Headers (all endpoints):
   "conversation_id": "7b5e4c7e-0000-4000-8000-000000000000",
   "messages": [
     { "role": "user", "content": "What is the cancellation policy?" },
-    { "role": "assistant", "content": "Free cancellation is available up to 24 hours before the appointment." }
+    {
+      "role": "assistant",
+      "content": "Free cancellation is available up to 24 hours before the appointment.",
+      "sources": [
+        {
+          "citation_number": 1,
+          "document_id": "abc-123",
+          "source_type": "document",
+          "score": 0.82,
+          "chunk": "...",
+          "cited_quotes": ["Free cancellation is available up to 24 hours before the appointment."],
+          "quote_verified": true,
+          "metadata": { "filename": "policy.pdf", "page_start": 4 }
+        }
+      ]
+    }
   ]
 }
 ```
 
 - Messages are returned in chronological order.
 - `role` is one of `user`, `assistant`, `system`.
-- Per-message `sources` and `steps` are **not** included in v1 (those live in `chat_turn_events`). Historical messages render without source cards.
+- `sources` is only present on `assistant` messages that produced citations, and only for turns persisted by a RAG Lambda build that attaches sources to the AI message (`additional_kwargs.sources`). Older turns will load without a `sources` field and render without source cards.
+- Per-message `steps` are still not included; live step events remain in `chat_turn_events`.
 
 `POST /conversations/{id}/rename` request:
 
