@@ -197,6 +197,13 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
             "Dropped %d unverified citation quote(s) (paraphrase or hallucination).",
             len(citation_result.dropped_quotes),
         )
+        for entry in citation_result.dropped_quotes:
+            log.info(
+                "  dropped_quote: source=%s reason=%s text=%r",
+                entry.get("source_number"),
+                entry.get("reason"),
+                entry.get("quote", ""),
+            )
 
     # Extract cited sources from normalized citation result.
     sources = []

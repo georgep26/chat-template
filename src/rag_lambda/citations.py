@@ -25,6 +25,10 @@ CITE_BLOCK_PATTERN = re.compile(
 )
 SENTINEL_CITATION_PATTERN = re.compile(r"<\[(\d+)\]>")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+# PDF text extraction often leaves soft-wrap hyphens, e.g. "capa- ble" or
+# "capa-\nble" where the original word is "capable". Strip these before
+# comparison so the LLM's verbatim quote can still verify against the chunk.
+_SOFT_WRAP_HYPHEN_PATTERN = re.compile(r"(\w)[-‐‑­]\s+(\w)")
 
 
 @dataclass(frozen=True)
@@ -53,8 +57,9 @@ def _compact_removed_citation_spacing(answer: str) -> str:
 
 
 def _normalize_for_match(text: str) -> str:
-    """Collapse whitespace and lowercase for verbatim substring matching."""
-    return _WHITESPACE_PATTERN.sub(" ", text).strip().lower()
+    """Collapse whitespace, repair PDF soft-wrap hyphens, lowercase."""
+    rejoined = _SOFT_WRAP_HYPHEN_PATTERN.sub(r"\1\2", text)
+    return _WHITESPACE_PATTERN.sub(" ", rejoined).strip().lower()
 
 
 def _quote_is_in_chunk(quote: str, chunk: str) -> bool:

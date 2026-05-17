@@ -110,6 +110,52 @@ def test_quote_with_whitespace_and_case_differences_still_matches():
     assert result.dropped_quotes == []
 
 
+def test_pdf_soft_wrap_hyphen_in_chunk_still_matches():
+    """PDF line-break hyphens like 'capa- ble' should not block quote verification."""
+    answer = (
+        '<cite source="1">heating facilities capable of maintaining a room temperature'
+        ' of not less than 68°F</cite>'
+    )
+    sources = [
+        _source(
+            number=1,
+            chunk=(
+                "every dwelling unit shall be provided with heating facilities capa-\n"
+                "ble of maintaining a room temperature of not less than 68°F (20°C)"
+            ),
+        )
+    ]
+
+    result = normalize_answer_citations(answer, sources)
+
+    assert result.dropped_quotes == []
+    assert result.sources[0]["cited_quotes"] == [
+        "heating facilities capable of maintaining a room temperature of not less than 68°F"
+    ]
+
+
+def test_pdf_soft_wrap_hyphen_with_space_after_dash_matches():
+    """Some extractors leave 'capa- ble' (dash + space, no newline) — also a soft wrap."""
+    answer = '<cite source="1">capable of maintaining</cite>'
+    sources = [_source(number=1, chunk="...facilities capa- ble of maintaining a room...")]
+
+    result = normalize_answer_citations(answer, sources)
+
+    assert result.dropped_quotes == []
+    assert result.sources[0]["cited_quotes"] == ["capable of maintaining"]
+
+
+def test_real_hyphen_in_compound_word_still_verifies():
+    """Genuine hyphenated compounds (no whitespace around the hyphen) must still match."""
+    answer = '<cite source="1">a self-sealing fitting</cite>'
+    sources = [_source(number=1, chunk="...must use a self-sealing fitting...")]
+
+    result = normalize_answer_citations(answer, sources)
+
+    assert result.dropped_quotes == []
+    assert result.sources[0]["cited_quotes"] == ["a self-sealing fitting"]
+
+
 def test_paraphrased_quote_is_dropped_but_marker_survives():
     """When the model paraphrases, the quote is discarded; the [N] badge stays."""
     answer = (

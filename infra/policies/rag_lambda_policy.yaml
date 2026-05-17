@@ -36,7 +36,10 @@ Resources:
               - bedrock:Converse
               - bedrock:ConverseStream
             Resource:
-              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/*'
+              # Foundation models across regions: cross-region inference profiles (us.*) fan out to multiple regions.
+              - 'arn:aws:bedrock:*::foundation-model/*'
+              # Inference profile ARNs (system-defined and application-defined) within this account.
+              - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*'
           - Sid: AllowKnowledgeBaseRetrieval
             Effect: Allow
             Action:
