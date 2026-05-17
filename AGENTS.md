@@ -36,6 +36,11 @@ Before making changes, read the relevant docs:
 - Development plan filenames must include a date, for example `docs/development_plans/2026-05-04_ai_agent_strategy_plan.md`.
 - Do not use tool-specific plan folders, such as `.cursor/plans`, as the durable source of truth.
 - Generated coding-agent reports and working notes belong under `docs/working_files/`, which is gitignored except for its README.
+- All backend/infrastructure activity must stay inside this repository unless the user explicitly approves otherwise. Do not recursively traverse or search outside this repository, including home-directory searches such as `find ~`, `find /Users/<name>`, or broad `rg`/`ls` scans outside the repo.
+- It is acceptable to locate installed tools with targeted commands such as `which`, `command -v`, or a tool's own version command.
+- If additional backend tooling or Python packages are needed, add them through this repo's conda environment (`environment.yml` / `chat-template-env`) rather than installing or staging project files elsewhere.
+- Temporary project scripts, raw tool outputs, downloaded artifacts, and other scratch files must stay inside this repository. Use `docs/working_files/tmp/` for backend/infrastructure scratch work instead of OS temp locations such as `/tmp`, `/private/tmp`, or `/var/tmp`.
+- If a tool forces use of an OS temp directory, keep it minimal and move any project-relevant output back under `docs/working_files/` before finishing.
 - Resource status reports belong under `docs/resource_reports/`.
 
 ## Deployment Rules
