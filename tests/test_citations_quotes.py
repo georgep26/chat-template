@@ -251,3 +251,53 @@ def test_bare_marker_still_works_after_cite_pass():
     assert result.answer == "Claim[1]."
     assert len(result.sources) == 1
     assert result.sources[0]["cited_quotes"] == []
+
+
+def test_verified_quote_resolves_to_deepest_hierarchy_node():
+    chunk = (
+        "R303 LIGHT, VENTILATION AND HEATING\n"
+        "R303.10 Required heating. Every dwelling unit shall be provided with "
+        "heating facilities capable of maintaining a room temperature of not less "
+        "than 68 F."
+    )
+    start = chunk.index("R303.10")
+    answer = (
+        'Dwelling areas need heat capable of maintaining 68 F '
+        '<cite source="1">room temperature of not less than 68 F</cite>.'
+    )
+    source = _source(number=1, chunk=chunk)
+    source["metadata"] = {
+        "hierarchy_index_inline": [
+            {
+                "hierarchy_node_id": "R303",
+                "label": "R303",
+                "title": "LIGHT, VENTILATION AND HEATING",
+                "node_type": "section",
+                "heading_path": ["R303"],
+                "depth": 1,
+                "char_start": 0,
+                "char_end": len(chunk),
+                "page_start": 99,
+                "page_end": 99,
+            },
+            {
+                "hierarchy_node_id": "R303.10",
+                "label": "R303.10",
+                "title": "Required heating",
+                "node_type": "subsection",
+                "heading_path": ["R303", "R303.10"],
+                "depth": 2,
+                "char_start": start,
+                "char_end": len(chunk),
+                "page_start": 99,
+                "page_end": 99,
+            },
+        ]
+    }
+
+    result = normalize_answer_citations(answer, [source])
+
+    cited = result.sources[0]["cited_hierarchy_node"]
+    assert cited["hierarchy_node_id"] == "R303.10"
+    assert cited["title"] == "Required heating"
+    assert result.sources[0]["evidence_spans"][0]["hierarchy_node_id"] == "R303.10"

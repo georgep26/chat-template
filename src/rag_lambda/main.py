@@ -217,6 +217,8 @@ def main(event_body: Dict[str, Any]) -> Dict[str, Any]:
                     score=source_dict.get("score", 0.0),
                     chunk=source_dict.get("chunk", ""),
                     cited_quotes=source_dict.get("cited_quotes", []),
+                    cited_hierarchy_node=source_dict.get("cited_hierarchy_node"),
+                    evidence_spans=source_dict.get("evidence_spans", []),
                     quote_verified=source_dict.get("quote_verified", True),
                     metadata=source_dict.get("metadata", {}),
                 )

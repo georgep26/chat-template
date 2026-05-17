@@ -23,6 +23,12 @@ from knowledge.artifact_fetch import (
 from knowledge.chunk_read import ChunkReadStore, create_chunk_read_store
 from knowledge.document_read import DocumentReadStore, create_document_read_store
 from knowledge.filters import FilterError
+from knowledge.hierarchy_fetch import (
+    HierarchyFetchError,
+    fetch_hierarchy,
+    find_hierarchy_node,
+    summarize_hierarchy_nodes,
+)
 from knowledge.raw_url import (
     DEFAULT_TTL_SECONDS,
     MAX_TTL_SECONDS,
@@ -37,7 +43,10 @@ from utils.logger import get_logger
 from .api.models import (
     ChunkDetail,
     ChunkSummary,
+    GetDocumentHierarchyResponse,
     GetChunkResponse,
+    GetHierarchyNodeResponse,
+    HierarchyNodeSummary,
     ListChunksResponse,
     RawUrlResponse,
     SearchRequest,
@@ -65,6 +74,10 @@ _CATALOG_ACCESS_TIERS = ("public", "internal")
 
 
 _DOCUMENT_CHUNKS_PATTERN = re.compile(r"^/documents/([^/]+)/chunks$")
+_DOCUMENT_HIERARCHY_PATTERN = re.compile(r"^/documents/([^/]+)/hierarchy$")
+_DOCUMENT_HIERARCHY_NODE_PATTERN = re.compile(
+    r"^/documents/([^/]+)/hierarchy-nodes/([^/]+)$"
+)
 _DOCUMENT_RAW_URL_PATTERN = re.compile(r"^/documents/([^/]+)/raw-url$")
 _CHUNK_PATTERN = re.compile(r"^/chunks/([^/]+)$")
 
@@ -207,6 +220,16 @@ def _parse_int(
 def _route(method: str, path: str) -> Optional[Dict[str, Any]]:
     if path == "/search" and method == "POST":
         return {"name": "search"}
+    hierarchy_match = _DOCUMENT_HIERARCHY_PATTERN.match(path)
+    if hierarchy_match and method == "GET":
+        return {"name": "get_hierarchy", "document_id": hierarchy_match.group(1)}
+    hierarchy_node_match = _DOCUMENT_HIERARCHY_NODE_PATTERN.match(path)
+    if hierarchy_node_match and method == "GET":
+        return {
+            "name": "get_hierarchy_node",
+            "document_id": hierarchy_node_match.group(1),
+            "hierarchy_node_id": hierarchy_node_match.group(2),
+        }
     raw_url_match = _DOCUMENT_RAW_URL_PATTERN.match(path)
     if raw_url_match and method == "GET":
         return {"name": "get_raw_url", "document_id": raw_url_match.group(1)}
@@ -380,6 +403,205 @@ def _handle_get_raw_url(
     return json_response(200, response.model_dump())
 
 
+def _load_authorized_hierarchy(
+    *,
+    document_id: str,
+    tenant_id: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Load an authorized document row and its hierarchy payload."""
+    row = _get_document_store().get_document(
+        document_id=document_id,
+        tenant_id=tenant_id,
+        access_tiers=list(_CATALOG_ACCESS_TIERS),
+    )
+    if row is None:
+        raise KeyError("document_not_found")
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    hierarchy_location = metadata.get("hierarchy_location") or row.get("hierarchy_location")
+    if not hierarchy_location:
+        raise FileNotFoundError("hierarchy_not_available")
+    fetched = fetch_hierarchy(
+        location=hierarchy_location,
+        expected_bucket=_get_document_bucket(),
+        max_bytes=_ARTIFACT_MAX_BYTES * 4,
+    )
+    return row, fetched.payload
+
+
+def _handle_get_hierarchy(
+    event: Dict[str, Any], document_id: str, tenant_id: str
+) -> Dict[str, Any]:
+    qs = event.get("queryStringParameters") or {}
+    if not isinstance(qs, dict):
+        qs = {}
+    depth = _parse_int(qs.get("depth"), default=3, minimum=1, maximum=10)
+    try:
+        row, payload = _load_authorized_hierarchy(
+            document_id=document_id,
+            tenant_id=tenant_id,
+        )
+    except KeyError:
+        return json_response(404, {"error": "DocumentNotFound", "detail": "Document not found."})
+    except FileNotFoundError:
+        return json_response(
+            404,
+            {"error": "HierarchyNotFound", "detail": "Document hierarchy is not available."},
+        )
+    except HierarchyFetchError as exc:
+        log.warning("Hierarchy fetch failed for document %s: %s", document_id, exc)
+        return json_response(
+            502,
+            {"error": "HierarchyFetchError", "detail": "Could not fetch hierarchy."},
+        )
+
+    response = GetDocumentHierarchyResponse(
+        document_id=document_id,
+        document_title=row.get("document_title"),
+        profile=payload.get("profile"),
+        nodes=[
+            HierarchyNodeSummary(**node)
+            for node in summarize_hierarchy_nodes(payload, depth=depth)
+        ],
+    )
+    return json_response(200, response.model_dump())
+
+
+def _handle_get_hierarchy_node(
+    document_id: str,
+    hierarchy_node_id: str,
+    tenant_id: str,
+) -> Dict[str, Any]:
+    try:
+        row, payload = _load_authorized_hierarchy(
+            document_id=document_id,
+            tenant_id=tenant_id,
+        )
+    except KeyError:
+        return json_response(404, {"error": "DocumentNotFound", "detail": "Document not found."})
+    except FileNotFoundError:
+        return json_response(
+            404,
+            {"error": "HierarchyNotFound", "detail": "Document hierarchy is not available."},
+        )
+    except HierarchyFetchError as exc:
+        log.warning("Hierarchy fetch failed for document %s: %s", document_id, exc)
+        return json_response(
+            502,
+            {"error": "HierarchyFetchError", "detail": "Could not fetch hierarchy."},
+        )
+
+    node = find_hierarchy_node(payload, hierarchy_node_id)
+    if node is None:
+        return json_response(
+            404,
+            {"error": "HierarchyNodeNotFound", "detail": "Hierarchy node not found."},
+        )
+
+    containing_chunk = _find_chunk_for_hierarchy_node(
+        document_id=document_id,
+        hierarchy_node_id=hierarchy_node_id,
+        tenant_id=tenant_id,
+    )
+    content = ""
+    containing_chunk_id = None
+    content_type = "text/markdown"
+    if containing_chunk is not None:
+        containing_chunk_id = containing_chunk.get("chunk_id")
+        content_type = containing_chunk.get("content_type") or "text/markdown"
+        try:
+            artifact = fetch_chunk_content(
+                location=containing_chunk.get("location") or "",
+                expected_bucket=_get_document_bucket(),
+                max_bytes=_ARTIFACT_MAX_BYTES,
+            )
+            content = _slice_content_for_node(
+                content=artifact.content,
+                chunk=containing_chunk,
+                hierarchy_node_id=hierarchy_node_id,
+            )
+        except ArtifactFetchError as exc:
+            log.warning(
+                "Chunk artifact fetch failed for hierarchy node %s: %s",
+                hierarchy_node_id,
+                exc,
+            )
+            return json_response(
+                502,
+                {
+                    "error": "ArtifactFetchError",
+                    "detail": "Could not fetch hierarchy node content.",
+                },
+            )
+
+    response = GetHierarchyNodeResponse(
+        document_id=document_id,
+        hierarchy_node_id=hierarchy_node_id,
+        label=node.get("label"),
+        title=node.get("title"),
+        heading_path=node.get("heading_path") if isinstance(node.get("heading_path"), list) else [],
+        page_start=node.get("page_start"),
+        page_end=node.get("page_end"),
+        containing_chunk_id=containing_chunk_id,
+        content_type=content_type,
+        content=content,
+        source_location=row.get("source_location") or row.get("location") or "",
+    )
+    return json_response(200, response.model_dump())
+
+
+def _find_chunk_for_hierarchy_node(
+    *,
+    document_id: str,
+    hierarchy_node_id: str,
+    tenant_id: str,
+) -> Optional[Dict[str, Any]]:
+    rows = _get_store().list_chunks_for_document(
+        document_id=document_id,
+        tenant_id=tenant_id,
+        limit=200,
+        offset=0,
+    )
+    fallback = None
+    for row in rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if row.get("hierarchy_node_id") == hierarchy_node_id:
+            return row
+        if metadata.get("hierarchy_node_id") == hierarchy_node_id:
+            return row
+        custom = metadata.get("custom_metadata") if isinstance(metadata.get("custom_metadata"), dict) else {}
+        if custom.get("hierarchy_node_id") == hierarchy_node_id:
+            return row
+        index = metadata.get("hierarchy_index_inline") or custom.get("hierarchy_index_inline")
+        if isinstance(index, list):
+            for item in index:
+                if isinstance(item, dict) and item.get("hierarchy_node_id") == hierarchy_node_id:
+                    return row
+        if fallback is None:
+            fallback = row
+    return fallback
+
+
+def _slice_content_for_node(
+    *,
+    content: str,
+    chunk: Dict[str, Any],
+    hierarchy_node_id: str,
+) -> str:
+    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    custom = metadata.get("custom_metadata") if isinstance(metadata.get("custom_metadata"), dict) else {}
+    index = metadata.get("hierarchy_index_inline") or custom.get("hierarchy_index_inline")
+    if not isinstance(index, list):
+        return content
+    for item in index:
+        if not isinstance(item, dict) or item.get("hierarchy_node_id") != hierarchy_node_id:
+            continue
+        start = item.get("char_start")
+        end = item.get("char_end")
+        if isinstance(start, int) and isinstance(end, int) and 0 <= start < end <= len(content):
+            return content[start:end]
+    return content
+
+
 # Lambda entrypoint ------------------------------------------------------
 
 
@@ -420,6 +642,14 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     try:
         if route["name"] == "search":
             return _handle_search(event, tenant_id)
+        if route["name"] == "get_hierarchy":
+            return _handle_get_hierarchy(event, route["document_id"], tenant_id)
+        if route["name"] == "get_hierarchy_node":
+            return _handle_get_hierarchy_node(
+                route["document_id"],
+                route["hierarchy_node_id"],
+                tenant_id,
+            )
         if route["name"] == "list_chunks":
             return _handle_list_chunks(event, route["document_id"], tenant_id)
         if route["name"] == "get_chunk":

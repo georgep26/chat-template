@@ -15,6 +15,7 @@ from knowledge.artifact_fetch import (
     FetchedArtifact,
     fetch_chunk_content,
 )
+from knowledge.hierarchy_fetch import FetchedHierarchy
 from knowledge_api_lambda import main as knowledge_main
 from langchain_core.documents import Document
 
@@ -757,3 +758,114 @@ def test_get_raw_url_401_when_no_auth(monkeypatch):
     event["headers"] = {}
     response = knowledge_main.lambda_handler(event, None)
     assert response["statusCode"] == 401
+
+
+# ---------------------------------------------------------------------------
+# /documents/{id}/hierarchy and /hierarchy-nodes/{node_id}
+# ---------------------------------------------------------------------------
+
+
+def _hierarchy_payload() -> Dict[str, Any]:
+    return {
+        "document_id": "doc-1",
+        "profile": "building_code",
+        "nodes": [
+            {
+                "hierarchy_node_id": "R303",
+                "label": "R303",
+                "title": "LIGHT, VENTILATION AND HEATING",
+                "node_type": "section",
+                "heading_path": ["R303"],
+                "page_start": 98,
+                "page_end": 99,
+                "token_estimate": 500,
+                "children": ["R303.10"],
+            },
+            {
+                "hierarchy_node_id": "R303.10",
+                "label": "R303.10",
+                "title": "Required heating",
+                "node_type": "subsection",
+                "heading_path": ["R303", "R303.10"],
+                "page_start": 99,
+                "page_end": 99,
+                "token_estimate": 120,
+                "children": [],
+            },
+        ],
+    }
+
+
+def _document_row_with_hierarchy() -> Dict[str, Any]:
+    row = _document_row()
+    row["metadata"] = {
+        "hierarchy_location": "s3://kb-bucket/kb_raw/doc-1/document_hierarchy.json"
+    }
+    return row
+
+
+def _patch_hierarchy_fetch(monkeypatch):
+    def fake_fetch(*, location, expected_bucket, max_bytes, **kwargs):
+        del max_bytes, kwargs
+        assert expected_bucket == "kb-bucket"
+        assert location.endswith("document_hierarchy.json")
+        return FetchedHierarchy(
+            payload=_hierarchy_payload(),
+            bucket="kb-bucket",
+            key="kb_raw/doc-1/document_hierarchy.json",
+            content_length=100,
+        )
+
+    monkeypatch.setattr(knowledge_main, "fetch_hierarchy", fake_fetch)
+
+
+def test_get_document_hierarchy_returns_authorized_summary(monkeypatch):
+    docs = FakeDocumentReadStore([_document_row_with_hierarchy()])
+    _patch_store(monkeypatch, FakeChunkReadStore(), document_store=docs)
+    _patch_auth(monkeypatch)
+    _patch_hierarchy_fetch(monkeypatch)
+
+    event = _http_event("GET", "/documents/doc-1/hierarchy", query={"depth": "2"})
+    response = knowledge_main.lambda_handler(event, None)
+    body = json.loads(response["body"])
+
+    assert response["statusCode"] == 200
+    assert body["profile"] == "building_code"
+    assert [node["hierarchy_node_id"] for node in body["nodes"]] == ["R303", "R303.10"]
+
+
+def test_get_hierarchy_node_returns_chunk_content(monkeypatch):
+    docs = FakeDocumentReadStore([_document_row_with_hierarchy()])
+    chunk = _chunk_row(chunk_id="c1")
+    chunk["metadata"] = {
+        "custom_metadata": {
+            "hierarchy_index_inline": [
+                {"hierarchy_node_id": "R303.10", "char_start": 0, "char_end": 25}
+            ]
+        }
+    }
+    store = FakeChunkReadStore([chunk])
+    _patch_store(monkeypatch, store, document_store=docs)
+    _patch_auth(monkeypatch)
+    _patch_hierarchy_fetch(monkeypatch)
+
+    monkeypatch.setattr(
+        knowledge_main,
+        "fetch_chunk_content",
+        lambda **kwargs: FetchedArtifact(
+            content="R303.10 Required heating.",
+            bucket="kb-bucket",
+            key="kb_index/doc-1/pages/doc-1_chunk_001.md",
+            content_length=24,
+            content_type="text/markdown",
+        ),
+    )
+
+    event = _http_event("GET", "/documents/doc-1/hierarchy-nodes/R303.10")
+    response = knowledge_main.lambda_handler(event, None)
+    body = json.loads(response["body"])
+
+    assert response["statusCode"] == 200
+    assert body["hierarchy_node_id"] == "R303.10"
+    assert body["containing_chunk_id"] == "c1"
+    assert body["content"] == "R303.10 Required heating."

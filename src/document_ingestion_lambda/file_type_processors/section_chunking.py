@@ -190,7 +190,10 @@ def detect_section_boundaries(
     raw_matches: list[tuple[int, str, str]] = []  # (start_offset, section_id, title)
     for match in pattern.finditer(joined.text):
         section_id = match.group("id")
-        title = match.group("title").strip()
+        raw_title = match.group("title").strip()
+        if _looks_like_toc_entry(raw_title):
+            continue
+        title = _clean_heading_title(raw_title)
         if not section_id or not title:
             continue
         # Belt-and-suspenders: even with TOC pages skipped, individual
@@ -248,6 +251,23 @@ def detect_section_boundaries(
 def _title_word_count(title: str) -> int:
     """Count whitespace-separated tokens, ignoring trailing punctuation noise."""
     return len([w for w in re.split(r"\s+", title.strip()) if w])
+
+
+def _clean_heading_title(title: str) -> str:
+    """Extract the heading title when body text spills onto the same line.
+
+    PDF extraction often yields lines like
+    ``R303.10 Required heating. Where the winter design...``. The title is
+    only ``Required heating``; the rest belongs to the section body. Strip at
+    the first sentence terminator when there is trailing prose.
+    """
+    title = title.strip()
+    if not title:
+        return title
+    sentence_match = re.match(r"^(?P<title>[^.:;]{1,120}?)[.:;]\s+\S", title)
+    if sentence_match:
+        return sentence_match.group("title").strip()
+    return title.rstrip(".:;").strip()
 
 
 def _looks_like_toc_entry(title: str) -> bool:

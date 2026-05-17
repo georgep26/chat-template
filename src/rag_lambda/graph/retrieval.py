@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from knowledge.vector_search import VectorSearchResult, search
+from knowledge.source_enrichment import enrich_vector_results
 
 from .state import MessagesState
 from ..tracing import get_trace_collector
@@ -31,11 +32,43 @@ def format_source_metadata(metadata: Dict[str, Any]) -> str:
     """Format all available source metadata for an answer prompt source block."""
     metadata_lines = []
     for key in sorted(metadata):
+        if key == "hierarchy_index_inline":
+            continue
         value = metadata[key]
         if value is None:
             continue
         metadata_lines.append(f"{key}: {_format_metadata_value(value)}")
     return "\n".join(metadata_lines) if metadata_lines else "No metadata available."
+
+
+def format_hierarchy_index(metadata: Dict[str, Any]) -> str:
+    """Format compact hierarchy-index metadata for prompt context."""
+    raw_index = metadata.get("hierarchy_index_inline")
+    if not isinstance(raw_index, list) or not raw_index:
+        return ""
+    lines = []
+    for item in raw_index:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label") or item.get("hierarchy_node_id")
+        title = item.get("title") or ""
+        page_start = item.get("page_start")
+        page_end = item.get("page_end")
+        char_start = item.get("char_start")
+        char_end = item.get("char_end")
+        page_text = (
+            f"pages {page_start}-{page_end}"
+            if page_start and page_end and page_start != page_end
+            else f"page {page_start}"
+            if page_start
+            else "page unknown"
+        )
+        lines.append(
+            f"- {label} {title}, {page_text}, chars {char_start}-{char_end}"
+        )
+    if not lines:
+        return ""
+    return "<hierarchy_index>\n" + "\n".join(lines) + "\n</hierarchy_index>"
 
 
 def format_retrieved_context(docs: List[Document]) -> str:
@@ -47,6 +80,8 @@ def format_retrieved_context(docs: List[Document]) -> str:
     for index, doc in enumerate(docs, start=1):
         metadata = doc.metadata or {}
         chunk = doc.page_content or ""
+        hierarchy_index = format_hierarchy_index(metadata)
+        hierarchy_lines = [hierarchy_index] if hierarchy_index else []
         blocks.append(
             "\n".join(
                 [
@@ -55,6 +90,7 @@ def format_retrieved_context(docs: List[Document]) -> str:
                     "<metadata>",
                     format_source_metadata(metadata),
                     "</metadata>",
+                    *hierarchy_lines,
                     "<chunk>",
                     chunk,
                     "</chunk>",
@@ -106,6 +142,14 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
         user_filter=user_filter,
         top_k=top_k,
     )
+    config = config or {}
+    app_config = config.get("configurable", {})
+    if app_config:
+        results = enrich_vector_results(
+            results=results,
+            config=app_config,
+            tenant_id=tenant_id,
+        )
     docs = [r.document for r in results]
 
     state["messages"].append(

@@ -21,6 +21,7 @@ from document_ingestion_lambda.triage import (
     PdfTriageResult,
     TriageConfig,
     multimodal_triage,
+    page_observations_as_dicts,
     triage_summary_dict,
 )
 
@@ -86,6 +87,15 @@ class PdfTextExtractionResult:
 
 
 @dataclass
+class PdfExtraArtifact:
+    """Additional S3 object generated while building a PDF chunk."""
+
+    key: str
+    body: bytes
+    content_type: str
+
+
+@dataclass
 class PdfChunkArtifact:
     """S3 artifact and metadata generated for one PDF chunk."""
 
@@ -94,6 +104,7 @@ class PdfChunkArtifact:
     markdown: str
     sidecar_metadata: dict[str, Any]
     catalog_metadata: dict[str, Any]
+    extra_objects: list[PdfExtraArtifact] = field(default_factory=list)
 
 
 class PdfProcessor:
@@ -139,26 +150,25 @@ class PdfProcessor:
         self,
         *,
         pdf_path: Path,
-        triage: PdfTriageResult,
+        embedded_text_extraction: PdfTextExtractionResult,
+        text_quality_report: Any,
         raw_bucket: str,
         raw_key: str,
     ) -> tuple[PdfTextExtractionResult, dict[str, Any] | None]:
-        """Return text-extraction result, switching to Textract OCR when triage signals it.
+        """Return text extraction, switching to Textract OCR when backend checks recommend it.
 
-        The fallback ordering preserves the existing pypdf path's behavior
-        when triage is skipped or fails — OCR only runs when the multimodal
-        pass said this document needs it.
+        The multimodal triage model only extracts visible page observations.
+        OCR decisions are made by deterministic text-quality checks or an
+        explicit ``pdf_always_ocr`` config override.
         """
         cfg = self._ingestion_config
         ocr_enabled = _as_bool(cfg.get("pdf_ocr_enabled"), default=True)
-        ocr_required = (
-            ocr_enabled
-            and triage is not None
-            and triage.triage_status == "completed"
-            and bool(triage.ocr_required)
+        always_ocr = _as_bool(cfg.get("pdf_always_ocr"), default=False)
+        ocr_required = ocr_enabled and (
+            always_ocr or bool(getattr(text_quality_report, "ocr_recommended", False))
         )
         if not ocr_required:
-            return extract_pdf_text_pages(pdf_path), None
+            return embedded_text_extraction, None
 
         from document_ingestion_lambda.file_type_processors.ocr import (
             OcrConfig,
@@ -168,7 +178,7 @@ class PdfProcessor:
         textract_client = self._get_textract_client()
         if textract_client is None:
             return (
-                extract_pdf_text_pages(pdf_path),
+                embedded_text_extraction,
                 {"status": "skipped", "warnings": ["textract_client_unavailable"]},
             )
         config = OcrConfig(
@@ -198,6 +208,7 @@ class PdfProcessor:
         raw_key: str,
         document_metadata: dict[str, Any],
         destination_bucket: str,
+        hierarchy: Any | None = None,
     ) -> tuple[list["PdfChunkArtifact"], dict[str, Any]]:
         """Run a single Textract job and build both table + figure chunks.
 
@@ -272,6 +283,8 @@ class PdfProcessor:
                 bedrock_client=bedrock_client,
                 config=table_config,
             )
+            if hierarchy is not None:
+                _attach_parent_hierarchy_to_asset_artifacts(table_artifacts, hierarchy)
             artifacts.extend(table_artifacts)
             diagnostics["table_extraction"] = {
                 "status": table_result.status,
@@ -300,6 +313,8 @@ class PdfProcessor:
                 s3_client=self._s3,
                 config=figure_config,
             )
+            if hierarchy is not None:
+                _attach_parent_hierarchy_to_asset_artifacts(figure_artifacts, hierarchy)
             artifacts.extend(figure_artifacts)
             diagnostics["figure_extraction"] = {
                 "status": figure_result.status,
@@ -315,61 +330,49 @@ class PdfProcessor:
         self,
         *,
         text_extraction: PdfTextExtractionResult,
-        triage: PdfTriageResult,
+        hierarchy_build: Any | None,
         document_metadata: dict[str, Any],
         destination_bucket: str,
     ) -> tuple[list["PdfChunkArtifact"], str]:
-        """Decide chunking strategy and emit chunks.
-
-        Returns (artifacts, strategy_name). When the triage signals a high-
-        confidence hierarchy and the regex pass finds enough headings, we
-        emit section-based chunks; otherwise we fall back to the existing
-        page chunker.
-        """
-        # Lazy import: section_chunking imports symbols from this module, so
-        # we avoid a circular import at module load time.
-        from document_ingestion_lambda.file_type_processors.section_chunking import (
-            SectionDetectionConfig,
-            build_section_chunk_artifacts,
-            detect_section_boundaries,
-            should_use_section_chunking,
-        )
-
+        """Decide chunking strategy and emit chunks."""
         cfg = self._ingestion_config
-        section_enabled = _as_bool(cfg.get("pdf_section_chunking_enabled"), default=True)
         embedding_token_limit = int(cfg["pdf_embedding_chunk_token_limit_titan_v2"])
         embedding_char_limit = int(cfg["pdf_embedding_chunk_char_limit_titan_v2"])
 
-        if section_enabled and triage and triage.triage_status == "completed":
-            detection_config = SectionDetectionConfig(
-                hierarchy_kind=triage.hierarchy_kind or "page_only",
-                min_section_chars=int(cfg.get("pdf_section_min_chars") or 40),
-                min_boundaries=int(cfg.get("pdf_section_min_boundaries") or 5),
-                embedding_chunk_token_limit=embedding_token_limit,
-                skip_pages=tuple(triage.toc_pages or ()),
+        hierarchy_enabled = _as_bool(cfg.get("pdf_hierarchy_chunking_enabled"), default=True)
+        if hierarchy_enabled and hierarchy_build is not None and hierarchy_build.hierarchy.nodes:
+            from document_ingestion_lambda.file_type_processors.hierarchy_chunking import (
+                HierarchyChunkingConfig,
+                build_hierarchy_chunk_artifacts,
             )
-            boundaries, joined = detect_section_boundaries(
-                text_extraction.pages, config=detection_config
-            )
-            min_confidence = float(cfg.get("pdf_section_min_confidence") or 0.70)
-            if should_use_section_chunking(
-                triage,
-                boundaries,
-                min_boundaries=detection_config.min_boundaries,
-                min_confidence=min_confidence,
-            ):
-                artifacts = build_section_chunk_artifacts(
-                    text_extraction=text_extraction,
-                    boundaries=boundaries,
-                    joined=joined,
-                    document_metadata=document_metadata,
-                    destination_bucket=destination_bucket,
-                    index_prefix=cfg["index_prefix"],
+
+            artifacts = build_hierarchy_chunk_artifacts(
+                joined_text=hierarchy_build.joined_text,
+                hierarchy=hierarchy_build.hierarchy,
+                document_metadata=document_metadata,
+                destination_bucket=destination_bucket,
+                index_prefix=cfg["index_prefix"],
+                raw_prefix=cfg["raw_prefix"],
+                config=HierarchyChunkingConfig(
+                    target_min_tokens=int(cfg.get("pdf_hierarchy_target_min_tokens") or 300),
+                    target_max_tokens=int(cfg.get("pdf_hierarchy_target_max_tokens") or 3000),
+                    hard_max_tokens=int(cfg.get("pdf_hierarchy_hard_max_tokens") or 7000),
+                    merge_small_leaf_nodes=_as_bool(
+                        cfg.get("pdf_hierarchy_merge_small_leaf_nodes"), default=True
+                    ),
+                    split_large_nodes_by_children=_as_bool(
+                        cfg.get("pdf_hierarchy_split_large_nodes_by_children"), default=True
+                    ),
+                    store_index=_as_bool(cfg.get("pdf_hierarchy_store_index"), default=True),
+                    inline_index_max_nodes=int(
+                        cfg.get("pdf_hierarchy_inline_index_max_nodes") or 40
+                    ),
                     embedding_chunk_token_limit=embedding_token_limit,
                     embedding_chunk_char_limit=embedding_char_limit,
-                )
-                if artifacts:
-                    return artifacts, "pdf_section_text"
+                ),
+            )
+            if artifacts:
+                return artifacts, "adaptive_hierarchy"
 
         # Fall back to the deterministic page chunker.
         artifacts = build_page_chunk_artifacts(
@@ -421,9 +424,14 @@ class PdfProcessor:
             region=str(cfg.get("pdf_triage_region") or "us-east-1"),
             front_page_sample_count=int(cfg.get("pdf_front_page_sample_count") or 5),
             random_page_sample_count=int(cfg.get("pdf_random_page_sample_count") or 5),
+            full_page_triage_enabled=_as_bool(
+                cfg.get("pdf_full_page_triage_enabled"), default=False
+            ),
             ocr_threshold=float(cfg.get("pdf_triage_ocr_threshold") or 0.30),
             hierarchy_threshold=float(cfg.get("pdf_triage_hierarchy_threshold") or 0.50),
             temperature=float(cfg.get("pdf_triage_temperature") or 0.0),
+            max_tokens_per_page=int(cfg.get("pdf_triage_max_tokens_per_page") or 2048),
+            render_scale=float(cfg.get("pdf_triage_render_scale") or 2.0),
         )
 
     def process(
@@ -506,17 +514,170 @@ class PdfProcessor:
                 },
             }
 
+            triage_key = join_s3_key(
+                self._ingestion_config["raw_prefix"],
+                document_id,
+                "triage",
+                "page_observations.json",
+            )
+            text_quality_key = join_s3_key(
+                self._ingestion_config["raw_prefix"],
+                document_id,
+                "triage",
+                "text_quality_report.json",
+            )
+            hierarchy_key = join_s3_key(
+                self._ingestion_config["raw_prefix"],
+                document_id,
+                "document_hierarchy.json",
+            )
+
+            embedded_text_extraction = extract_pdf_text_pages(tmp_path)
+            from document_ingestion_lambda.file_type_processors.text_quality import (
+                build_text_quality_report,
+            )
+
+            text_quality_report = build_text_quality_report(
+                text_extraction=embedded_text_extraction,
+                triage=triage,
+                page_mismatch_threshold=float(
+                    self._ingestion_config.get("pdf_triage_text_mismatch_threshold") or 0.50
+                ),
+                document_mismatch_threshold=float(
+                    self._ingestion_config.get("pdf_triage_document_text_mismatch_threshold")
+                    or 0.30
+                ),
+                min_visible_chars=int(
+                    self._ingestion_config.get("pdf_text_quality_min_visible_chars")
+                    or self._ingestion_config.get("pdf_text_available_min_chars")
+                    or 100
+                ),
+            )
+
             text_extraction, ocr_diagnostics = self._extract_text(
                 pdf_path=tmp_path,
-                triage=triage,
+                embedded_text_extraction=embedded_text_extraction,
+                text_quality_report=text_quality_report,
                 raw_bucket=destination_bucket,
                 raw_key=raw_key,
             )
             if ocr_diagnostics is not None:
                 metadata["processing"]["ocr"] = ocr_diagnostics
+
+            hierarchy_build = None
+            profile_diagnostics: dict[str, Any] = {"profile_id": "plain_document"}
+            if _as_bool(self._ingestion_config.get("pdf_hierarchy_enabled"), default=True):
+                from document_ingestion_lambda.file_type_processors.hierarchy import (
+                    build_deterministic_hierarchy,
+                )
+                from document_ingestion_lambda.file_type_processors.hierarchy_review import (
+                    HierarchyReviewConfig,
+                    review_hierarchy,
+                    should_review_hierarchy,
+                )
+                from document_ingestion_lambda.file_type_processors.parser_profiles import (
+                    select_parser_profile,
+                )
+
+                profile, profile_diagnostics = select_parser_profile(
+                    title=title,
+                    filename=filename,
+                    triage=triage,
+                )
+                hierarchy_build = build_deterministic_hierarchy(
+                    document_metadata=metadata,
+                    text_extraction=text_extraction,
+                    triage=triage,
+                    profile=profile,
+                    min_section_chars=int(
+                        self._ingestion_config.get("pdf_section_min_chars") or 40
+                    ),
+                )
+                review_config = HierarchyReviewConfig(
+                    mode=str(self._ingestion_config.get("hierarchy_review_model_mode") or "never"),
+                    model_id=str(
+                        self._ingestion_config.get("hierarchy_review_model_id")
+                        or "us.anthropic.claude-sonnet-4-6"
+                    ),
+                    region=str(
+                        self._ingestion_config.get("hierarchy_review_region")
+                        or self._ingestion_config.get("pdf_triage_region")
+                        or "us-east-1"
+                    ),
+                    min_confidence=float(
+                        self._ingestion_config.get("hierarchy_review_min_confidence")
+                        or 0.80
+                    ),
+                    temperature=float(
+                        self._ingestion_config.get("hierarchy_review_temperature")
+                        or 0.0
+                    ),
+                    max_tokens=int(
+                        self._ingestion_config.get("hierarchy_review_max_tokens")
+                        or 8192
+                    ),
+                )
+                bedrock_client = self._get_bedrock_client()
+                if bedrock_client is not None and should_review_hierarchy(
+                    hierarchy_build.hierarchy,
+                    config=review_config,
+                ):
+                    try:
+                        review_result = review_hierarchy(
+                            hierarchy=hierarchy_build.hierarchy,
+                            triage_payload={"page_observations": page_observations_as_dicts(triage)},
+                            text_quality_payload=text_quality_report.to_dict(),
+                            profile_payload=profile_diagnostics,
+                            bedrock_client=bedrock_client,
+                            config=review_config,
+                        )
+                        hierarchy_build.hierarchy = review_result.hierarchy
+                        hierarchy_build.hierarchy.generation["review"] = {
+                            "status": review_result.status,
+                            "issues": review_result.issues,
+                            "warnings": review_result.warnings,
+                        }
+                    except Exception as exc:
+                        hierarchy_build.hierarchy.generation["review"] = {
+                            "status": "failed",
+                            "message": f"{type(exc).__name__}: {exc}",
+                        }
+
+                hierarchy_location = f"s3://{destination_bucket}/{hierarchy_key}"
+                metadata["hierarchy_available"] = bool(hierarchy_build.hierarchy.nodes)
+                metadata["hierarchy_location"] = hierarchy_location
+                metadata["hierarchy_profile"] = hierarchy_build.hierarchy.profile
+                metadata["hierarchy_confidence"] = hierarchy_build.hierarchy.generation.get(
+                    "confidence"
+                )
+                metadata["hierarchy_source"] = hierarchy_build.hierarchy.generation.get(
+                    "source",
+                    "deterministic",
+                )
+                metadata["available_lookup_modes"] = [
+                    "semantic_search",
+                    "chunk_fetch",
+                    "hierarchy_fetch",
+                    "raw_document_url",
+                ]
+
+            metadata["processing"]["text_quality"] = text_quality_report.to_dict()
+            metadata["processing"]["parser_profile"] = profile_diagnostics
+            if hierarchy_build is not None:
+                metadata["processing"]["hierarchy"] = {
+                    "status": hierarchy_build.hierarchy.generation.get("status"),
+                    "source": hierarchy_build.hierarchy.generation.get(
+                        "source",
+                        "deterministic",
+                    ),
+                    "hierarchy_location": f"s3://{destination_bucket}/{hierarchy_key}",
+                    "node_count": len(hierarchy_build.hierarchy.nodes),
+                    "validation": hierarchy_build.hierarchy.generation.get("validation"),
+                }
+
             chunk_artifacts, chunking_strategy = self._build_chunk_artifacts(
                 text_extraction=text_extraction,
-                triage=triage,
+                hierarchy_build=hierarchy_build,
                 document_metadata=metadata,
                 destination_bucket=destination_bucket,
             )
@@ -527,8 +688,41 @@ class PdfProcessor:
                 raw_key=raw_key,
                 document_metadata=metadata,
                 destination_bucket=destination_bucket,
+                hierarchy=hierarchy_build.hierarchy if hierarchy_build else None,
             )
             chunk_artifacts.extend(asset_artifacts)
+
+            self._s3.put_object(
+                Bucket=destination_bucket,
+                Key=triage_key,
+                Body=json.dumps(
+                    {"page_observations": page_observations_as_dicts(triage)},
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            self._s3.put_object(
+                Bucket=destination_bucket,
+                Key=text_quality_key,
+                Body=json.dumps(
+                    text_quality_report.to_dict(),
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            if hierarchy_build is not None:
+                self._s3.put_object(
+                    Bucket=destination_bucket,
+                    Key=hierarchy_key,
+                    Body=json.dumps(
+                        hierarchy_build.hierarchy.to_dict(),
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                    ContentType="application/json",
+                )
 
             for artifact in chunk_artifacts:
                 self._s3.put_object(
@@ -547,6 +741,13 @@ class PdfProcessor:
                     ).encode("utf-8"),
                     ContentType="application/json",
                 )
+                for extra_object in artifact.extra_objects:
+                    self._s3.put_object(
+                        Bucket=destination_bucket,
+                        Key=extra_object.key,
+                        Body=extra_object.body,
+                        ContentType=extra_object.content_type,
+                    )
 
             metadata["processing"]["pdf_text_extraction"] = {
                 "extraction_status": text_extraction.extraction_status,
@@ -753,6 +954,38 @@ def build_page_chunk_artifacts(
     return artifacts
 
 
+def _attach_parent_hierarchy_to_asset_artifacts(
+    artifacts: list[PdfChunkArtifact],
+    hierarchy: Any,
+) -> None:
+    """Attach nearest hierarchy metadata to table/figure chunk artifacts."""
+    from document_ingestion_lambda.file_type_processors.hierarchy import (
+        nearest_hierarchy_node_for_page,
+    )
+
+    for artifact in artifacts:
+        metadata = artifact.catalog_metadata
+        node = nearest_hierarchy_node_for_page(
+            hierarchy=hierarchy,
+            page_number=metadata.get("page_start"),
+        )
+        if node is None:
+            continue
+        metadata["parent_hierarchy_node_id"] = node.hierarchy_node_id
+        metadata["hierarchy_node_id"] = metadata.get("hierarchy_node_id") or node.hierarchy_node_id
+        metadata["hierarchy_profile"] = getattr(hierarchy, "profile", None)
+        metadata["section"] = metadata.get("section") or node.label
+        metadata["chapter"] = metadata.get("chapter") or (
+            node.heading_path[0] if node.heading_path else None
+        )
+        metadata["heading_path"] = metadata.get("heading_path") or "/".join(node.heading_path)
+        custom = metadata.setdefault("custom_metadata", {})
+        if isinstance(custom, dict):
+            custom["parent_hierarchy_node_id"] = node.hierarchy_node_id
+            custom["hierarchy_profile"] = getattr(hierarchy, "profile", None)
+        artifact.sidecar_metadata = build_bedrock_sidecar_metadata(metadata)
+
+
 def _as_bool(value: Any, *, default: bool) -> bool:
     """Coerce config values (str/bool/None) to bool with a sane default."""
     if isinstance(value, bool):
@@ -909,6 +1142,11 @@ def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "summary_location",
         "description",
         "caption",
+        "hierarchy_node_id",
+        "hierarchy_profile",
+        "hierarchy_path",
+        "parent_hierarchy_node_id",
+        "hierarchy_index_location",
     )
     for key in optional_fields:
         value = metadata.get(key)
@@ -943,6 +1181,11 @@ def build_bedrock_sidecar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "summary_location": False,
         "description": True,
         "caption": True,
+        "hierarchy_node_id": True,
+        "hierarchy_profile": True,
+        "hierarchy_path": True,
+        "parent_hierarchy_node_id": True,
+        "hierarchy_index_location": False,
     }
     return {
         "metadataAttributes": {

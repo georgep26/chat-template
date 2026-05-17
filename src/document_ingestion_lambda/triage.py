@@ -1,22 +1,15 @@
-"""Multimodal triage for PDF ingestion.
+"""Multimodal page observation for PDF ingestion.
 
-Renders a representative sample of pages from a PDF and asks a vision-capable
-LLM (default Nova Lite) to answer a small structured-JSON questionnaire per
-page. Per-page answers are aggregated into document-level decisions:
+The multimodal pass renders selected PDF pages and asks a vision-capable model
+to extract observable page facts: visible text, heading candidates, TOC signals,
+tables, and figures. The model does not decide whether OCR is required and does
+not generate the canonical document hierarchy. Those decisions are handled by
+deterministic backend code after triage.
 
-  * does this document need OCR? (the embedded text was missing or unusable)
-  * does this document have a TOC/section hierarchy worth section-chunking?
-  * which pages contain tables or figures?
-
-The output is informational on first ship — :mod:`pdf` records it under
-``processing.triage`` but still falls back to the existing page chunker.
-Later phases consume the decisions to switch chunking strategy and to
-target Textract/figure extraction.
-
-Failure modes always degrade gracefully: if Bedrock is unreachable, the
-PDF can't be rendered, or any individual page call fails, the triage
-returns ``triage_status="failed"`` and the caller continues with the
-deterministic page path.
+Compatibility fields such as ``ocr_required`` and ``has_hierarchy`` remain on
+``PdfTriageResult`` during the migration so older tests and metadata readers can
+continue to inspect summaries, but the PDF processor should not use those
+fields as source-of-truth decisions.
 """
 
 from __future__ import annotations
@@ -24,36 +17,87 @@ from __future__ import annotations
 import json
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-try:  # pragma: no cover - import error reported via PageRenderer.unavailable()
+try:  # pragma: no cover - import error reported via multimodal_triage()
     import pypdfium2 as pdfium
 except ImportError:
     pdfium = None  # type: ignore[assignment]
 
 
-# ---------------------------------------------------------------------------
-# Result + config dataclasses
-# ---------------------------------------------------------------------------
+HierarchyKind = str
+EmbeddedTextQuality = str
 
 
-HierarchyKind = str  # "section_codes" | "chapter_heading" | "page_only" | "unknown"
-EmbeddedTextQuality = str  # "high" | "medium" | "low" | "scanned_image_only" | "unknown"
+@dataclass
+class HeadingCandidate:
+    """A heading-like text span observed on a rendered page."""
+
+    label: str
+    title: str | None = None
+    raw_text: str = ""
+    heading_pattern_type: str | None = None
+    confidence: float | None = None
+
+
+@dataclass
+class PageTableObservation:
+    """A table-like object observed on a rendered page."""
+
+    caption: str | None = None
+    title: str | None = None
+    description: str | None = None
+    bbox: dict[str, float] | None = None
+    confidence: float | None = None
+
+
+@dataclass
+class PageFigureObservation:
+    """A figure-like object observed on a rendered page."""
+
+    caption: str | None = None
+    title: str | None = None
+    description: str | None = None
+    bbox: dict[str, float] | None = None
+    confidence: float | None = None
+
+
+@dataclass
+class PageTriageObservation:
+    """Structured observations extracted from one rendered page."""
+
+    page_number: int
+    raw_visible_text: str = ""
+    likely_document_type: str | None = None
+    heading_candidates: list[HeadingCandidate] = field(default_factory=list)
+    appears_to_be_toc_page: bool = False
+    toc_entries: list[dict[str, Any]] = field(default_factory=list)
+    tables: list[PageTableObservation] = field(default_factory=list)
+    figures: list[PageFigureObservation] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    heading_pattern: str = "unknown"
+    embedded_text_quality: str = "unknown"
+    parse_error: bool = False
 
 
 @dataclass
 class PdfTriageResult:
-    """Aggregated decisions from a multimodal pass over sampled PDF pages.
+    """Aggregated page-observation result.
 
-    ``triage_status`` is the load-bearing field for callers — they should
-    treat any value other than ``"completed"`` as "fall back to the
-    deterministic default path" and not consume the other fields.
+    New code should consume ``page_observations`` and deterministic downstream
+    reports rather than using the compatibility decision fields.
     """
 
     triage_status: str  # "completed" | "skipped" | "failed"
+    page_observations: list[PageTriageObservation] = field(default_factory=list)
+    sampled_pages: list[int] = field(default_factory=list)
+    full_page_triage_enabled: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+    # Compatibility/summary fields. These are derived from observations only.
     ocr_required: bool | None = None
     ocr_confidence: float | None = None
     has_hierarchy: bool | None = None
@@ -62,9 +106,7 @@ class PdfTriageResult:
     toc_pages: list[int] = field(default_factory=list)
     table_pages: list[int] = field(default_factory=list)
     figure_pages: list[int] = field(default_factory=list)
-    sampled_pages: list[int] = field(default_factory=list)
     raw_decisions: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
 
     @classmethod
     def skipped(cls, reason: str) -> "PdfTriageResult":
@@ -77,39 +119,23 @@ class PdfTriageResult:
 
 @dataclass
 class TriageConfig:
-    """Knobs read from app_config.yaml `ingestion:` section.
-
-    Defaults intentionally mirror the values committed to
-    ``config/sandbox/app_config.yaml`` so callers can use them in tests
-    without round-tripping through yaml.
-    """
+    """Knobs read from app_config.yaml ``ingestion`` values."""
 
     enabled: bool = True
     model_id: str = "amazon.nova-lite-v1:0"
     region: str = "us-east-1"
     front_page_sample_count: int = 5
     random_page_sample_count: int = 5
+    full_page_triage_enabled: bool = False
     ocr_threshold: float = 0.30
     hierarchy_threshold: float = 0.50
-    # A multi-page TOC is itself overwhelming evidence of section hierarchy
-    # — even when the TOC pages themselves don't look like body content with
-    # numbered headings. Treat ``toc_pages >= toc_pages_signal`` as a
-    # secondary trigger for ``has_hierarchy``.
     toc_pages_signal: int = 3
     temperature: float = 0.0
-    max_tokens_per_page: int = 256
-    # Render scale: 1.0 ≈ ~72 DPI; 2.0 ≈ ~144 DPI. Nova Lite handles either
-    # but 2.0 gives clearer headings on small-text PDFs at a modest cost.
+    max_tokens_per_page: int = 2048
     render_scale: float = 2.0
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 PageRenderer = Callable[[Path, int, float], bytes]
-"""(pdf_path, 1-indexed-page-number, scale) -> PNG bytes."""
 
 
 def multimodal_triage(
@@ -121,16 +147,7 @@ def multimodal_triage(
     render_page_image: PageRenderer | None = None,
     rng: random.Random | None = None,
 ) -> PdfTriageResult:
-    """Run the per-page triage scan.
-
-    Args:
-        pdf_path: Path to the PDF on local disk.
-        page_count: Total page count of the PDF (from ``scan_pdf``).
-        config: Triage knobs.
-        bedrock_client: A boto3 ``bedrock-runtime`` client (or stub).
-        render_page_image: Override for page rendering (tests pass a stub).
-        rng: Inject a seeded Random for deterministic test sampling.
-    """
+    """Run multimodal page observation over selected pages."""
     if not config.enabled:
         return PdfTriageResult.skipped("triage_disabled")
     if page_count <= 0:
@@ -145,6 +162,7 @@ def multimodal_triage(
         front_count=config.front_page_sample_count,
         random_count=config.random_page_sample_count,
         rng=rng or random.Random(0),
+        full_page_triage_enabled=config.full_page_triage_enabled,
     )
 
     raw_decisions: list[dict[str, Any]] = []
@@ -175,14 +193,10 @@ def multimodal_triage(
     aggregated = _aggregate_decisions(raw_decisions, config)
     aggregated.triage_status = "completed"
     aggregated.sampled_pages = sampled
+    aggregated.full_page_triage_enabled = config.full_page_triage_enabled
     aggregated.warnings = warnings
     aggregated.raw_decisions = raw_decisions
     return aggregated
-
-
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
 
 
 def _select_sampled_pages(
@@ -191,12 +205,14 @@ def _select_sampled_pages(
     front_count: int,
     random_count: int,
     rng: random.Random,
+    full_page_triage_enabled: bool = False,
 ) -> list[int]:
-    """Pick front-N + random-N pages, 1-indexed, deduped, sorted.
+    """Pick full-page or front-N plus random-N pages, 1-indexed and sorted."""
+    if page_count <= 0:
+        return []
+    if full_page_triage_enabled:
+        return list(range(1, page_count + 1))
 
-    If the document is small enough that front + random would cover everything,
-    just return ``range(1, page_count + 1)``.
-    """
     front_count = max(0, front_count)
     random_count = max(0, random_count)
 
@@ -205,12 +221,11 @@ def _select_sampled_pages(
 
     front = list(range(1, min(front_count, page_count) + 1))
     interior_population = [p for p in range(front_count + 1, page_count + 1)]
-    if random_count > 0 and interior_population:
-        random_pages = rng.sample(
-            interior_population, k=min(random_count, len(interior_population))
-        )
-    else:
-        random_pages = []
+    random_pages = (
+        rng.sample(interior_population, k=min(random_count, len(interior_population)))
+        if random_count > 0 and interior_population
+        else []
+    )
     return sorted(set(front + random_pages))
 
 
@@ -221,51 +236,36 @@ def _ask_model_about_page(
     png_bytes: bytes,
     config: TriageConfig,
 ) -> dict[str, Any]:
-    """Send one page image to Bedrock Converse and parse the JSON answer.
-
-    The model is prompted to answer a small fixed schema. If the model
-    returns text that isn't strict JSON (extra prose, code fences, etc.),
-    we strip what we can and re-parse.
-    """
+    """Send one rendered page to Bedrock Converse and parse the JSON answer."""
     system_prompt = (
-        "You are analyzing one page of a structured document for an ingestion "
-        "pipeline. Look at the page image and answer the following questions. "
-        "Return ONLY a single JSON object with these keys (no prose, no code "
-        "fences):\n"
-        "  page_number: int (echo back the page number we tell you)\n"
-        "  embedded_text_quality: one of \"high\" | \"medium\" | \"low\" | \"scanned_image_only\"\n"
-        "    - \"high\": page is digital-native, text is crisp, all readable\n"
-        "    - \"medium\": legible but slight scanning artifacts\n"
-        "    - \"low\": noticeable scan artifacts, OCR likely needed for reliable extraction\n"
-        "    - \"scanned_image_only\": page is essentially an image with no underlying text\n"
-        "  appears_to_be_toc: bool — is this page a table of contents or index?\n"
-        "  contains_table: bool — does this page contain at least one tabular layout?\n"
-        "  contains_figure: bool — does this page contain at least one figure, chart, "
-        "diagram, illustration, or photograph (NOT just a table or text)?\n"
-        "  heading_pattern: one of \"section_codes\" | \"chapter_heading\" | \"page_only\" | \"unknown\"\n"
-        "    - \"section_codes\": numeric/alphanumeric section identifiers like R311.7.5.1\n"
-        "    - \"chapter_heading\": prose chapter headings like \"Chapter 5: Foundations\"\n"
-        "    - \"page_only\": no heading structure visible; just running text\n"
-        "    - \"unknown\": cannot tell from this page alone"
+        "You are extracting page observations for a document ingestion pipeline. "
+        "Return ONLY one JSON object. Do not decide whether OCR is needed and do "
+        "not generate a document hierarchy. Extract only what you can see.\n\n"
+        "Required JSON keys:\n"
+        "page_number: int\n"
+        "raw_visible_text: string with the visible text you can read on the page\n"
+        "likely_document_type: string or null\n"
+        "heading_pattern: one of section_codes | chapter_heading | numbered_headings | page_only | unknown\n"
+        "heading_candidates: array of objects with label, title, raw_text, heading_pattern_type, confidence\n"
+        "appears_to_be_toc: bool\n"
+        "toc_entries: array of visible TOC entries when present\n"
+        "contains_table: bool\n"
+        "tables: array of objects with caption, title, description, bbox, confidence\n"
+        "contains_figure: bool\n"
+        "figures: array of objects with caption, title, description, bbox, confidence\n"
+        "notes: array of short uncertainty notes\n"
+        "embedded_text_quality: high | medium | low | scanned_image_only | unknown "
+        "(legacy diagnostic only; do not use it to decide OCR)"
     )
 
-    user_text = (
-        f"This is page {page_number}. Answer the JSON schema described in the "
-        "system instructions."
-    )
-
+    user_text = f"This is page {page_number}. Return the JSON schema from the system instructions."
     request_body = {
         "messages": [
             {
                 "role": "user",
                 "content": [
                     {"text": user_text},
-                    {
-                        "image": {
-                            "format": "png",
-                            "source": {"bytes": png_bytes},
-                        }
-                    },
+                    {"image": {"format": "png", "source": {"bytes": png_bytes}}},
                 ],
             }
         ],
@@ -276,11 +276,7 @@ def _ask_model_about_page(
         },
     }
 
-    response = bedrock_client.converse(
-        modelId=config.model_id,
-        **request_body,
-    )
-
+    response = bedrock_client.converse(modelId=config.model_id, **request_body)
     text = _extract_text_from_converse_response(response)
     parsed = _parse_decision_json(text, page_number)
     parsed["page_number"] = page_number
@@ -302,116 +298,209 @@ _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _parse_decision_json(text: str, page_number: int) -> dict[str, Any]:
-    """Robustly extract the JSON object the model emitted.
-
-    Defaults each field to a safe ``unknown``/``None`` value when missing.
-    Unparseable input is recorded as ``parse_error`` in the returned dict
-    so the aggregator can ignore that page without crashing the whole run.
-    """
+    """Robustly extract and normalize the JSON object emitted by the model."""
     stripped = text.strip()
     if stripped.startswith("```"):
-        # Trim common ```json fences.
         stripped = stripped.strip("`")
         stripped = re.sub(r"^json\s*", "", stripped, flags=re.IGNORECASE)
     try:
         return _coerce_decision(json.loads(stripped))
-    except Exception:
+    except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
     match = _JSON_BLOCK_RE.search(text)
     if match:
         try:
             return _coerce_decision(json.loads(match.group(0)))
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
     return {
         "page_number": page_number,
-        "embedded_text_quality": "unknown",
+        "raw_visible_text": "",
+        "likely_document_type": None,
+        "heading_candidates": [],
         "appears_to_be_toc": False,
+        "appears_to_be_toc_page": False,
+        "toc_entries": [],
         "contains_table": False,
+        "tables": [],
         "contains_figure": False,
+        "figures": [],
         "heading_pattern": "unknown",
+        "embedded_text_quality": "unknown",
+        "notes": [],
         "parse_error": True,
     }
 
 
 def _coerce_decision(raw: Any) -> dict[str, Any]:
-    """Normalize types from a parsed JSON answer."""
+    """Normalize parsed JSON into the page-observation schema.
+
+    The function accepts both the old compact triage schema and the new richer
+    observation schema so existing tests and stubs remain useful.
+    """
     if not isinstance(raw, dict):
         raise ValueError("not_an_object")
 
-    def b(key: str) -> bool:
-        v = raw.get(key)
-        return bool(v) if isinstance(v, bool) else False
+    def b(key: str, default: bool = False) -> bool:
+        value = raw.get(key)
+        return value if isinstance(value, bool) else default
 
     def s(key: str, allowed: Sequence[str], default: str = "unknown") -> str:
-        v = raw.get(key)
-        if isinstance(v, str) and v in allowed:
-            return v
+        value = raw.get(key)
+        if isinstance(value, str) and value in allowed:
+            return value
         return default
 
+    def optional_str(key: str) -> str | None:
+        value = raw.get(key)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    heading_pattern = s(
+        "heading_pattern",
+        ("section_codes", "chapter_heading", "numbered_headings", "page_only", "unknown"),
+    )
+    raw_heading_candidates = raw.get("heading_candidates")
+    heading_candidates = (
+        _coerce_heading_candidates(raw_heading_candidates)
+        if isinstance(raw_heading_candidates, list)
+        else []
+    )
+
+    contains_table = b("contains_table")
+    raw_tables = raw.get("tables")
+    tables = _coerce_observation_items(raw_tables) if isinstance(raw_tables, list) else []
+    if contains_table and not tables:
+        tables = [{"caption": None, "title": None, "description": None, "bbox": None, "confidence": None}]
+
+    contains_figure = b("contains_figure")
+    raw_figures = raw.get("figures")
+    figures = _coerce_observation_items(raw_figures) if isinstance(raw_figures, list) else []
+    if contains_figure and not figures:
+        figures = [{"caption": None, "title": None, "description": None, "bbox": None, "confidence": None}]
+
+    appears_to_be_toc = b("appears_to_be_toc", b("appears_to_be_toc_page"))
+    toc_entries_raw = raw.get("toc_entries")
+    toc_entries = toc_entries_raw if isinstance(toc_entries_raw, list) else []
+    notes_raw = raw.get("notes")
+
     return {
+        "raw_visible_text": str(raw.get("raw_visible_text") or ""),
+        "likely_document_type": optional_str("likely_document_type"),
+        "heading_candidates": heading_candidates,
+        "appears_to_be_toc": appears_to_be_toc,
+        "appears_to_be_toc_page": appears_to_be_toc,
+        "toc_entries": toc_entries,
+        "contains_table": contains_table or bool(tables),
+        "tables": tables,
+        "contains_figure": contains_figure or bool(figures),
+        "figures": figures,
+        "heading_pattern": heading_pattern,
         "embedded_text_quality": s(
             "embedded_text_quality",
-            ("high", "medium", "low", "scanned_image_only"),
+            ("high", "medium", "low", "scanned_image_only", "unknown"),
         ),
-        "appears_to_be_toc": b("appears_to_be_toc"),
-        "contains_table": b("contains_table"),
-        "contains_figure": b("contains_figure"),
-        "heading_pattern": s(
-            "heading_pattern",
-            ("section_codes", "chapter_heading", "page_only"),
-        ),
+        "notes": [str(item) for item in notes_raw] if isinstance(notes_raw, list) else [],
     }
+
+
+def _coerce_heading_candidates(value: list[Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        raw_text = item.get("raw_text") or label or ""
+        if not isinstance(label, str) or not label.strip():
+            continue
+        candidates.append(
+            {
+                "label": label.strip(),
+                "title": item.get("title") if isinstance(item.get("title"), str) else None,
+                "raw_text": str(raw_text).strip(),
+                "heading_pattern_type": item.get("heading_pattern_type")
+                if isinstance(item.get("heading_pattern_type"), str)
+                else item.get("heading_pattern")
+                if isinstance(item.get("heading_pattern"), str)
+                else None,
+                "confidence": _coerce_float(item.get("confidence")),
+            }
+        )
+    return candidates
+
+
+def _coerce_observation_items(value: list[Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        bbox = item.get("bbox")
+        items.append(
+            {
+                "caption": item.get("caption") if isinstance(item.get("caption"), str) else None,
+                "title": item.get("title") if isinstance(item.get("title"), str) else None,
+                "description": item.get("description")
+                if isinstance(item.get("description"), str)
+                else None,
+                "bbox": bbox if isinstance(bbox, dict) else None,
+                "confidence": _coerce_float(item.get("confidence")),
+            }
+        )
+    return items
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _aggregate_decisions(
     decisions: list[dict[str, Any]], config: TriageConfig
 ) -> PdfTriageResult:
-    """Reduce per-page answers to a document-level decision."""
-    usable = [d for d in decisions if not d.get("parse_error")]
-    total = len(usable)
-    if total == 0:
+    """Reduce page observations to a result with compatibility summaries."""
+    usable = []
+    for decision in decisions:
+        if decision.get("parse_error"):
+            continue
+        coerced = _coerce_decision(decision)
+        coerced["page_number"] = decision.get("page_number")
+        usable.append(coerced)
+    if not usable:
         return PdfTriageResult.failed("all_pages_unparseable")
 
-    needs_ocr_pages = sum(
-        1
-        for d in usable
-        if d.get("embedded_text_quality") in ("low", "scanned_image_only")
-    )
-    ocr_fraction = needs_ocr_pages / total
-    ocr_required = ocr_fraction >= config.ocr_threshold
-    ocr_confidence = (
-        ocr_fraction if ocr_required else (1.0 - ocr_fraction)
-    )
+    observations = [_decision_to_observation(d) for d in usable]
+    total = len(observations)
 
-    # Pick the dominant non-"page_only" heading pattern.
+    low_text_count = sum(
+        1
+        for obs in observations
+        if obs.embedded_text_quality in ("low", "scanned_image_only")
+    )
+    low_text_fraction = low_text_count / total
+    ocr_required = low_text_fraction >= config.ocr_threshold
+
     pattern_counts: dict[str, int] = {}
-    for d in usable:
-        pat = d.get("heading_pattern", "unknown")
-        if pat in ("section_codes", "chapter_heading"):
-            pattern_counts[pat] = pattern_counts.get(pat, 0) + 1
+    for obs in observations:
+        if obs.heading_pattern in ("section_codes", "chapter_heading", "numbered_headings"):
+            pattern_counts[obs.heading_pattern] = pattern_counts.get(obs.heading_pattern, 0) + 1
+        for candidate in obs.heading_candidates:
+            pattern = candidate.heading_pattern_type
+            if pattern in ("section_codes", "chapter_heading", "numbered_headings"):
+                pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
+
     dominant_pattern = None
     dominant_count = 0
-    for pat, count in pattern_counts.items():
+    for pattern, count in pattern_counts.items():
         if count > dominant_count:
-            dominant_pattern, dominant_count = pat, count
+            dominant_pattern = pattern
+            dominant_count = count
     hierarchy_fraction = dominant_count / total if dominant_pattern else 0.0
-
-    toc_pages = sorted(
-        d["page_number"] for d in usable if d.get("appears_to_be_toc")
-    )
-
-    # Primary signal: a critical mass of sampled pages share the same
-    # numbered/chapter heading pattern. Secondary signal: a multi-page TOC.
-    # The TOC trigger handles a common pitfall where 30 front-matter pages
-    # of a structured code document include 10-20 pages of TOC (which the
-    # model correctly classifies as ``page_only`` because TOCs are lists
-    # of references, not bodies of numbered sections). Without this
-    # secondary path, a heavily-TOC'd front sample drags
-    # ``hierarchy_fraction`` below threshold and section chunking never
-    # triggers on the exact documents that need it most.
+    toc_pages = sorted(obs.page_number for obs in observations if obs.appears_to_be_toc_page)
     toc_signal_strength = (
         min(1.0, len(toc_pages) / max(config.toc_pages_signal, 1))
         if config.toc_pages_signal > 0
@@ -421,34 +510,53 @@ def _aggregate_decisions(
         hierarchy_fraction >= config.hierarchy_threshold
         or len(toc_pages) >= config.toc_pages_signal
     )
-    if has_hierarchy:
-        # Default to section_codes when triggered solely by TOC presence,
-        # since most code/spec documents use numeric section identifiers.
-        hierarchy_kind = dominant_pattern or "section_codes"
-        # When the TOC trigger is what carried us over the line, surface
-        # that strength so the downstream section-chunker confidence gate
-        # doesn't reject on a near-zero ``hierarchy_fraction``.
-        effective_confidence = max(hierarchy_fraction, toc_signal_strength)
-    else:
-        hierarchy_kind = "page_only"
-        effective_confidence = hierarchy_fraction
-    table_pages = sorted(
-        d["page_number"] for d in usable if d.get("contains_table")
-    )
-    figure_pages = sorted(
-        d["page_number"] for d in usable if d.get("contains_figure")
-    )
+    hierarchy_kind = dominant_pattern or ("section_codes" if has_hierarchy else "page_only")
+    hierarchy_confidence = max(hierarchy_fraction, toc_signal_strength) if has_hierarchy else hierarchy_fraction
 
     return PdfTriageResult(
         triage_status="completed",
+        page_observations=observations,
         ocr_required=ocr_required,
-        ocr_confidence=round(ocr_confidence, 3),
+        ocr_confidence=round(low_text_fraction if ocr_required else 1.0 - low_text_fraction, 3),
         has_hierarchy=has_hierarchy,
         hierarchy_kind=hierarchy_kind,
-        hierarchy_confidence=round(effective_confidence, 3),
+        hierarchy_confidence=round(hierarchy_confidence, 3),
         toc_pages=toc_pages,
-        table_pages=table_pages,
-        figure_pages=figure_pages,
+        table_pages=sorted(obs.page_number for obs in observations if obs.tables),
+        figure_pages=sorted(obs.page_number for obs in observations if obs.figures),
+    )
+
+
+def _decision_to_observation(decision: dict[str, Any]) -> PageTriageObservation:
+    return PageTriageObservation(
+        page_number=int(decision.get("page_number") or 0),
+        raw_visible_text=str(decision.get("raw_visible_text") or ""),
+        likely_document_type=decision.get("likely_document_type")
+        if isinstance(decision.get("likely_document_type"), str)
+        else None,
+        heading_candidates=[
+            HeadingCandidate(**candidate)
+            for candidate in decision.get("heading_candidates", [])
+            if isinstance(candidate, dict)
+        ],
+        appears_to_be_toc_page=bool(
+            decision.get("appears_to_be_toc_page") or decision.get("appears_to_be_toc")
+        ),
+        toc_entries=decision.get("toc_entries") if isinstance(decision.get("toc_entries"), list) else [],
+        tables=[
+            PageTableObservation(**item)
+            for item in decision.get("tables", [])
+            if isinstance(item, dict)
+        ],
+        figures=[
+            PageFigureObservation(**item)
+            for item in decision.get("figures", [])
+            if isinstance(item, dict)
+        ],
+        notes=decision.get("notes") if isinstance(decision.get("notes"), list) else [],
+        heading_pattern=str(decision.get("heading_pattern") or "unknown"),
+        embedded_text_quality=str(decision.get("embedded_text_quality") or "unknown"),
+        parse_error=bool(decision.get("parse_error")),
     )
 
 
@@ -476,31 +584,46 @@ def _render_page_with_pdfium(pdf_path: Path, page_number: int, scale: float) -> 
         doc.close()
 
 
-# Convenience for callers that want to log a triage decision in JSON form
-# without leaking the bulky raw_decisions list. asdict() on the dataclass
-# already works; this exists so callers can request a slim version.
+def page_observations_as_dicts(triage: PdfTriageResult) -> list[dict[str, Any]]:
+    """Return full page observations as JSON-serializable dictionaries."""
+    return [asdict(observation) for observation in triage.page_observations]
 
 
 def triage_summary_dict(triage: PdfTriageResult) -> dict[str, Any]:
-    """Compact dict suitable for storing under ``processing.triage`` in metadata."""
+    """Compact dict suitable for ``document_metadata.processing.triage``."""
+    heading_pattern_counts: dict[str, int] = {}
+    for observation in triage.page_observations:
+        if observation.heading_pattern:
+            heading_pattern_counts[observation.heading_pattern] = (
+                heading_pattern_counts.get(observation.heading_pattern, 0) + 1
+            )
+
     return {
         "triage_status": triage.triage_status,
+        "full_page_triage_enabled": triage.full_page_triage_enabled,
+        "sampled_pages": triage.sampled_pages,
+        "page_observation_count": len(triage.page_observations),
+        "toc_pages": triage.toc_pages,
+        "table_pages": triage.table_pages,
+        "figure_pages": triage.figure_pages,
+        "heading_pattern_counts": heading_pattern_counts,
         "ocr_required": triage.ocr_required,
         "ocr_confidence": triage.ocr_confidence,
         "has_hierarchy": triage.has_hierarchy,
         "hierarchy_kind": triage.hierarchy_kind,
         "hierarchy_confidence": triage.hierarchy_confidence,
-        "sampled_pages": triage.sampled_pages,
-        "toc_pages": triage.toc_pages,
-        "table_pages": triage.table_pages,
-        "figure_pages": triage.figure_pages,
         "warnings": triage.warnings,
     }
 
 
 __all__ = [
+    "HeadingCandidate",
+    "PageFigureObservation",
+    "PageTableObservation",
+    "PageTriageObservation",
     "PdfTriageResult",
     "TriageConfig",
     "multimodal_triage",
+    "page_observations_as_dicts",
     "triage_summary_dict",
 ]

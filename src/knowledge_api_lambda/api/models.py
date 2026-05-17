@@ -89,3 +89,42 @@ class RawUrlResponse(BaseModel):
     content_type: str
     disposition: str
     ttl_seconds: int
+
+
+class HierarchyNodeSummary(BaseModel):
+    """One hierarchy node summary."""
+
+    hierarchy_node_id: str
+    label: Optional[str] = None
+    title: Optional[str] = None
+    node_type: Optional[str] = None
+    heading_path: List[str] = Field(default_factory=list)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    token_estimate: Optional[int] = None
+    children_available: bool = False
+
+
+class GetDocumentHierarchyResponse(BaseModel):
+    """Document hierarchy summary response."""
+
+    document_id: str
+    document_title: Optional[str] = None
+    profile: Optional[str] = None
+    nodes: List[HierarchyNodeSummary] = Field(default_factory=list)
+
+
+class GetHierarchyNodeResponse(BaseModel):
+    """Direct hierarchy node content response."""
+
+    document_id: str
+    hierarchy_node_id: str
+    label: Optional[str] = None
+    title: Optional[str] = None
+    heading_path: List[str] = Field(default_factory=list)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    containing_chunk_id: Optional[str] = None
+    content_type: str = "text/markdown"
+    content: str
+    source_location: str

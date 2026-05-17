@@ -128,6 +128,35 @@ class ChunkReadStore:
         response = self._execute_statement(sql, params)
         return [self._row_to_dict(record) for record in response.get("records", [])]
 
+    def get_chunks_by_ids(
+        self,
+        *,
+        chunk_ids: List[str],
+        tenant_id: str,
+        access_tiers: Sequence[str] = DEFAULT_ACCESS_TIERS,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch multiple authorized chunks keyed by chunk_id."""
+        unique_ids = list(dict.fromkeys([chunk_id for chunk_id in chunk_ids if chunk_id]))
+        if not unique_ids:
+            return {}
+        clause, authz_params = build_sql_authz_clause(
+            tenant_id=tenant_id, access_tiers=access_tiers
+        )
+        id_placeholders = ", ".join(f":chunk_id_{i}" for i in range(len(unique_ids)))
+        sql = f"""
+            SELECT {_SELECT_COLUMNS}
+            FROM document_chunks
+            WHERE chunk_id IN ({id_placeholders}){clause}
+        """
+        params: List[Dict[str, Any]] = [
+            self._string_parameter(f"chunk_id_{index}", chunk_id)
+            for index, chunk_id in enumerate(unique_ids)
+        ]
+        params.extend(authz_params)
+        response = self._execute_statement(sql, params)
+        rows = [self._row_to_dict(record) for record in response.get("records", [])]
+        return {row["chunk_id"]: row for row in rows if row.get("chunk_id")}
+
     # Helpers -----------------------------------------------------------
 
     def _row_to_dict(self, record: List[Dict[str, Any]]) -> Dict[str, Any]:

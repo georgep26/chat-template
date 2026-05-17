@@ -76,11 +76,34 @@ ingestion:
   pdf_triage_ocr_threshold: 0.30 # Fraction of sampled pages reporting low-quality text that triggers OCR fallback.
   pdf_triage_hierarchy_threshold: 0.50 # Fraction of sampled pages sharing the same heading pattern that triggers section chunking.
   pdf_triage_temperature: 0.0 # Decoding temperature for the per-page triage call.
+  pdf_triage_max_tokens_per_page: 2048 # Max output tokens for one multimodal page-observation response.
+  pdf_triage_render_scale: 2.0 # PDF render scale for multimodal page images.
+  pdf_full_page_triage_enabled: false # If true, run triage on every page and ignore front/random sample counts.
+  pdf_triage_text_mismatch_threshold: 0.50 # Per-page mismatch threshold between embedded text and model-visible text.
+  pdf_triage_document_text_mismatch_threshold: 0.30 # Fraction of suspicious triaged pages that recommends OCR/Textract.
+  pdf_text_quality_min_visible_chars: 100 # Minimum model-visible chars before comparing visible text to embedded text.
   # ---- Phase 2: section-aware chunking ----
   pdf_section_chunking_enabled: true # When triage detects hierarchy, emit one chunk per section instead of one per page.
   pdf_section_min_confidence: 0.70 # Minimum hierarchy_confidence from triage required to attempt section chunking.
   pdf_section_min_boundaries: 5 # Minimum number of detected headings required to commit to section chunking; below this, fall back to page chunks.
   pdf_section_min_chars: 40 # Drop "sections" smaller than this many characters as regex false positives.
+  # ---- Phase 2b: hierarchy generation and adaptive chunking ----
+  pdf_hierarchy_enabled: true # Build document_hierarchy.json when deterministic headings are available.
+  hierarchy_generation_mode: "deterministic" # The backend deterministic builder is the default hierarchy candidate.
+  hierarchy_review_model_mode: "never" # Options: auto, always, never. If enabled and valid, Sonnet-corrected hierarchy is authoritative.
+  hierarchy_review_model_id: "us.anthropic.claude-sonnet-4-6"
+  hierarchy_review_region: "us-east-1"
+  hierarchy_review_min_confidence: 0.80
+  hierarchy_review_temperature: 0.0
+  hierarchy_review_max_tokens: 8192
+  pdf_hierarchy_chunking_enabled: true # Use hierarchy nodes to create retrieval chunks when a hierarchy exists.
+  pdf_hierarchy_target_min_tokens: 300
+  pdf_hierarchy_target_max_tokens: 3000
+  pdf_hierarchy_hard_max_tokens: 7000
+  pdf_hierarchy_merge_small_leaf_nodes: true
+  pdf_hierarchy_split_large_nodes_by_children: true
+  pdf_hierarchy_store_index: true
+  pdf_hierarchy_inline_index_max_nodes: 40
   # ---- Phase 3: Textract table extraction ----
   pdf_table_extraction_enabled: true # Run Textract over the full PDF and emit one chunk per detected table.
   pdf_table_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to summarize each extracted table for retrieval.
@@ -92,7 +115,7 @@ ingestion:
   pdf_figure_summary_model_id: "amazon.nova-lite-v1:0" # Bedrock model used to describe each figure for retrieval.
   pdf_max_figure_extractions: 200 # Hard cap on figures per document.
   # ---- Phase 5: OCR fallback via Textract ----
-  pdf_ocr_enabled: true # When triage decides OCR is needed, run Textract DetectDocumentText in place of pypdf text extraction.
+  pdf_ocr_enabled: true # When deterministic text-quality checks recommend OCR, run Textract DetectDocumentText in place of pypdf text extraction.
   pdf_ocr_poll_interval_seconds: 5 # Wait between OCR-job status polls.
   pdf_ocr_max_wait_seconds: 540 # Hard ceiling on OCR polling within a single Lambda invocation.
 
