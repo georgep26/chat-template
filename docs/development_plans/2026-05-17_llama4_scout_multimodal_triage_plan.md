@@ -575,3 +575,518 @@ ingestion:
    model hallucinations from creating phantom hierarchy nodes. The model
    observes the heading visually; the regex or substring search confirms it
    exists in the authoritative text layer.
+
+---
+
+## Revision (2026-05-17): two-pass extraction with Sonnet hierarchy
+
+### What changed and why
+
+After completing the per-page Scout tests above, we ran a follow-up
+investigation in
+`docs/working_files/llm_extraction_test/full_document_hierarchy/`:
+
+- **Full-doc Llama 4 Scout hierarchy call:** $0.02/doc, returns only 11
+  nodes (chapters and top-level sections only). Iterated through prompt
+  variants v1→v4 with increasingly aggressive completeness instructions;
+  output plateaued at ~40-43 nodes. Every variant ended with
+  `stop_reason: end_turn` and well under the 8K output cap. Scout
+  self-limits on long-input structured-enumeration tasks regardless of
+  prompt engineering.
+- **Full-doc Claude Sonnet 4.6 hierarchy call:** $0.67/doc, returns 247
+  nodes across 7 depth levels, captures R303.10 with correct parentage,
+  no duplicate labels, no missing parents.
+
+This makes Sonnet the right tool for the global hierarchy pass and **lets
+us delete all the per-profile regex tuning** the user raised concerns
+about. The final architecture is two-pass:
+
+```
+Per-page Llama 4 Scout ($0.25/doc)
+  → verbatim text + heading_candidates + table/figure descriptions
+  ↓
+Full-doc Sonnet 4.6 ($0.67/doc)
+  → globally-consistent hierarchy tree (247+ nodes, full depth)
+  ↓
+Hierarchy locator (deterministic, free)
+  → map each Sonnet node (label, title, page) to (char_start, char_end)
+    in the joined chunk text
+  ↓
+hierarchy_chunking.py (unchanged)
+  → adaptive chunks with hierarchy index for each chunk
+```
+
+**Total: ~$0.92/doc.** No per-profile regex, no Sonnet-review timeout
+risk (the review step disappears entirely — Sonnet IS the hierarchy
+builder), no profile-tuning treadmill for new document types.
+
+### Superseded steps
+
+- **Step 5 (Merge model headings into hierarchy):** No longer needed.
+  Sonnet produces a complete hierarchy in one call; Scout's per-page
+  `heading_candidates` become a validation layer (drop any Sonnet node
+  whose label doesn't appear in any Scout per-page output) rather than a
+  source of nodes.
+- **Step 6 (Tighten section-code regex, add `_SECTION_CODE_BUILDING_RE`):**
+  No longer needed. Sonnet distinguishes real headings from
+  header/footer noise like `101167926` using global context. The regex
+  becomes obsolete for hierarchy detection; we keep it only as a
+  defensive fallback for cases where Sonnet fails (e.g., model
+  unavailable, JSON parse failure).
+- **Step 7 (Gate the Sonnet hierarchy review):** No longer needed.
+  There is no separate "review" call — Sonnet is the primary hierarchy
+  builder. `hierarchy_review.py` is removed from the pipeline.
+
+### New step: Hierarchy locator
+
+**File:** `src/document_ingestion_lambda/file_type_processors/hierarchy_locator.py` (new)
+
+**Purpose:** Convert Sonnet's hierarchy output (label + title + page) into
+`(char_start, char_end)` spans in the joined chunk text so the existing
+chunker and citation resolver can use it.
+
+**Inputs:**
+- `nodes: list[dict]` — Sonnet's parsed `nodes` array from the hierarchy
+  call. Each entry has `label`, `title`, `node_type`, `parent_label`,
+  `page_start`, `page_end`, `depth`.
+- `joined_text: str` — the final merged chunk text (embedded PDF text with
+  per-page swap to model text where flagged, per Step 4).
+- `page_offsets: dict[int, int]` — map from page number to the char offset
+  of that page's `=== PAGE N ===` marker (or first body char) in
+  `joined_text`. Built once at join time.
+
+**Output:** `list[HierarchyNode]` (the existing dataclass from
+`hierarchy.py`), populated with `char_start`, `char_end`, `heading_path`,
+parent/child relationships.
+
+**Disambiguation strategy: have Sonnet emit a per-node `body_anchor`.**
+
+A label like `R303.10` appears in PDF-extracted text in three shapes:
+
+1. **Real heading** — at the start of a line, immediately followed by the
+   title and body prose.
+2. **Cross-reference in body prose** — e.g. `...follow R303.10 for heating
+   requirements.` Mid-sentence, surrounded by prose.
+3. **Running page header** — some PDFs repeat the parent section banner
+   (e.g. `R303 LIGHT, VENTILATION AND HEATING`) at the top of every page.
+
+A naive `str.find(label)` will frequently hit the wrong occurrence.
+Instead, we ask Sonnet to emit a `body_anchor` per node — a verbatim 40-80
+character snippet of body text that appears somewhere after the heading.
+This snippet is unique enough to pin down the heading's location.
+
+**Prompt schema addition.** Add one field to each node in the hierarchy
+prompt:
+
+```
+"body_anchor": "A verbatim 40-80 character snippet from the document text
+that appears anywhere after this heading. The snippet must be specific
+enough to appear only once in the document — typically the first sentence
+or two of body content includes specific terms (cross-references, numeric
+thresholds, distinctive nouns) that make it unique. Copy the text exactly,
+including punctuation and Unicode characters."
+```
+
+**Algorithm — locate via anchor, walk back to label line-start:**
+
+```python
+import re
+
+_LEADING_WS = r"^[ \t]*"  # line-start with optional indentation
+
+def locate_heading(
+    label: str,
+    body_anchor: str,
+    page_start: int,
+    joined_text: str,
+    page_offsets: dict[int, int],
+) -> tuple[int | None, str]:
+    """
+    Return (char_offset, confidence_tier).
+    confidence_tier is one of:
+      "anchored"           — anchor found, label walk-back succeeded
+      "anchored_full_doc"  — anchor only found outside page window
+      "anchor_not_found"   — anchor missing entirely (likely hallucination
+                             or extraction artifact)
+      "anchor_orphan"      — anchor found but no label match within 500
+                             chars before it
+    """
+    # Scope the anchor search to page_start ± 1 first; fall back to full
+    # document if not found (Sonnet's page numbers are usually right but
+    # not perfect for headings that straddle a page break).
+    lo = page_offsets.get(max(1, page_start - 1), 0)
+    hi = page_offsets.get(page_start + 2, len(joined_text))
+    haystack = joined_text[lo:hi]
+
+    anchor_pos = haystack.find(body_anchor)
+    if anchor_pos != -1:
+        anchor_abs = lo + anchor_pos
+        tier = "anchored"
+    else:
+        # Drift across the page window — try the full doc.
+        anchor_abs = joined_text.find(body_anchor)
+        if anchor_abs == -1:
+            return None, "anchor_not_found"
+        tier = "anchored_full_doc"
+
+    # Walk back from the anchor to the nearest line-start matching the
+    # label followed by whitespace. The trailing-whitespace requirement
+    # makes the regex self-correcting: looking up `R303` correctly
+    # ignores `R303.1`, `R3030`, `R303A` because those don't end in
+    # whitespace after `R303`.
+    pattern = re.compile(
+        rf"{_LEADING_WS}{re.escape(label)}[ \t]",
+        re.MULTILINE,
+    )
+    walk_back_start = max(0, anchor_abs - 500)
+    snippet = joined_text[walk_back_start:anchor_abs]
+    matches = list(pattern.finditer(snippet))
+    if not matches:
+        return None, "anchor_orphan"
+
+    # The last line-start label match before the anchor is the heading.
+    return walk_back_start + matches[-1].start(), tier
+```
+
+**Why this works (and why the algorithm is simpler than it might appear):**
+
+The anchor's only job is "be a unique location marker." It does NOT have
+to belong to the section whose heading we're locating — for example, if
+`R303` has no body text and `R303.1` follows immediately, the anchor for
+`R303` can be text from `R303.1`'s body. The walk-back still finds the
+correct `R303` heading because:
+
+- The anchor lands us in the right neighborhood.
+- The label regex `^[ \t]*R303[ \t]` matches `R303 ` (heading line) but
+  not `R303.1` (subsection — `.` is not whitespace), `R3030` (number — no
+  whitespace), or `Section R303` (mid-line — fails the `^` anchor).
+- The last matching line-start before the anchor is the right heading by
+  construction.
+
+This also handles all three failure modes from the disambiguation
+discussion above:
+
+- **Cross-references** don't have the anchor following them, so the
+  anchor lands us in a different neighborhood and we don't even look at
+  the cross-reference's surrounding text.
+- **Page-header banners** don't have the anchor following them either.
+- **Real heading** is the only line-start label match that has the anchor
+  text downstream of it. Self-validating.
+
+**Defensive handling per tier:**
+
+- `"anchored"` — high confidence. Use the offset directly.
+- `"anchored_full_doc"` — confidence is good but Sonnet's page number
+  drifted. Log a warning so we can monitor accuracy of `page_start`
+  values over time.
+- `"anchor_not_found"` — Sonnet emitted an anchor that doesn't appear in
+  the text. Drop the node and log. Indicates either a hallucination or
+  text-extraction artifact (e.g., character drift between Sonnet's input
+  text and the joined chunk text — they should be identical, but
+  per-page model-text swaps in Step 4 mean they can diverge on flagged
+  pages).
+- `"anchor_orphan"` — anchor found but no label match within 500 chars
+  before it. Means Sonnet's anchor is from a section earlier in the
+  document than the label, or the label is wrong. Drop the node and log.
+
+Log per-tier counts after every ingestion run so we can monitor anchor
+quality across documents and tune the prompt if a particular tier becomes
+common.
+
+3. **Deduplicate by label.** If two emitted nodes share a label (should be
+   impossible, but defensive), keep the first by `char_start`.
+
+4. **Sort located nodes by `char_start`** and assign `char_end` from the
+   next same-or-shallower-depth sibling's `char_start`:
+
+   ```python
+   nodes.sort(key=lambda n: n.char_start)
+   for i, node in enumerate(nodes):
+       next_start = len(joined_text)
+       for later in nodes[i + 1:]:
+           if later.char_start > node.char_start:
+               next_start = later.char_start
+               break
+       node.char_end = next_start
+   ```
+
+5. **Propagate parent `char_end` to span the last descendant.** Reuse the
+   existing logic in `hierarchy.py:270-281` so a parent like `R303` spans
+   from its heading to the end of `R303.10`, not just to the next sibling.
+
+6. **Build `heading_path` from `parent_label` chain.** Walk up the parent
+   chain to produce the array of labels from root to this node, used by
+   `hierarchy_index_for_range()` and citation display.
+
+7. **Validate the assembled hierarchy** with the existing
+   `validate_hierarchy()` function from `hierarchy.py`. If validation
+   fails (duplicate IDs, missing parents, invalid ranges), log the errors
+   and fall back to the deterministic regex builder. This is the only
+   path where the legacy regex still runs.
+
+**Page-marker insertion** is the load-bearing detail. We need a single
+helper that owns building the joined text AND the `page_offsets` map so
+the chunker and the locator agree on offsets:
+
+```python
+def join_pages_with_markers(
+    pages: list[PdfPageText],
+) -> tuple[str, dict[int, int]]:
+    parts: list[str] = []
+    page_offsets: dict[int, int] = {}
+    cursor = 0
+    for page in pages:
+        marker = f"=== PAGE {page.page_number} ===\n"
+        page_offsets[page.page_number] = cursor
+        parts.append(marker)
+        cursor += len(marker)
+        parts.append(page.text)
+        cursor += len(page.text)
+        parts.append("\n\n")
+        cursor += 2
+    return "".join(parts), page_offsets
+```
+
+When chunks are built from this joined text, their
+`chunk_char_start` / `chunk_char_end` are already in the same coordinate
+space as the hierarchy nodes — citation resolution then works without
+extra mapping.
+
+### Updated process orchestration
+
+`PdfProcessor.process()` order changes to:
+
+1. Scan PDF (unchanged).
+2. **Per-page Scout triage** (Step 1-3, 10) — parallel, produces text,
+   headings, TOC, table/figure descriptions per page. Store full model
+   output as `kb_raw/{document_id}/triage/page_observations.json` and
+   `kb_raw/{document_id}/triage/model_extracted_text.json`.
+3. Extract embedded text (pypdf, unchanged).
+4. Build text quality report (unchanged).
+5. **Build merged joined text + page_offsets map** (Step 4 + new helper).
+6. Run OCR/Textract if recommended (unchanged).
+7. **Full-doc Sonnet hierarchy call.** Send the merged joined text to
+   Sonnet 4.6 with the validated full-doc hierarchy prompt
+   (`docs/working_files/llm_extraction_test/full_document_hierarchy/system_prompt.md`).
+8. **Hierarchy locator** (new step). Convert Sonnet nodes →
+   `HierarchyNode` objects with char ranges.
+9. Validate hierarchy. On failure, fall back to the deterministic regex
+   builder (kept as legacy fallback only).
+10. Write `document_hierarchy.json` (unchanged shape).
+11. Build hierarchy chunks via existing `hierarchy_chunking.py` (unchanged).
+12. Persist all artifacts.
+
+### Updated config
+
+```yaml
+ingestion:
+  # ---- Per-page triage (Llama 4 Scout) ----
+  pdf_triage_model_id: "us.meta.llama4-scout-17b-instruct-v1:0"
+  pdf_triage_max_tokens_per_page: 8192
+  pdf_full_page_triage_enabled: true
+
+  # ---- Full-doc hierarchy (Sonnet 4.6) ----
+  pdf_hierarchy_model_id: "us.anthropic.claude-sonnet-4-6"
+  pdf_hierarchy_max_output_tokens: 32000          # ~247 nodes × ~80 tokens
+  pdf_hierarchy_read_timeout_seconds: 600         # Sonnet on 125K input takes ~150s
+
+  # ---- Chunking strategy for documents larger than Sonnet's context ----
+  pdf_hierarchy_single_call_max_pages: 100        # Take single-call path if ≤ this
+  pdf_hierarchy_chunk_pages: 80                   # Pages per chunk when chunking
+  pdf_hierarchy_chunk_overlap_pages: 1            # Page overlap between adjacent chunks
+  pdf_hierarchy_orphan_handling: "promote"        # promote | drop — for unresolved parent_label
+
+  # ---- Hierarchy locator ----
+  pdf_hierarchy_locator_page_window: 1            # Search heading on page_start ± N pages
+  pdf_hierarchy_locator_drop_unlocatable: true    # Drop Sonnet nodes we can't find
+
+  # ---- Deprecated (removed from pipeline) ----
+  # hierarchy_review_model_mode: removed — no separate review pass
+  # hierarchy_review_model_id: removed
+  # pdf_section_chunking_enabled: kept for fallback only
+```
+
+### Updated cost projection
+
+| Step | Per 100-page doc |
+| --- | ---: |
+| Per-page Scout (parallel, 100 pages) | $0.25 |
+| Full-doc Sonnet hierarchy | $0.67 |
+| Hierarchy locator (pure Python) | $0.00 |
+| **Total** | **$0.92** |
+
+### Handling documents larger than Sonnet's context window
+
+The full 2021 IRC at ~1.26M tokens does NOT fit in Sonnet's 1M context.
+For documents like this, we run Sonnet in **rolling chunks of 80 pages
+with 1 page of overlap**, threading the running hierarchy through each
+call.
+
+**Defaults (configurable):**
+
+```yaml
+ingestion:
+  pdf_hierarchy_chunk_pages: 80           # Pages per Sonnet call when chunking
+  pdf_hierarchy_chunk_overlap_pages: 1    # Overlap between adjacent chunks
+  pdf_hierarchy_single_call_max_pages: 100  # If page_count ≤ this, single call
+```
+
+80 pages was chosen as a safe default: a typical body page is ~1,500
+Sonnet tokens, so 80 pages ≈ 120K input tokens, leaving comfortable
+headroom under 1M for the prompt + running hierarchy + output. The
+constant is configurable per environment for tuning.
+
+**Single-call vs chunked path.** After joining pages, check the page
+count against `pdf_hierarchy_single_call_max_pages`. If `page_count ≤
+max_pages`, take the existing single-call path (one Sonnet call, all
+pages). Otherwise enter the chunked path.
+
+**Chunked path flow:**
+
+1. **Split joined text by page markers** into ordered chunks of
+   `chunk_pages` pages with `overlap_pages` of overlap. Critical
+   constraint: the `=== PAGE N ===` markers in each chunk preserve the
+   absolute page number (e.g., chunk 2 starts with `=== PAGE 80 ===`,
+   not `=== PAGE 1 ===`) so the locator's `page_offsets` map and
+   Sonnet's emitted `page_start` values stay in the same coordinate
+   space.
+
+2. **First chunk (pages 1 to `chunk_pages`)** uses the standalone
+   hierarchy prompt unchanged. Returns nodes for the first chunk.
+
+3. **Subsequent chunks (pages `N` to `N + chunk_pages - 1`, with
+   1-page overlap)** use an augmented prompt that:
+   - Includes the running hierarchy from all prior chunks as a
+     flattened list with `label`, `title`, `node_type`, `parent_label`,
+     `depth`, `page_start` (omit `body_anchor` to save tokens — they're
+     already located).
+   - Tells Sonnet: this hierarchy was generated from pages 1 to
+     `(N - 1)`. The text below contains pages `(N - 1)` (overlap) through
+     `(N + chunk_pages - 2)`. Add new nodes that appear in the new
+     pages. Do NOT re-emit nodes already in the running hierarchy. If a
+     section from the running hierarchy continues into this chunk
+     (parent of nodes you're emitting), reference it by label in
+     `parent_label` without re-emitting it.
+   - Each new node still emits a `body_anchor` scoped to text within
+     the current chunk.
+
+4. **Stitch outputs:**
+   - Concatenate all chunks' `nodes` lists in order.
+   - Deduplicate by `label`, keeping the first occurrence. The overlap
+     page may produce duplicates if Sonnet re-emits a node it already
+     emitted in the previous chunk despite the instruction.
+   - Validate every `parent_label` resolves to a node in the combined
+     set. Unresolved parents are logged and the orphan node is promoted
+     to root depth (or dropped, per config — see open questions).
+   - Run the locator (`locate_heading()` per node) on the FULL joined
+     text. Page-scoped search means a node from chunk 5 with
+     `page_start=380` is searched only in pages 379-381 of the joined
+     text — no cross-chunk interference.
+
+**Augmented prompt addition (subsequent chunks):**
+
+```
+## Existing hierarchy from previous chunks
+
+The following hierarchy was already built from pages 1 to {previous_end}.
+Do NOT re-emit any of these nodes. Use their labels as `parent_label`
+references for new nodes where appropriate.
+
+[Flat list of running hierarchy: label, title, node_type, depth, parent_label, page_start]
+
+## Your task for this chunk
+
+The text below contains pages {chunk_start} (overlap with previous chunk)
+through {chunk_end}. Identify and emit NEW headings that appear in pages
+{chunk_start + 1} through {chunk_end}.
+
+If a section from the running hierarchy continues into this chunk (i.e.,
+you see new subsections whose `parent_label` is already in the running
+hierarchy), set their `parent_label` to the existing label. Do not
+re-emit the parent.
+
+If pages {chunk_start + 1} through {chunk_end} contain NO new headings
+(e.g., a section spans the chunk with no subsections appearing yet),
+return an empty `nodes` array.
+```
+
+**Why the 1-page overlap?**
+
+- A heading near a chunk boundary might be visible in only one chunk
+  depending on where the cut falls. The overlap ensures any heading that
+  starts on the boundary page is seen by both chunks.
+- Sonnet has the running hierarchy and is instructed not to re-emit, so
+  the overlap doesn't normally cause duplicates. Dedup-by-label is the
+  defense if it does.
+- Cost is minimal: 1 page in 80 = 1.25% overhead per chunk call.
+
+**Cost projection for a full 1109-page IRC document:**
+
+- Chunks: ceil(1109 / (80 - 1)) ≈ 15 calls
+- Per-call input: ~100K tokens of text + ~5-15K tokens of running
+  hierarchy (grows as the doc is processed) ≈ 110K avg
+- Per-call output: ~5-20K tokens
+- Per-call cost: ~$0.33-0.55
+- **Total: ~$5-8 per document.** Plus per-page Scout at $0.25 × 11 = ~$2.75
+  for the per-page pass. Combined: **~$8-11 per full 1109-page document.**
+
+This is still dramatically cheaper than the current broken pipeline
+($5-10 per failed 100-page run × many retries) and is the right shape
+for documents of any size.
+
+**Open question:** what to do with orphan nodes whose `parent_label`
+doesn't resolve. Two options:
+
+- **Promote to root:** Treat as a top-level node. May produce some
+  artificial parts/chapters but loses no information.
+- **Drop:** Discard the node entirely. Safer for citation quality but
+  loses any actual content.
+
+Recommendation: promote to root by default with a logged warning, so we
+can review the orphan rate per ingestion. Make this configurable
+(`pdf_hierarchy_orphan_handling: promote | drop`).
+
+### What's eliminated
+
+- `hierarchy_review.py` and the Sonnet-review pass (replaced by direct
+  Sonnet hierarchy call).
+- `_SECTION_CODE_BUILDING_RE` and per-profile regex variants (Sonnet
+  handles structure detection globally).
+- The "merge model headings into regex boundaries" step (no longer
+  needed — Sonnet IS the heading source).
+- `parser_profiles.py` regex selection — profiles become metadata-only
+  tags ("this is a building_code") for downstream display; they no longer
+  drive any code path.
+
+### Risks specific to this revision
+
+| Risk | Mitigation |
+| --- | --- |
+| Sonnet 4.6 fails or returns malformed JSON | Fall back to deterministic regex builder; alarm on the failure rate |
+| Sonnet output exceeds `pdf_hierarchy_max_output_tokens` | Detect `stop_reason: max_tokens`; raise the cap or retry with smaller input |
+| Document exceeds Sonnet's 1M context | Chunked Sonnet path activates above `pdf_hierarchy_single_call_max_pages` (default 100). Rolling 80-page chunks with 1-page overlap, threading running hierarchy through each call. See chunking section. |
+| Chunked-path overlap produces duplicate nodes | Dedup-by-label after stitching keeps the first occurrence. Sonnet's instruction to not re-emit known nodes plus the overlap-only-on-boundary design keeps duplicate rate low |
+| Subsequent chunk emits an orphan node (`parent_label` not in running hierarchy) | Configurable handling: `promote` to root (default) or `drop`. Both log the orphan rate per ingestion for monitoring |
+| Running hierarchy in subsequent prompts grows too large for long documents | A 1100-page IRC produces ~500-1000 nodes; flat representation in the prompt is ~12-25K tokens, well under context budget. For pathological cases, future enhancement: include only the last N chapters' hierarchy in the prompt |
+| Sonnet emits a heading not in body (hallucination) | Locator returns None → node is dropped; counts logged for monitoring |
+| Heading is split across pages and locator misses it | ± 1 page search window; tune to ± 2 if monitoring shows misses |
+| Locator finds the wrong occurrence (cross-reference, TOC, page banner) | Anchor-first algorithm: the body_anchor is unique enough to pin the right neighborhood; cross-references and banners don't have the anchor text following them so they're never even examined |
+| Sonnet emits a non-unique body_anchor | Page scoping handles most cases; for truly ambiguous anchors the walk-back still resolves correctly within each candidate's local neighborhood. Prompt instruction emphasizes "specific enough to appear only once" |
+| body_anchor not found in joined text | Returns `"anchor_not_found"` tier → node dropped + logged. Indicates either a Sonnet hallucination or text drift between Sonnet's input and the chunk-joined text. Per-tier counts surface this in monitoring |
+| body_anchor present but no label line-start match nearby | Returns `"anchor_orphan"` tier → node dropped + logged. Usually means Sonnet's anchor was taken from a section earlier than where the label appears |
+| Sonnet's `page_start` is off by 1-2 pages (heading straddles page break) | Anchor search uses ±1 page window, then falls back to full-doc search, returning `"anchored_full_doc"` tier (still high confidence — the anchor itself is unique) |
+
+### Verification additions
+
+Add to the existing verification plan:
+
+6. **Locator unit tests:** Stub Sonnet output and verify locator produces
+   correct char offsets for the IRC sample. Confirm `R303.10` ends up at
+   the expected offset within page 99's text segment.
+7. **End-to-end test:** Re-ingest the IRC 100-page sample. Confirm:
+   - Sonnet hierarchy call returns 247+ nodes.
+   - Locator successfully positions ≥95% of those nodes (some legitimate
+     drops expected for nodes Sonnet may emit that don't have body text
+     in the 100-page slice).
+   - Chunks built from the hierarchy contain R303.10.
+   - Heating query resolves to `cited_hierarchy_node = "R303.10"`.
