@@ -6,19 +6,93 @@ translation lives in ``src.knowledge.filters``; tenant + access-tier scoping
 lives in ``src.knowledge.authz``.
 """
 
+import base64
 import json
 import os
 from typing import Any, Dict, List, Optional
 
+import boto3
+from botocore.exceptions import ClientError
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from knowledge.vector_search import VectorSearchResult, search
 from knowledge.source_enrichment import enrich_vector_results
+from utils.logger import get_logger
 
 from .state import MessagesState
 from ..tracing import get_trace_collector
+
+
+log = get_logger(__name__)
+
+
+_IMAGE_ASSET_CACHE_LIMIT = 6  # Maximum number of image attachments to fetch per query.
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str] | None:
+    if not uri or not uri.startswith("s3://"):
+        return None
+    without_prefix = uri[5:]
+    if "/" not in without_prefix:
+        return None
+    bucket, _, key = without_prefix.partition("/")
+    if not bucket or not key:
+        return None
+    return bucket, key
+
+
+def _fetch_chunk_image_attachments(
+    *,
+    results: List[VectorSearchResult],
+    s3_client: Any,
+    max_attachments: int,
+) -> list[dict[str, Any]]:
+    """Fetch PNG (or other image) artifacts for retrieved chunks.
+
+    Returns a list of attachment dicts ready to be attached to a multimodal
+    HumanMessage. Each attachment includes the source chunk_id so the answer
+    model can reference it. Failures degrade silently: a missing image just
+    means the answer model gets the chunk's text description without the
+    visual.
+    """
+    attachments: list[dict[str, Any]] = []
+    for result in results:
+        if len(attachments) >= max_attachments:
+            break
+        meta = result.metadata or {}
+        content_type = meta.get("asset_content_type")
+        asset_location = meta.get("asset_location")
+        if not content_type or not isinstance(content_type, str):
+            continue
+        if not content_type.startswith("image/"):
+            continue
+        parsed = _parse_s3_uri(asset_location) if isinstance(asset_location, str) else None
+        if parsed is None:
+            continue
+        bucket, key = parsed
+        try:
+            obj = s3_client.get_object(Bucket=bucket, Key=key)
+            data = obj["Body"].read()
+        except ClientError as exc:
+            log.warning(
+                "Failed to fetch image asset: chunk_id=%s s3=s3://%s/%s error=%s",
+                result.chunk_id,
+                bucket,
+                key,
+                exc.response.get("Error", {}).get("Code"),
+            )
+            continue
+        attachments.append(
+            {
+                "chunk_id": result.chunk_id,
+                "asset_location": asset_location,
+                "media_type": content_type,
+                "data_b64": base64.b64encode(data).decode("ascii"),
+            }
+        )
+    return attachments
 
 
 def _format_metadata_value(value: Any) -> str:
@@ -171,6 +245,26 @@ def retrieve_node(state: MessagesState, config: Optional[RunnableConfig] = None)
         for index, result in enumerate(results, start=1)
     ]
     state["sources"] = sources
+
+    # Fetch image attachments for any retrieved chunks whose asset is an image
+    # (figure chunks with full-page PNGs). Stored in state for the answer node
+    # to attach to the multimodal LLM call.
+    image_attachments: list[dict[str, Any]] = []
+    try:
+        s3_client = boto3.client("s3", region_name=region)
+        image_attachments = _fetch_chunk_image_attachments(
+            results=results,
+            s3_client=s3_client,
+            max_attachments=_IMAGE_ASSET_CACHE_LIMIT,
+        )
+    except Exception as exc:
+        log.warning("Image attachment fetch failed: %s", exc)
+    state["image_attachments"] = image_attachments
+    if image_attachments:
+        log.info(
+            "Attached %s image asset(s) to multimodal context",
+            len(image_attachments),
+        )
 
     if collector and trace_step:
         collector.complete_step(
