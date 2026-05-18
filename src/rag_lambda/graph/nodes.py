@@ -233,13 +233,45 @@ def answer_node(state: MessagesState, config: Optional[RunnableConfig] = None) -
     ctx_msgs = [m for m in state["messages"] if getattr(m, "name", "") == "retriever_context"]
     context = ctx_msgs[-1].content if ctx_msgs else ""
     prompt_values = {"context": context, "history": history, "question": user.content}
+    image_attachments = state.get("image_attachments") or []
+
     if answer_prompt_debug_enabled():
         formatted_prompt = answer_prompt.format_messages(**prompt_values)
         log.info(
             "Formatted answer prompt before LLM invocation:\n%s",
             format_prompt_messages_for_debug(formatted_prompt),
         )
-    resp = (answer_prompt | llm).invoke(prompt_values)
+
+    if image_attachments:
+        # Multimodal path: format the answer prompt to messages, then attach
+        # image content blocks to the last (HumanMessage) entry so the
+        # multimodal Bedrock model sees both the text context and the
+        # rendered page images of retrieved figure chunks.
+        formatted_messages = answer_prompt.format_messages(**prompt_values)
+        last_message = formatted_messages[-1]
+        text_content = (
+            last_message.content
+            if isinstance(last_message.content, str)
+            else extract_text_content(last_message.content)
+        )
+        multimodal_content: list[dict[str, Any]] = [{"type": "text", "text": text_content}]
+        for attachment in image_attachments:
+            multimodal_content.append(
+                {
+                    "type": "image",
+                    "source_type": "base64",
+                    "data": attachment["data_b64"],
+                    "mime_type": attachment.get("media_type", "image/png"),
+                }
+            )
+        formatted_messages[-1] = HumanMessage(content=multimodal_content)
+        log.info(
+            "Invoking answer LLM with %s image attachment(s)",
+            len(image_attachments),
+        )
+        resp = llm.invoke(formatted_messages)
+    else:
+        resp = (answer_prompt | llm).invoke(prompt_values)
     resp_text = extract_text_content(resp.content)
     state["messages"].append(AIMessage(content=resp_text))
     if collector and trace_step:
