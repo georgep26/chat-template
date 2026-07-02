@@ -93,6 +93,37 @@ def build_hierarchy_chunk_artifacts(
                 chunk_start=part_start,
                 chunk_end=part_end,
             )
+            # `hierarchy_index_for_range` returns offsets relative to the
+            # section body (i.e. ``part_text``). The chunk markdown that
+            # Bedrock indexes — and that the RAG path's quote matcher
+            # searches — has a metadata header prepended via
+            # ``build_chunk_markdown``. Shift the index by the header length
+            # so the inline-index char ranges align with the markdown char
+            # offsets used during citation resolution.
+            _stripped_body = part_text.strip()
+            _body_offset_in_markdown = (
+                len(_chunk_header_string(
+                    document_id=document_metadata["document_id"],
+                    chunk_id=chunk_id,
+                    source_location=document_metadata["source_location"],
+                    title=_chunk_title(node, part_index, part_count),
+                    page_start=_page_range_for_part(
+                        joined_text=joined_text,
+                        fallback_start=node.page_start,
+                        fallback_end=node.page_end,
+                        char_start=part_start,
+                        char_end=part_end,
+                    )[0],
+                ))
+            )
+            hierarchy_index = [
+                {
+                    **entry,
+                    "char_start": entry["char_start"] + _body_offset_in_markdown,
+                    "char_end": entry["char_end"] + _body_offset_in_markdown,
+                }
+                for entry in hierarchy_index
+            ]
             index_key = join_s3_key(
                 raw_prefix,
                 document_metadata["document_id"],
@@ -248,6 +279,32 @@ def _chunk_title(node: HierarchyNode, part_index: int, part_count: int) -> str:
     if part_count > 1:
         title = f"{title} (part {part_index})"
     return title
+
+
+def _chunk_header_string(
+    *,
+    document_id: str,
+    chunk_id: str,
+    source_location: str,
+    title: str,
+    page_start: int | None,
+) -> str:
+    """Return the exact header prefix that ``build_chunk_markdown`` prepends.
+
+    The returned string is the markdown chars that come BEFORE the section
+    body. Used to shift hierarchy_index char ranges so they align with the
+    full markdown the RAG path indexes.
+    """
+    header_lines = [
+        f"# {title}",
+        "",
+        f"- document_id: {document_id}",
+        f"- chunk_id: {chunk_id}",
+        f"- source: {source_location}",
+        f"- page: {page_start}",
+        "",
+    ]
+    return "\n".join(header_lines)
 
 
 def _page_range_for_part(
