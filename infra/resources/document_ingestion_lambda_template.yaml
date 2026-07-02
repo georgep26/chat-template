@@ -213,8 +213,9 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          # Phase 3 + 5: table extraction + OCR fallback. Both run async over
-          # S3 inputs; Textract reads the raw PDF directly via the role.
+          # Phase 3 + 5: table extraction + OCR fallback. Async jobs read PDFs
+          # from S3 via the role; sync AnalyzeDocument is used for per-page
+          # targeted table extraction with raw PNG bytes.
           - Sid: AllowTextractAsyncJobs
             Effect: Allow
             Action:
@@ -222,6 +223,11 @@ Resources:
               - textract:GetDocumentAnalysis
               - textract:StartDocumentTextDetection
               - textract:GetDocumentTextDetection
+            Resource: '*'
+          - Sid: AllowTextractSyncAnalyze
+            Effect: Allow
+            Action:
+              - textract:AnalyzeDocument
             Resource: '*'
 
   LambdaConfigS3Policy:

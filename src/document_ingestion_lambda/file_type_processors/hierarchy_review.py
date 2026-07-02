@@ -34,7 +34,9 @@ class HierarchyReviewResult:
     hierarchy: DocumentHierarchy
     issues: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    request: dict[str, Any] | None = None
     raw_response: dict[str, Any] | None = None
+    raw_response_text: str | None = None
 
 
 def should_review_hierarchy(
@@ -70,7 +72,7 @@ def review_hierarchy(
     config: HierarchyReviewConfig,
 ) -> HierarchyReviewResult:
     """Ask a model to correct a deterministic hierarchy and validate the result."""
-    request = _build_request(
+    request = build_hierarchy_review_request(
         hierarchy=hierarchy,
         triage_payload=triage_payload,
         text_quality_payload=text_quality_payload,
@@ -85,6 +87,8 @@ def review_hierarchy(
             status="failed",
             hierarchy=hierarchy,
             warnings=["review_response_not_json"],
+            request=request,
+            raw_response_text=text,
         )
 
     corrected = parsed.get("corrected_hierarchy")
@@ -93,7 +97,9 @@ def review_hierarchy(
             status="no_correction",
             hierarchy=hierarchy,
             issues=parsed.get("issues") if isinstance(parsed.get("issues"), list) else [],
+            request=request,
             raw_response=parsed,
+            raw_response_text=text,
         )
 
     candidate = _hierarchy_from_payload(corrected, fallback=hierarchy)
@@ -112,14 +118,36 @@ def review_hierarchy(
             hierarchy=hierarchy,
             issues=parsed.get("issues") if isinstance(parsed.get("issues"), list) else [],
             warnings=validation["errors"],
+            request=request,
             raw_response=parsed,
+            raw_response_text=text,
         )
 
     return HierarchyReviewResult(
         status="corrected",
         hierarchy=candidate,
         issues=parsed.get("issues") if isinstance(parsed.get("issues"), list) else [],
+        request=request,
         raw_response=parsed,
+        raw_response_text=text,
+    )
+
+
+def build_hierarchy_review_request(
+    *,
+    hierarchy: DocumentHierarchy,
+    triage_payload: dict[str, Any],
+    text_quality_payload: dict[str, Any],
+    profile_payload: dict[str, Any],
+    config: HierarchyReviewConfig,
+) -> dict[str, Any]:
+    """Build the exact Converse request body sent to the hierarchy review model."""
+    return _build_request(
+        hierarchy=hierarchy,
+        triage_payload=triage_payload,
+        text_quality_payload=text_quality_payload,
+        profile_payload=profile_payload,
+        config=config,
     )
 
 

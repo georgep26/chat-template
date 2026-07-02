@@ -22,8 +22,10 @@ from document_ingestion_lambda.triage import (
     TriageConfig,
     multimodal_triage,
     page_observations_as_dicts,
+    triage_debug_dict,
     triage_summary_dict,
 )
+from utils.logger import get_logger
 
 # Section chunking is imported lazily inside `process()` to keep this module
 # import-graph free of cycles (section_chunking imports back from this module).
@@ -39,7 +41,14 @@ except ImportError:
     boto3 = None  # type: ignore[assignment]
 
 
-def _maybe_boto3_client(service: str, region: str | None = None) -> Any | None:
+log = get_logger(__name__)
+
+
+def _maybe_boto3_client(
+    service: str,
+    region: str | None = None,
+    config: Any | None = None,
+) -> Any | None:
     """Best-effort boto3 client construction.
 
     Returns None when boto3 isn't importable (lightweight tests) so callers
@@ -48,10 +57,14 @@ def _maybe_boto3_client(service: str, region: str | None = None) -> Any | None:
     """
     if boto3 is None:
         return None
+    kwargs: dict[str, Any] = {}
+    if region:
+        kwargs["region_name"] = region
+    if config:
+        kwargs["config"] = config
     try:
-        return boto3.client(service, region_name=region) if region else boto3.client(service)
+        return boto3.client(service, **kwargs)
     except TypeError:
-        # Test stubs sometimes replace ``boto3.client`` with a simpler callable.
         return boto3.client(service)
 
 
@@ -84,6 +97,42 @@ class PdfTextExtractionResult:
     extraction_status: str
     pages: list[PdfPageText] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class JoinedPageText:
+    """Full joined text with page-offset mapping for shared coordinate space.
+
+    Used by the Sonnet hierarchy call, the hierarchy locator, and the chunker
+    so they all operate on the same char-offset coordinate system.
+    """
+
+    text: str
+    page_offsets: dict[int, int]  # page_number → char offset of that page's start
+
+
+def join_pages_with_markers(pages: list[PdfPageText]) -> JoinedPageText:
+    """Build joined text with page markers and page→offset map.
+
+    Each page is preceded by a marker line ``=== PAGE N ===\\n`` so both the
+    hierarchy model and the locator algorithm can reference absolute page
+    positions. The returned ``page_offsets`` map gives the char position of
+    each marker's first character.
+    """
+    parts: list[str] = []
+    page_offsets: dict[int, int] = {}
+    cursor = 0
+    for page in sorted(pages, key=lambda p: p.page_number):
+        marker = f"=== PAGE {page.page_number} ===\n"
+        page_offsets[page.page_number] = cursor
+        parts.append(marker)
+        cursor += len(marker)
+        body = page.text if page.text else ""
+        parts.append(body)
+        cursor += len(body)
+        parts.append("\n\n")
+        cursor += 2
+    return JoinedPageText(text="".join(parts), page_offsets=page_offsets)
 
 
 @dataclass
@@ -134,7 +183,16 @@ class PdfProcessor:
         if self._bedrock_client is not None:
             return self._bedrock_client
         region = self._ingestion_config.get("pdf_triage_region") or "us-east-1"
-        self._bedrock_client = _maybe_boto3_client("bedrock-runtime", region)
+        try:
+            from botocore.config import Config as BotoConfig
+            boto_config = BotoConfig(
+                read_timeout=120,
+                connect_timeout=10,
+                retries={"max_attempts": 2, "mode": "standard"},
+            )
+        except ImportError:
+            boto_config = None
+        self._bedrock_client = _maybe_boto3_client("bedrock-runtime", region, config=boto_config)
         return self._bedrock_client
 
     def _get_textract_client(self) -> Any | None:
@@ -200,6 +258,45 @@ class PdfProcessor:
         }
         return extraction, diagnostics
 
+    def _merge_text_sources(
+        self,
+        *,
+        embedded: "PdfTextExtractionResult",
+        triage: "PdfTriageResult",
+        text_quality_report: Any,
+    ) -> list["PdfPageText"]:
+        """Merge embedded and model text, preferring embedded except on flagged pages.
+
+        Returns a list of PdfPageText ready for join_pages_with_markers().
+        """
+        model_text_by_page = {
+            obs.page_number: obs.raw_visible_text
+            for obs in triage.page_observations
+            if not obs.parse_error and obs.raw_visible_text
+        }
+        suspicious_pages = set(
+            text_quality_report.pages_over_text_mismatch_threshold
+            if hasattr(text_quality_report, "pages_over_text_mismatch_threshold")
+            else []
+        )
+
+        merged: list[PdfPageText] = []
+        embedded_page_numbers: set[int] = set()
+        for page in embedded.pages:
+            embedded_page_numbers.add(page.page_number)
+            model_text = model_text_by_page.get(page.page_number, "")
+            if page.page_number in suspicious_pages and len(model_text) > len(page.text):
+                merged.append(PdfPageText(page_number=page.page_number, text=model_text))
+            else:
+                merged.append(page)
+
+        for page_number, text in model_text_by_page.items():
+            if page_number not in embedded_page_numbers and text.strip():
+                merged.append(PdfPageText(page_number=page_number, text=text))
+
+        merged.sort(key=lambda p: p.page_number)
+        return merged
+
     def _extract_assets(
         self,
         *,
@@ -209,120 +306,113 @@ class PdfProcessor:
         document_metadata: dict[str, Any],
         destination_bucket: str,
         hierarchy: Any | None = None,
+        triage: Any | None = None,
     ) -> tuple[list["PdfChunkArtifact"], dict[str, Any]]:
-        """Run a single Textract job and build both table + figure chunks.
+        """Build table + figure chunks using Scout-flagged page targeting.
 
-        Phases 3 + 4 share one Textract ``AnalyzeDocument`` job (one charge
-        per page) — splitting them would double the cost. Returns the
-        combined chunk artifacts plus a dict suitable for merging into
-        ``processing`` on the document metadata.
+        - Tables: per-page Textract sync ``AnalyzeDocument`` on each page Scout
+          flagged with ``contains_table``. Scout's description is the chunk
+          embedding text; Textract's grid is the chunk body.
+        - Figures: Scout's description is the chunk text; the artifact is the
+          full rendered page PNG. The RAG layer attaches the PNG to the
+          multimodal answer model's context when the chunk is retrieved.
         """
-        from document_ingestion_lambda.file_type_processors.table_extraction import (
-            TableExtractionConfig,
-            TableExtractionResult,
-            extract_table_chunk_artifacts,
-            run_textract_analysis,
+        from document_ingestion_lambda.file_type_processors.figure_extraction_targeted import (
+            TargetedFigureExtractionConfig,
+            extract_figures_targeted,
         )
-        from document_ingestion_lambda.file_type_processors.figure_extraction import (
-            FigureExtractionConfig,
-            FigureExtractionResult,
-            extract_figure_chunk_artifacts,
+        from document_ingestion_lambda.file_type_processors.table_extraction_targeted import (
+            TargetedTableExtractionConfig,
+            extract_tables_targeted,
         )
+        from document_ingestion_lambda.triage import _render_page_with_pdfium
 
         cfg = self._ingestion_config
         tables_enabled = _as_bool(cfg.get("pdf_table_extraction_enabled"), default=True)
         figures_enabled = _as_bool(cfg.get("pdf_figure_extraction_enabled"), default=True)
         if not tables_enabled and not figures_enabled:
             return [], {
-                "table_extraction": {"status": "skipped", "table_count": 0, "warnings": ["disabled"]},
-                "figure_extraction": {"status": "skipped", "figure_count": 0, "warnings": ["disabled"]},
+                "table_extraction": {"status": "skipped", "warnings": ["disabled"]},
+                "figure_extraction": {"status": "skipped", "warnings": ["disabled"]},
             }
-
-        textract_client = self._get_textract_client()
-        if textract_client is None:
+        if triage is None or triage.triage_status != "completed":
             return [], {
-                "table_extraction": {"status": "skipped", "table_count": 0, "warnings": ["textract_client_unavailable"]},
-                "figure_extraction": {"status": "skipped", "figure_count": 0, "warnings": ["textract_client_unavailable"]},
+                "table_extraction": {"status": "skipped", "warnings": ["triage_unavailable"]},
+                "figure_extraction": {"status": "skipped", "warnings": ["triage_unavailable"]},
             }
 
-        # One Textract job, two consumers.
-        blocks, fetch_warnings = run_textract_analysis(
-            raw_s3_bucket=raw_bucket,
-            raw_s3_key=raw_key,
-            textract_client=textract_client,
-            poll_interval_seconds=float(cfg.get("pdf_textract_poll_interval_seconds") or 5.0),
-            max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
-        )
-        if fetch_warnings:
-            return [], {
-                "table_extraction": {"status": "failed", "table_count": 0, "warnings": fetch_warnings},
-                "figure_extraction": {"status": "failed", "figure_count": 0, "warnings": fetch_warnings},
-            }
-
-        bedrock_client = self._get_bedrock_client()
         artifacts: list["PdfChunkArtifact"] = []
         diagnostics: dict[str, Any] = {}
+        render_scale = float(cfg.get("pdf_triage_render_scale") or 2.0)
 
         if tables_enabled:
-            table_config = TableExtractionConfig(
-                enabled=True,
-                summary_model_id=str(
-                    cfg.get("pdf_table_summary_model_id") or "amazon.nova-lite-v1:0"
-                ),
-                summary_region=str(cfg.get("pdf_triage_region") or "us-east-1"),
-                poll_interval_seconds=float(cfg.get("pdf_textract_poll_interval_seconds") or 5.0),
-                max_wait_seconds=float(cfg.get("pdf_textract_max_wait_seconds") or 540.0),
-                max_tables=int(cfg.get("pdf_max_table_extractions") or 500),
-            )
-            table_artifacts, table_result = extract_table_chunk_artifacts(
-                blocks=blocks,
-                document_metadata=document_metadata,
-                destination_bucket=destination_bucket,
-                index_prefix=cfg["index_prefix"],
-                artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
-                bedrock_client=bedrock_client,
-                config=table_config,
-            )
-            if hierarchy is not None:
-                _attach_parent_hierarchy_to_asset_artifacts(table_artifacts, hierarchy)
-            artifacts.extend(table_artifacts)
-            diagnostics["table_extraction"] = {
-                "status": table_result.status,
-                "table_count": table_result.table_count,
-                "warnings": table_result.warnings,
-            }
+            textract_client = self._get_textract_client()
+            if textract_client is None:
+                diagnostics["table_extraction"] = {
+                    "status": "skipped",
+                    "warnings": ["textract_client_unavailable"],
+                }
+            else:
+                table_config = TargetedTableExtractionConfig(
+                    enabled=True,
+                    max_parallel_pages=int(
+                        cfg.get("pdf_table_extraction_max_parallel_pages") or 6
+                    ),
+                    sync_timeout_seconds=int(
+                        cfg.get("pdf_textract_sync_timeout_seconds") or 60
+                    ),
+                    max_tables=int(cfg.get("pdf_max_table_extractions") or 500),
+                )
+                table_artifacts, table_result = extract_tables_targeted(
+                    pdf_path=pdf_path,
+                    triage=triage,
+                    hierarchy=hierarchy,
+                    document_metadata=document_metadata,
+                    destination_bucket=destination_bucket,
+                    index_prefix=cfg["index_prefix"],
+                    artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
+                    textract_client=textract_client,
+                    page_renderer=_render_page_with_pdfium,
+                    render_scale=render_scale,
+                    config=table_config,
+                )
+                artifacts.extend(table_artifacts)
+                diagnostics["table_extraction"] = {
+                    "status": table_result.status,
+                    "pages_processed": table_result.pages_processed,
+                    "pages_failed": table_result.pages_failed,
+                    "tables_detected": table_result.tables_detected,
+                    "warnings": table_result.warnings,
+                }
         else:
-            diagnostics["table_extraction"] = {"status": "skipped", "table_count": 0, "warnings": ["disabled"]}
+            diagnostics["table_extraction"] = {"status": "skipped", "warnings": ["disabled"]}
 
         if figures_enabled:
-            figure_config = FigureExtractionConfig(
+            figure_config = TargetedFigureExtractionConfig(
                 enabled=True,
-                summary_model_id=str(
-                    cfg.get("pdf_figure_summary_model_id") or "amazon.nova-lite-v1:0"
-                ),
+                render_scale=render_scale,
                 max_figures=int(cfg.get("pdf_max_figure_extractions") or 200),
             )
-            figure_artifacts, figure_result = extract_figure_chunk_artifacts(
-                blocks=blocks,
+            figure_artifacts, figure_result = extract_figures_targeted(
                 pdf_path=pdf_path,
+                triage=triage,
+                hierarchy=hierarchy,
                 document_metadata=document_metadata,
                 destination_bucket=destination_bucket,
                 index_prefix=cfg["index_prefix"],
                 artifacts_prefix=cfg.get("artifacts_prefix") or "kb_artifacts/",
-                bedrock_client=bedrock_client,
-                s3_client=self._s3,
+                page_renderer=_render_page_with_pdfium,
                 config=figure_config,
             )
-            if hierarchy is not None:
-                _attach_parent_hierarchy_to_asset_artifacts(figure_artifacts, hierarchy)
             artifacts.extend(figure_artifacts)
             diagnostics["figure_extraction"] = {
                 "status": figure_result.status,
                 "figure_count": figure_result.figure_count,
+                "pages_with_figures": figure_result.pages_with_figures,
                 "warnings": figure_result.warnings,
             }
         else:
-            diagnostics["figure_extraction"] = {"status": "skipped", "figure_count": 0, "warnings": ["disabled"]}
+            diagnostics["figure_extraction"] = {"status": "skipped", "warnings": ["disabled"]}
 
         return artifacts, diagnostics
 
@@ -420,7 +510,7 @@ class PdfProcessor:
         cfg = self._ingestion_config
         return TriageConfig(
             enabled=_as_bool(cfg.get("pdf_triage_enabled"), default=True),
-            model_id=str(cfg.get("pdf_triage_model_id") or "amazon.nova-lite-v1:0"),
+            model_id=str(cfg.get("pdf_triage_model_id") or "us.meta.llama4-scout-17b-instruct-v1:0"),
             region=str(cfg.get("pdf_triage_region") or "us-east-1"),
             front_page_sample_count=int(cfg.get("pdf_front_page_sample_count") or 5),
             random_page_sample_count=int(cfg.get("pdf_random_page_sample_count") or 5),
@@ -430,8 +520,9 @@ class PdfProcessor:
             ocr_threshold=float(cfg.get("pdf_triage_ocr_threshold") or 0.30),
             hierarchy_threshold=float(cfg.get("pdf_triage_hierarchy_threshold") or 0.50),
             temperature=float(cfg.get("pdf_triage_temperature") or 0.0),
-            max_tokens_per_page=int(cfg.get("pdf_triage_max_tokens_per_page") or 2048),
+            max_tokens_per_page=int(cfg.get("pdf_triage_max_tokens_per_page") or 8192),
             render_scale=float(cfg.get("pdf_triage_render_scale") or 2.0),
+            parallel_workers=int(cfg.get("pdf_triage_parallel_workers") or 6),
         )
 
     def process(
@@ -463,6 +554,24 @@ class PdfProcessor:
 
             title = pdf_scan.title or title_from_filename(filename)
             document_id = generate_document_id("pdf", title, filename, self._random_suffix())
+            triage_config = self._build_triage_config()
+            debug_enabled = _as_bool(
+                self._ingestion_config.get("debug_artifacts_enabled"),
+                default=False,
+            )
+            debug_include_model_payloads = _as_bool(
+                self._ingestion_config.get("debug_include_model_payloads"),
+                default=False,
+            )
+            log.info(
+                "PDF triage complete: document_id=%s status=%s full_page=%s sampled_pages=%s observations=%s warnings=%s",
+                document_id,
+                triage.triage_status,
+                triage.full_page_triage_enabled,
+                len(triage.sampled_pages),
+                len(triage.page_observations),
+                triage.warnings,
+            )
 
             raw_key = join_s3_key(
                 self._ingestion_config["raw_prefix"],
@@ -531,6 +640,12 @@ class PdfProcessor:
                 document_id,
                 "document_hierarchy.json",
             )
+            nova_triage_debug_key = join_s3_key(
+                self._ingestion_config["raw_prefix"],
+                document_id,
+                "debug",
+                "triage_debug.json",
+            )
 
             embedded_text_extraction = extract_pdf_text_pages(tmp_path)
             from document_ingestion_lambda.file_type_processors.text_quality import (
@@ -553,7 +668,57 @@ class PdfProcessor:
                     or 100
                 ),
             )
+            log.info(
+                "PDF text quality complete: document_id=%s ocr_recommended=%s suspicious_pages=%s/%s reason=%s",
+                document_id,
+                text_quality_report.ocr_recommended,
+                len(text_quality_report.pages_over_text_mismatch_threshold),
+                text_quality_report.triaged_page_count,
+                text_quality_report.reason,
+            )
+            self._s3.put_object(
+                Bucket=destination_bucket,
+                Key=triage_key,
+                Body=json.dumps(
+                    {"page_observations": page_observations_as_dicts(triage)},
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            self._s3.put_object(
+                Bucket=destination_bucket,
+                Key=text_quality_key,
+                Body=json.dumps(
+                    text_quality_report.to_dict(),
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            if debug_enabled:
+                self._s3.put_object(
+                    Bucket=destination_bucket,
+                    Key=nova_triage_debug_key,
+                    Body=json.dumps(
+                        triage_debug_dict(
+                            triage,
+                            config=triage_config,
+                            include_model_payloads=debug_include_model_payloads,
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                    ContentType="application/json",
+                )
+                log.info(
+                    "Wrote Nova Lite triage debug artifact: document_id=%s s3_uri=s3://%s/%s",
+                    document_id,
+                    destination_bucket,
+                    nova_triage_debug_key,
+                )
 
+            # --- Text extraction: embedded + OCR fallback ---
             text_extraction, ocr_diagnostics = self._extract_text(
                 pdf_path=tmp_path,
                 embedded_text_extraction=embedded_text_extraction,
@@ -564,16 +729,61 @@ class PdfProcessor:
             if ocr_diagnostics is not None:
                 metadata["processing"]["ocr"] = ocr_diagnostics
 
+            # --- Per-page text merge: embedded (source of truth) + model gap-fill ---
+            merged_pages = self._merge_text_sources(
+                embedded=text_extraction,
+                triage=triage,
+                text_quality_report=text_quality_report,
+            )
+            joined = join_pages_with_markers(merged_pages)
+
+            # --- Persist model_extracted_text.json ---
+            model_text_key = join_s3_key(
+                self._ingestion_config["raw_prefix"],
+                document_id,
+                "triage",
+                "model_extracted_text.json",
+            )
+            model_text_pages = []
+            for obs in triage.page_observations:
+                if not obs.parse_error and obs.raw_visible_text:
+                    model_text_pages.append({
+                        "page_number": obs.page_number,
+                        "text": obs.raw_visible_text,
+                        "char_count": len(obs.raw_visible_text),
+                    })
+            self._s3.put_object(
+                Bucket=destination_bucket,
+                Key=model_text_key,
+                Body=json.dumps(
+                    {
+                        "extraction_model_id": triage_config.model_id,
+                        "pages": model_text_pages,
+                        "total_pages_with_text": len(model_text_pages),
+                        "total_chars": sum(p["char_count"] for p in model_text_pages),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            log.info(
+                "Wrote model_extracted_text.json: document_id=%s pages=%s total_chars=%s",
+                document_id,
+                len(model_text_pages),
+                sum(p["char_count"] for p in model_text_pages),
+            )
+
+            # --- Hierarchy extraction via Sonnet 4.6 ---
             hierarchy_build = None
             profile_diagnostics: dict[str, Any] = {"profile_id": "plain_document"}
             if _as_bool(self._ingestion_config.get("pdf_hierarchy_enabled"), default=True):
-                from document_ingestion_lambda.file_type_processors.hierarchy import (
-                    build_deterministic_hierarchy,
+                from document_ingestion_lambda.file_type_processors.hierarchy_locator import (
+                    build_hierarchy_from_sonnet_nodes,
                 )
-                from document_ingestion_lambda.file_type_processors.hierarchy_review import (
-                    HierarchyReviewConfig,
-                    review_hierarchy,
-                    should_review_hierarchy,
+                from document_ingestion_lambda.file_type_processors.hierarchy_sonnet import (
+                    HierarchySonnetConfig,
+                    extract_hierarchy,
                 )
                 from document_ingestion_lambda.file_type_processors.parser_profiles import (
                     select_parser_profile,
@@ -584,64 +794,184 @@ class PdfProcessor:
                     filename=filename,
                     triage=triage,
                 )
-                hierarchy_build = build_deterministic_hierarchy(
-                    document_metadata=metadata,
-                    text_extraction=text_extraction,
-                    triage=triage,
-                    profile=profile,
-                    min_section_chars=int(
-                        self._ingestion_config.get("pdf_section_min_chars") or 40
-                    ),
-                )
-                review_config = HierarchyReviewConfig(
-                    mode=str(self._ingestion_config.get("hierarchy_review_model_mode") or "never"),
+
+                sonnet_config = HierarchySonnetConfig(
                     model_id=str(
-                        self._ingestion_config.get("hierarchy_review_model_id")
+                        self._ingestion_config.get("pdf_hierarchy_model_id")
                         or "us.anthropic.claude-sonnet-4-6"
                     ),
                     region=str(
-                        self._ingestion_config.get("hierarchy_review_region")
-                        or self._ingestion_config.get("pdf_triage_region")
-                        or "us-east-1"
+                        self._ingestion_config.get("pdf_triage_region") or "us-east-1"
                     ),
-                    min_confidence=float(
-                        self._ingestion_config.get("hierarchy_review_min_confidence")
-                        or 0.80
+                    max_output_tokens=int(
+                        self._ingestion_config.get("pdf_hierarchy_max_output_tokens") or 32000
                     ),
-                    temperature=float(
-                        self._ingestion_config.get("hierarchy_review_temperature")
-                        or 0.0
-                    ),
-                    max_tokens=int(
-                        self._ingestion_config.get("hierarchy_review_max_tokens")
-                        or 8192
+                    temperature=0.0,
+                    single_call_max_pages=int(
+                        self._ingestion_config.get("pdf_hierarchy_single_call_max_pages") or 100
                     ),
                 )
-                bedrock_client = self._get_bedrock_client()
-                if bedrock_client is not None and should_review_hierarchy(
-                    hierarchy_build.hierarchy,
-                    config=review_config,
-                ):
-                    try:
-                        review_result = review_hierarchy(
-                            hierarchy=hierarchy_build.hierarchy,
-                            triage_payload={"page_observations": page_observations_as_dicts(triage)},
-                            text_quality_payload=text_quality_report.to_dict(),
-                            profile_payload=profile_diagnostics,
-                            bedrock_client=bedrock_client,
-                            config=review_config,
+
+                # Build a Bedrock client with a longer timeout for the Sonnet call.
+                try:
+                    from botocore.config import Config as BotoConfig
+                    sonnet_timeout = int(
+                        self._ingestion_config.get("pdf_hierarchy_read_timeout_seconds") or 600
+                    )
+                    sonnet_boto_config = BotoConfig(
+                        read_timeout=sonnet_timeout,
+                        connect_timeout=10,
+                        retries={"max_attempts": 1, "mode": "standard"},
+                    )
+                except ImportError:
+                    sonnet_boto_config = None
+                sonnet_client = _maybe_boto3_client(
+                    "bedrock-runtime", sonnet_config.region, config=sonnet_boto_config
+                )
+
+                if sonnet_client is not None:
+                    sonnet_result = extract_hierarchy(
+                        joined_text=joined.text,
+                        page_count=len(merged_pages),
+                        config=sonnet_config,
+                        bedrock_client=sonnet_client,
+                    )
+
+                    # --- Diagnostic: persist Sonnet response + joined text ---
+                    if debug_enabled:
+                        sonnet_debug_key = join_s3_key(
+                            self._ingestion_config["raw_prefix"],
+                            document_id,
+                            "debug",
+                            "sonnet_hierarchy_response.json",
                         )
-                        hierarchy_build.hierarchy = review_result.hierarchy
-                        hierarchy_build.hierarchy.generation["review"] = {
-                            "status": review_result.status,
-                            "issues": review_result.issues,
-                            "warnings": review_result.warnings,
+                        sonnet_debug_payload = {
+                            "model_id": sonnet_config.model_id,
+                            "status": sonnet_result.status,
+                            "document_profile": sonnet_result.document_profile,
+                            "heading_pattern": sonnet_result.heading_pattern,
+                            "warnings": sonnet_result.warnings,
+                            "usage": sonnet_result.usage,
+                            "node_count": len(sonnet_result.nodes),
+                            "raw_response_text": sonnet_result.raw_response_text,
+                            "parsed_nodes": [
+                                {
+                                    "label": n.label,
+                                    "title": n.title,
+                                    "node_type": n.node_type,
+                                    "parent_label": n.parent_label,
+                                    "page_start": n.page_start,
+                                    "page_end": n.page_end,
+                                    "depth": n.depth,
+                                    "body_anchor": n.body_anchor,
+                                }
+                                for n in sonnet_result.nodes
+                            ],
                         }
-                    except Exception as exc:
-                        hierarchy_build.hierarchy.generation["review"] = {
-                            "status": "failed",
-                            "message": f"{type(exc).__name__}: {exc}",
-                        }
+                        self._s3.put_object(
+                            Bucket=destination_bucket,
+                            Key=sonnet_debug_key,
+                            Body=json.dumps(
+                                sonnet_debug_payload,
+                                indent=2,
+                                sort_keys=True,
+                                ensure_ascii=False,
+                            ).encode("utf-8"),
+                            ContentType="application/json",
+                        )
+                        joined_debug_key = join_s3_key(
+                            self._ingestion_config["raw_prefix"],
+                            document_id,
+                            "debug",
+                            "joined_text.txt",
+                        )
+                        self._s3.put_object(
+                            Bucket=destination_bucket,
+                            Key=joined_debug_key,
+                            Body=joined.text.encode("utf-8"),
+                            ContentType="text/plain; charset=utf-8",
+                        )
+                        page_offsets_key = join_s3_key(
+                            self._ingestion_config["raw_prefix"],
+                            document_id,
+                            "debug",
+                            "page_offsets.json",
+                        )
+                        self._s3.put_object(
+                            Bucket=destination_bucket,
+                            Key=page_offsets_key,
+                            Body=json.dumps(
+                                joined.page_offsets,
+                                indent=2,
+                                sort_keys=True,
+                            ).encode("utf-8"),
+                            ContentType="application/json",
+                        )
+                        log.info(
+                            "Wrote Sonnet hierarchy debug artifacts: document_id=%s sonnet=%s joined=%s page_offsets=%s",
+                            document_id,
+                            sonnet_debug_key,
+                            joined_debug_key,
+                            page_offsets_key,
+                        )
+
+                    if sonnet_result.status == "completed" and sonnet_result.nodes:
+                        hierarchy = build_hierarchy_from_sonnet_nodes(
+                            sonnet_nodes=sonnet_result.nodes,
+                            joined=joined,
+                            document_id=document_id,
+                            source_location=raw_s3_uri,
+                            profile=profile.profile_id if hasattr(profile, "profile_id") else str(profile_diagnostics.get("profile_id", "unknown")),
+                            heading_pattern=sonnet_result.heading_pattern,
+                        )
+                        if hierarchy is not None:
+                            from document_ingestion_lambda.file_type_processors.hierarchy import (
+                                HierarchyBuildResult,
+                            )
+                            hierarchy_build = HierarchyBuildResult(
+                                hierarchy=hierarchy,
+                                joined_text=joined,
+                                boundaries=[],
+                                diagnostics=hierarchy.generation.get("validation", {}),
+                            )
+                            log.info(
+                                "Sonnet hierarchy located: document_id=%s nodes=%s source=%s",
+                                document_id,
+                                len(hierarchy.nodes),
+                                hierarchy.generation.get("source"),
+                            )
+                        else:
+                            log.warning(
+                                "Hierarchy locator returned None (below 50%% success); falling back to deterministic builder"
+                            )
+                    else:
+                        log.warning(
+                            "Sonnet hierarchy extraction failed: document_id=%s status=%s warnings=%s",
+                            document_id,
+                            sonnet_result.status,
+                            sonnet_result.warnings,
+                        )
+
+                # Fallback to deterministic builder if Sonnet path didn't produce a hierarchy.
+                if hierarchy_build is None:
+                    from document_ingestion_lambda.file_type_processors.hierarchy import (
+                        build_deterministic_hierarchy,
+                    )
+                    hierarchy_build = build_deterministic_hierarchy(
+                        document_metadata=metadata,
+                        text_extraction=text_extraction,
+                        triage=triage,
+                        profile=profile,
+                        min_section_chars=int(
+                            self._ingestion_config.get("pdf_section_min_chars") or 40
+                        ),
+                    )
+                    log.info(
+                        "Deterministic hierarchy fallback: document_id=%s nodes=%s validation=%s",
+                        document_id,
+                        len(hierarchy_build.hierarchy.nodes),
+                        hierarchy_build.hierarchy.generation.get("validation"),
+                    )
 
                 hierarchy_location = f"s3://{destination_bucket}/{hierarchy_key}"
                 metadata["hierarchy_available"] = bool(hierarchy_build.hierarchy.nodes)
@@ -689,19 +1019,19 @@ class PdfProcessor:
                 document_metadata=metadata,
                 destination_bucket=destination_bucket,
                 hierarchy=hierarchy_build.hierarchy if hierarchy_build else None,
+                triage=triage,
             )
             chunk_artifacts.extend(asset_artifacts)
 
-            self._s3.put_object(
-                Bucket=destination_bucket,
-                Key=triage_key,
-                Body=json.dumps(
-                    {"page_observations": page_observations_as_dicts(triage)},
-                    indent=2,
-                    sort_keys=True,
-                ).encode("utf-8"),
-                ContentType="application/json",
-            )
+            if debug_enabled:
+                debug_artifacts = {
+                    "triage_debug": f"s3://{destination_bucket}/{nova_triage_debug_key}",
+                    "model_extracted_text": f"s3://{destination_bucket}/{model_text_key}",
+                }
+                metadata["processing"]["debug_artifacts"] = debug_artifacts
+
+            # Triage page observations already written above; write text quality
+            # and hierarchy artifacts below.
             self._s3.put_object(
                 Bucket=destination_bucket,
                 Key=text_quality_key,

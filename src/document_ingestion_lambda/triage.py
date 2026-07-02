@@ -22,10 +22,15 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from utils.logger import get_logger
+
 try:  # pragma: no cover - import error reported via multimodal_triage()
     import pypdfium2 as pdfium
 except ImportError:
     pdfium = None  # type: ignore[assignment]
+
+
+log = get_logger(__name__)
 
 
 HierarchyKind = str
@@ -122,7 +127,7 @@ class TriageConfig:
     """Knobs read from app_config.yaml ``ingestion`` values."""
 
     enabled: bool = True
-    model_id: str = "amazon.nova-lite-v1:0"
+    model_id: str = "us.meta.llama4-scout-17b-instruct-v1:0"
     region: str = "us-east-1"
     front_page_sample_count: int = 5
     random_page_sample_count: int = 5
@@ -131,11 +136,73 @@ class TriageConfig:
     hierarchy_threshold: float = 0.50
     toc_pages_signal: int = 3
     temperature: float = 0.0
-    max_tokens_per_page: int = 2048
+    max_tokens_per_page: int = 8192
     render_scale: float = 2.0
+    parallel_workers: int = 6
 
 
 PageRenderer = Callable[[Path, int, float], bytes]
+
+
+_TRIAGE_SYSTEM_PROMPT = """\
+You are a document-cataloging assistant in a search-indexing pipeline. The
+user will provide a single rendered page from a published reference document
+(such as a building code, technical standard, policy, or manual) that is being
+added to a searchable archive.
+
+Your job is to extract structured observations from the page so the indexer
+can build an accurate catalog. You are not creating new advice and you are not
+recommending any action. You are recording what is on the page.
+
+Return ONLY one JSON object. No prose before or after. Do not refuse.
+
+Important formatting rules:
+- Use plain Unicode characters for all symbols: ², ³, °, ®, ¼, ½, ¾, etc.
+- Never use LaTeX notation such as $^{2}$, $\\frac{1}{4}$, or $^{\\circ}$.
+- Never wrap text in dollar signs or backslash commands.
+
+Required JSON schema:
+
+{
+  "page_number": int,
+  "raw_visible_text": "Full verbatim transcription of all visible text on the page, preserving paragraph breaks. Transcribe exactly — do not paraphrase.",
+  "likely_document_type": "string or null (e.g. building_code, policy, technical_standard, manual, report)",
+  "heading_pattern": "one of: section_codes | chapter_heading | numbered_headings | page_only | unknown",
+  "heading_candidates": [
+    {
+      "label": "The heading identifier, e.g. R303.10",
+      "title": "Short heading title, e.g. Required heating",
+      "heading_pattern_type": "section_codes | chapter_heading | numbered_headings",
+      "confidence": 0.0
+    }
+  ],
+  "appears_to_be_toc": "bool — true when the page is a table of contents",
+  "toc_entries": [
+    {
+      "label": "Section label from the TOC line",
+      "title": "Section title from the TOC line",
+      "page_reference": "Page number shown in the TOC"
+    }
+  ],
+  "contains_table": "bool",
+  "tables": [
+    {
+      "caption": "Visible table caption/title exactly as printed",
+      "description": "A detailed description of the table for semantic search. Include: (1) what the table tabulates and its columns/rows structure, (2) the key variables, thresholds, or categories it covers, (3) 2-4 example questions a user might ask that this table would answer. Write 3-6 sentences. This text will be embedded in a vector database, so include enough detail for someone searching by topic to find this table."
+    }
+  ],
+  "contains_figure": "bool",
+  "figures": [
+    {
+      "caption": "Visible figure caption/title exactly as printed",
+      "description": "A detailed description of the figure for semantic search. Include: (1) what the figure depicts (map, chart, diagram, photo, schematic, etc.), (2) the key information it conveys — regions, zones, categories, values, relationships, (3) 2-4 example questions a user might ask that this figure would answer. Write 3-6 sentences. This text will be embedded in a vector database, so include enough detail for someone searching by topic to find this figure."
+    }
+  ],
+  "notes": ["Array of short uncertainty notes, if any"]
+}"""
+
+
+_TRIAGE_USER_TEXT = "This is page {page_number}. Return the JSON object described in the system instructions."
 
 
 def multimodal_triage(
@@ -168,13 +235,18 @@ def multimodal_triage(
     raw_decisions: list[dict[str, Any]] = []
     warnings: list[str] = []
 
-    for page_number in sampled:
+    def _process_single_page(page_number: int) -> dict[str, Any] | None:
+        """Render + model-call for one page. Returns decision or None on failure."""
         try:
             png_bytes = render_page_image(pdf_path, page_number, config.render_scale)
         except Exception as exc:
             warnings.append(f"page_{page_number}_render_failed:{type(exc).__name__}")
-            continue
-
+            log.warning(
+                "Triage page render failed: page=%s error_type=%s",
+                page_number,
+                type(exc).__name__,
+            )
+            return None
         try:
             decision = _ask_model_about_page(
                 bedrock_client=bedrock_client,
@@ -182,10 +254,50 @@ def multimodal_triage(
                 png_bytes=png_bytes,
                 config=config,
             )
-            raw_decisions.append(decision)
+            log.info(
+                "Triage page complete: page=%s of %s raw_text_chars=%s headings=%s tables=%s figures=%s parse_error=%s",
+                page_number,
+                page_count,
+                len(str(decision.get("raw_visible_text") or "")),
+                len(decision.get("heading_candidates") or []),
+                len(decision.get("tables") or []),
+                len(decision.get("figures") or []),
+                bool(decision.get("parse_error")),
+            )
+            return decision
         except Exception as exc:
             warnings.append(f"page_{page_number}_model_failed:{type(exc).__name__}")
-            continue
+            log.warning(
+                "Triage page model call failed: page=%s error_type=%s",
+                page_number,
+                type(exc).__name__,
+            )
+            return None
+
+    max_workers = min(config.parallel_workers, len(sampled))
+    if max_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        log.info(
+            "Starting parallel triage: pages=%s workers=%s model_id=%s",
+            len(sampled),
+            max_workers,
+            config.model_id,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_process_single_page, page_number): page_number
+                for page_number in sampled
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    raw_decisions.append(result)
+    else:
+        for page_number in sampled:
+            result = _process_single_page(page_number)
+            if result is not None:
+                raw_decisions.append(result)
 
     if not raw_decisions:
         return PdfTriageResult.failed("no_decisions_collected")
@@ -237,28 +349,7 @@ def _ask_model_about_page(
     config: TriageConfig,
 ) -> dict[str, Any]:
     """Send one rendered page to Bedrock Converse and parse the JSON answer."""
-    system_prompt = (
-        "You are extracting page observations for a document ingestion pipeline. "
-        "Return ONLY one JSON object. Do not decide whether OCR is needed and do "
-        "not generate a document hierarchy. Extract only what you can see.\n\n"
-        "Required JSON keys:\n"
-        "page_number: int\n"
-        "raw_visible_text: string with the visible text you can read on the page\n"
-        "likely_document_type: string or null\n"
-        "heading_pattern: one of section_codes | chapter_heading | numbered_headings | page_only | unknown\n"
-        "heading_candidates: array of objects with label, title, raw_text, heading_pattern_type, confidence\n"
-        "appears_to_be_toc: bool\n"
-        "toc_entries: array of visible TOC entries when present\n"
-        "contains_table: bool\n"
-        "tables: array of objects with caption, title, description, bbox, confidence\n"
-        "contains_figure: bool\n"
-        "figures: array of objects with caption, title, description, bbox, confidence\n"
-        "notes: array of short uncertainty notes\n"
-        "embedded_text_quality: high | medium | low | scanned_image_only | unknown "
-        "(legacy diagnostic only; do not use it to decide OCR)"
-    )
-
-    user_text = f"This is page {page_number}. Return the JSON schema from the system instructions."
+    user_text = _TRIAGE_USER_TEXT.format(page_number=page_number)
     request_body = {
         "messages": [
             {
@@ -269,7 +360,7 @@ def _ask_model_about_page(
                 ],
             }
         ],
-        "system": [{"text": system_prompt}],
+        "system": [{"text": _TRIAGE_SYSTEM_PROMPT}],
         "inferenceConfig": {
             "temperature": config.temperature,
             "maxTokens": config.max_tokens_per_page,
@@ -280,6 +371,8 @@ def _ask_model_about_page(
     text = _extract_text_from_converse_response(response)
     parsed = _parse_decision_json(text, page_number)
     parsed["page_number"] = page_number
+    parsed["_model_id"] = config.model_id
+    parsed["_model_response_text"] = text
     return parsed
 
 
@@ -616,6 +709,40 @@ def triage_summary_dict(triage: PdfTriageResult) -> dict[str, Any]:
     }
 
 
+def triage_debug_dict(
+    triage: PdfTriageResult,
+    *,
+    config: TriageConfig,
+    include_model_payloads: bool,
+) -> dict[str, Any]:
+    """Return a full triage debug payload for durable S3 inspection."""
+    payload: dict[str, Any] = {
+        "model": {
+            "model_id": config.model_id,
+            "region": config.region,
+            "temperature": config.temperature,
+            "max_tokens_per_page": config.max_tokens_per_page,
+        },
+        "sampling": {
+            "full_page_triage_enabled": config.full_page_triage_enabled,
+            "front_page_sample_count": config.front_page_sample_count,
+            "random_page_sample_count": config.random_page_sample_count,
+            "sampled_pages": triage.sampled_pages,
+            "render_scale": config.render_scale,
+        },
+        "prompt": {
+            "system": _TRIAGE_SYSTEM_PROMPT,
+            "user_template": "This is page {page_number}. Return the JSON schema from the system instructions.",
+            "image_input": "Rendered PDF page PNG bytes are sent in the Converse image content block and are not serialized in this debug JSON.",
+        },
+        "summary": triage_summary_dict(triage),
+        "page_observations": page_observations_as_dicts(triage),
+    }
+    if include_model_payloads:
+        payload["raw_model_decisions"] = triage.raw_decisions
+    return payload
+
+
 __all__ = [
     "HeadingCandidate",
     "PageFigureObservation",
@@ -625,5 +752,6 @@ __all__ = [
     "TriageConfig",
     "multimodal_triage",
     "page_observations_as_dicts",
+    "triage_debug_dict",
     "triage_summary_dict",
 ]
