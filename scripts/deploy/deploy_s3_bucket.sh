@@ -372,20 +372,29 @@ EOF
             fi
         done
         
-        # Create config folder and upload app_config.yaml
-        # Read from local config/<env>/app_config.yaml, upload to s3://bucket/config/app_config.yaml
-        local config_path="config/${ENVIRONMENT}/app_config.yaml"
+        # Create config folder and upload app_config.yaml.
+        # Prefer the hydrated build copy (.build/config/<env>/app_config.yaml,
+        # see docs/config_structure.md); fall back to the tracked template only
+        # when there is nothing in .build/ (e.g. private fork with real values).
         local s3_config_key="config/app_config.yaml"
-        
-        if [ -f "$PROJECT_ROOT/$config_path" ]; then
-            print_info "Uploading app config to s3://$actual_bucket/$s3_config_key..."
+        local config_build_path=".build/config/${ENVIRONMENT}/app_config.yaml"
+        local config_template_path="config/${ENVIRONMENT}/app_config.yaml"
+        local config_path=""
+        if [ -f "$PROJECT_ROOT/$config_build_path" ]; then
+            config_path="$config_build_path"
+        elif [ -f "$PROJECT_ROOT/$config_template_path" ]; then
+            config_path="$config_template_path"
+        fi
+
+        if [ -n "$config_path" ]; then
+            print_info "Uploading app config ($config_path) to s3://$actual_bucket/$s3_config_key..."
             if aws_cmd s3 cp "$PROJECT_ROOT/$config_path" "s3://$actual_bucket/$s3_config_key" >/dev/null 2>&1; then
                 print_complete "Uploaded app config: s3://$actual_bucket/$s3_config_key"
             else
                 print_warning "Failed to upload app config (continuing anyway)"
             fi
         else
-            print_warning "App config file not found: $config_path (skipping upload)"
+            print_warning "App config not found at $config_build_path or $config_template_path (skipping upload)"
         fi
         
         print_complete "$RESOURCE_DISPLAY_NAME deployment finished"

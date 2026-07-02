@@ -54,8 +54,29 @@ do_restore() {
     local project_root
     project_root=$(get_project_root)
     print_step "Restoring templated config files..."
-    (cd "$project_root" && git checkout -- infra/infra.yaml config/*/app_config.yaml 2>/dev/null) || true
+    (cd "$project_root" && git checkout -- infra/infra.yaml 2>/dev/null) || true
+    # The hydrated app config now lives in .build/ — wipe it instead of git-restoring
+    # the template (which is never modified by hydration).
+    (cd "$project_root" && rm -rf .build/config 2>/dev/null) || true
     print_complete "Restored template versions"
+    return 0
+}
+
+# Resolve the build-output path for an environment's hydrated app config. Copies
+# the tracked template into .build/ so subsequent in-place edits (sed/yq -i) leave
+# the committed file alone. See docs/config_structure.md.
+prepare_build_app_config() {
+    local project_root=$1
+    local env=$2
+    local template="$project_root/config/$env/app_config.yaml"
+    local build="$project_root/.build/config/$env/app_config.yaml"
+    if [[ ! -f "$template" ]]; then
+        echo ""
+        return 1
+    fi
+    mkdir -p "$(dirname "$build")"
+    cp "$template" "$build"
+    echo "$build"
     return 0
 }
 
@@ -277,7 +298,7 @@ run_hydrate() {
     fi
 
     local infra_file="$project_root/infra/infra.yaml"
-    local app_config_file="$project_root/config/$env/app_config.yaml"
+    local app_config_template="$project_root/config/$env/app_config.yaml"
 
     if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
         load_infra_config >/dev/null 2>&1 || true
@@ -294,7 +315,7 @@ run_hydrate() {
     if has_placeholders "$infra_file"; then
         infra_has_placeholders=1
     fi
-    if [[ -f "$app_config_file" ]] && has_placeholders "$app_config_file"; then
+    if [[ -f "$app_config_template" ]] && has_placeholders "$app_config_template"; then
         app_has_placeholders=1
     fi
 
@@ -306,8 +327,10 @@ run_hydrate() {
     if [[ $infra_has_placeholders -eq 1 ]]; then
         hydrate_infra "$project_root" "$env" "$missing_out" || return 1
     fi
-    if [[ -n "$app_config_file" ]] && [[ -f "$app_config_file" ]] && has_placeholders "$app_config_file"; then
-        hydrate_app_config "$app_config_file" "$missing_out" || return 1
+    if [[ $app_has_placeholders -eq 1 ]]; then
+        local app_config_build
+        app_config_build=$(prepare_build_app_config "$project_root" "$env") || return 1
+        hydrate_app_config "$app_config_build" "$missing_out" || return 1
     fi
 
     return 0
@@ -324,22 +347,14 @@ RUNTIME_ENV=""
 
 runtime_backup_files() {
     local project_root=$1
-    local env=$2
     local backup_dir
     backup_dir=$(mktemp -d)
 
+    # Only infra.yaml is hydrated in place; app_config hydration now writes to
+    # .build/ so it does not need a backup.
     local infra_file="$project_root/infra/infra.yaml"
-    local app_config_file="$project_root/config/$env/app_config.yaml"
-
     if [[ -f "$infra_file" ]]; then
         cp "$infra_file" "$backup_dir/infra.yaml"
-    fi
-
-    if [[ -f "$app_config_file" ]]; then
-        cp "$app_config_file" "$backup_dir/app_config.yaml"
-        echo "present" > "$backup_dir/app_config.state"
-    else
-        echo "missing" > "$backup_dir/app_config.state"
     fi
 
     echo "$backup_dir"
@@ -354,21 +369,13 @@ runtime_restore_files() {
     fi
 
     local infra_file="$RUNTIME_PROJECT_ROOT/infra/infra.yaml"
-    local app_config_file="$RUNTIME_PROJECT_ROOT/config/$RUNTIME_ENV/app_config.yaml"
-    local app_state=""
 
     if [[ -f "$RUNTIME_BACKUP_DIR/infra.yaml" ]]; then
         cp "$RUNTIME_BACKUP_DIR/infra.yaml" "$infra_file"
     fi
 
-    if [[ -f "$RUNTIME_BACKUP_DIR/app_config.state" ]]; then
-        app_state=$(cat "$RUNTIME_BACKUP_DIR/app_config.state" 2>/dev/null || echo "")
-    fi
-    if [[ "$app_state" = "present" ]] && [[ -f "$RUNTIME_BACKUP_DIR/app_config.yaml" ]]; then
-        cp "$RUNTIME_BACKUP_DIR/app_config.yaml" "$app_config_file"
-    elif [[ "$app_state" = "missing" ]]; then
-        rm -f "$app_config_file" 2>/dev/null || true
-    fi
+    # Hydrated app config lives in .build/ — discard it.
+    rm -rf "$RUNTIME_PROJECT_ROOT/.build/config/$RUNTIME_ENV" 2>/dev/null || true
 
     rm -rf "$RUNTIME_BACKUP_DIR" 2>/dev/null || true
     RUNTIME_ACTIVE=false
@@ -394,7 +401,7 @@ run_hydrate_runtime() {
 
     RUNTIME_PROJECT_ROOT="$project_root"
     RUNTIME_ENV="$env"
-    RUNTIME_BACKUP_DIR=$(runtime_backup_files "$project_root" "$env") || return 1
+    RUNTIME_BACKUP_DIR=$(runtime_backup_files "$project_root") || return 1
     RUNTIME_ACTIVE=true
     trap runtime_restore_files EXIT
 

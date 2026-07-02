@@ -10,7 +10,7 @@ Per-environment app config lives under:
 config/<env>/app_config.yaml
 ```
 
-These files may contain placeholders such as:
+These tracked files are **templates** — they contain placeholders such as:
 
 ```text
 ${KNOWLEDGE_BASE_ID}
@@ -18,7 +18,43 @@ ${DB_CLUSTER_ARN}
 ${DB_CREDENTIALS_SECRET_ARN}
 ```
 
-During deployment, `scripts/utils/hydrate_configs.sh --run` hydrates placeholders from environment secrets, runs config deployment, and restores tracked files.
+Real values are never written back into these files. They must always retain
+their placeholders in version control.
+
+### Hydrated output (.build/)
+
+Hydration writes the resolved file to a gitignored build path:
+
+```text
+.build/config/<env>/app_config.yaml
+```
+
+The two hydration entry points are:
+
+- `scripts/utils/hydrate_configs.sh` — sed-replaces `${...}` placeholders with
+  values from `infra/secrets/<account-set>/<env>.secrets.yaml` (or CI env vars).
+- `scripts/deploy/sync_app_config.sh` — `yq -i` overwrites resource/ingestion
+  values from `infra/infra.yaml` into the build copy.
+
+Both copy the tracked template into `.build/` first, then edit only the build
+copy. The deploy step (`scripts/deploy/deploy_s3_bucket.sh`) prefers the build
+copy when uploading to `s3://<bucket>/config/app_config.yaml` and falls back to
+the template only when no build copy exists (e.g. a private fork where the
+tracked file already has real values).
+
+To clean the build output:
+
+```bash
+./scripts/utils/hydrate_configs.sh --restore
+# or just
+rm -rf .build/
+```
+
+Why a separate build path: this repo is intended to remain safe as a public
+template, so hydrated resource IDs and ARNs must never reach the tracked file.
+On a private fork where leakage is not a concern you can ignore the build path
+entirely — just commit real values into `config/<env>/app_config.yaml` and set
+`HYDRATE_CONFIGS=false`.
 
 ## Infrastructure Manifest
 

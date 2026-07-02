@@ -111,11 +111,22 @@ fi
 
 sync_env() {
     local env=$1
-    local app_config="$PROJECT_ROOT/config/$env/app_config.yaml"
+    local app_config_template="$PROJECT_ROOT/config/$env/app_config.yaml"
+    local app_config="$PROJECT_ROOT/.build/config/$env/app_config.yaml"
 
-    if [ ! -f "$app_config" ]; then
+    if [ ! -f "$app_config_template" ]; then
         print_info "Skipping $env: config/$env/app_config.yaml not found"
         return 0
+    fi
+
+    # Hydrate into .build/ so the tracked template stays clean of resource IDs.
+    # See docs/config_structure.md.
+    if [ "$DRY_RUN" != true ]; then
+        mkdir -p "$(dirname "$app_config")"
+        cp "$app_config_template" "$app_config"
+    else
+        # Dry-run reads "current" from the template so the diff is meaningful.
+        app_config="$app_config_template"
     fi
 
     local kb_id secret_arn db_arn
@@ -352,6 +363,17 @@ sync_env() {
     sync_config_boolean ".ingestion.pdf_ocr_enabled" "$pdf_ocr_enabled" "ingestion.pdf_ocr_enabled"
     sync_config_number ".ingestion.pdf_ocr_poll_interval_seconds" "$pdf_ocr_poll_interval_seconds" "ingestion.pdf_ocr_poll_interval_seconds"
     sync_config_number ".ingestion.pdf_ocr_max_wait_seconds" "$pdf_ocr_max_wait_seconds" "ingestion.pdf_ocr_max_wait_seconds"
+
+    if yq -e ".environments.${env}.app_config_overrides // false" "$INFRA_CONFIG_PATH" >/dev/null 2>&1; then
+        if [ "$DRY_RUN" = true ]; then
+            print_info "[$env] Would apply environments.${env}.app_config_overrides"
+            updated=$((updated + 1))
+        else
+            ENV_NAME="$env" INFRA_FILE="$INFRA_CONFIG_PATH" yq -i '. *= load(strenv(INFRA_FILE)).environments[strenv(ENV_NAME)].app_config_overrides' "$app_config"
+            print_info "[$env] Applied environments.${env}.app_config_overrides"
+            updated=$((updated + 1))
+        fi
+    fi
 
     if [ $updated -eq 0 ] && [ "$DRY_RUN" = false ]; then
         print_info "[$env] No values in infra to sync (run deploy_chat_template_db.sh and deploy_knowledge_base.sh first)"

@@ -215,6 +215,11 @@ infra/state/*
 !infra/state/.gitignore
 infra/build/
 
+# Hydrated app config output (see docs/config_structure.md). Hydration writes
+# real account/resource values here so the tracked `config/<env>/app_config.yaml`
+# templates stay free of secrets.
+.build/
+
 # Infrastructure settings (templated version is tracked; hydrate_configs.sh injects secrets at runtime)
 !infra/infra.yaml
 
